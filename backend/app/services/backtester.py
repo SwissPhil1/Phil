@@ -292,10 +292,11 @@ async def backtest_conviction_scores(
 
         # ── PRICE LOOKUPS ──
 
+        FORWARD_WINDOWS = [30, 90, 180, 365]
+
         price_at_trade = None
-        price_forward = None
-        forward_return = None
-        price_at_exit = None
+        forward_returns = {}  # {30: pct, 90: pct, 180: pct, 365: pct}
+        forward_prices = {}
         exit_return = None
         exit_info = None
         holding_days = None
@@ -305,13 +306,18 @@ async def backtest_conviction_scores(
             price_at_trade = _get_price(ticker, trade.tx_date)
             price_lookup_count += 1
 
-            # Forward return (fixed N-day window)
+            # Multi-window forward returns (30d, 90d, 180d, 365d)
             if return_mode in ("forward", "both"):
-                forward_date = trade.tx_date + timedelta(days=forward_days)
-                price_forward = _get_price(ticker, forward_date)
-
-                if price_at_trade and price_forward and price_at_trade > 0:
-                    forward_return = ((price_forward - price_at_trade) / price_at_trade) * 100
+                for window in FORWARD_WINDOWS:
+                    fwd_date = trade.tx_date + timedelta(days=window)
+                    # Only look up if the date is in the past
+                    if fwd_date <= datetime.utcnow():
+                        p = _get_price(ticker, fwd_date)
+                        if price_at_trade and p and price_at_trade > 0:
+                            forward_returns[window] = round(
+                                ((p - price_at_trade) / price_at_trade) * 100, 2
+                            )
+                            forward_prices[window] = round(p, 2)
 
             # Exit return (actual sell date)
             if return_mode in ("exit", "both"):
@@ -360,9 +366,12 @@ async def backtest_conviction_scores(
             "cluster_count": cluster_count,
             # Entry
             "price_at_trade": round(price_at_trade, 2) if price_at_trade else None,
-            # Forward return (fixed window)
-            "price_forward": round(price_forward, 2) if price_forward else None,
-            "forward_return_pct": round(forward_return, 2) if forward_return is not None else None,
+            # Multi-window forward returns
+            "forward_returns": {
+                f"{w}d": {"price": forward_prices.get(w), "return_pct": forward_returns.get(w)}
+                for w in FORWARD_WINDOWS
+            },
+            "forward_return_pct": forward_returns.get(forward_days),  # primary window for bucket analysis
             # Exit return (actual sell)
             "exit": exit_info,
             "still_holding": still_holding,
@@ -373,7 +382,8 @@ async def backtest_conviction_scores(
             # Best available return for analysis (exit > forward > unrealized)
             "best_return_pct": (
                 round(exit_return, 2) if exit_return is not None
-                else round(forward_return, 2) if forward_return is not None
+                else forward_returns.get(forward_days)
+                if forward_returns.get(forward_days) is not None
                 else round(unrealized_return, 2) if unrealized_return is not None
                 else None
             ),
@@ -517,6 +527,47 @@ async def backtest_conviction_scores(
         ],
     }
 
+    # Multi-window analysis: how do returns evolve over time?
+    multi_window_analysis = {}
+    for window in [30, 90, 180, 365]:
+        window_returns = [
+            t["forward_returns"].get(f"{window}d", {}).get("return_pct")
+            for t in scored_trades
+            if t["forward_returns"].get(f"{window}d", {}).get("return_pct") is not None
+        ]
+        if window_returns:
+            avg = sum(window_returns) / len(window_returns)
+            wins = sum(1 for r in window_returns if r > 0)
+            multi_window_analysis[f"{window}d"] = {
+                "trade_count": len(window_returns),
+                "avg_return_pct": round(avg, 2),
+                "median_return_pct": round(sorted(window_returns)[len(window_returns) // 2], 2),
+                "win_rate_pct": round(wins / len(window_returns) * 100, 1),
+                "best_pct": round(max(window_returns), 2),
+                "worst_pct": round(min(window_returns), 2),
+            }
+
+            # Also break down by high vs low score for each window
+            high_score_rets = [
+                t["forward_returns"].get(f"{window}d", {}).get("return_pct")
+                for t in scored_trades
+                if t["score"] >= 50
+                and t["forward_returns"].get(f"{window}d", {}).get("return_pct") is not None
+            ]
+            low_score_rets = [
+                t["forward_returns"].get(f"{window}d", {}).get("return_pct")
+                for t in scored_trades
+                if t["score"] < 50
+                and t["forward_returns"].get(f"{window}d", {}).get("return_pct") is not None
+            ]
+            high_avg = sum(high_score_rets) / len(high_score_rets) if high_score_rets else None
+            low_avg = sum(low_score_rets) / len(low_score_rets) if low_score_rets else None
+            multi_window_analysis[f"{window}d"]["high_score_avg"] = round(high_avg, 2) if high_avg is not None else None
+            multi_window_analysis[f"{window}d"]["low_score_avg"] = round(low_avg, 2) if low_avg is not None else None
+            multi_window_analysis[f"{window}d"]["score_edge"] = (
+                round(high_avg - low_avg, 2) if high_avg is not None and low_avg is not None else None
+            )
+
     # Forward vs exit comparison (only when mode=both)
     forward_vs_exit = None
     if return_mode == "both":
@@ -566,6 +617,7 @@ async def backtest_conviction_scores(
         "still_holding": len(open_trades),
         "prices_looked_up": price_lookup_count,
         "score_bucket_analysis": bucket_analysis,
+        "multi_window_returns": multi_window_analysis,
         "score_validation": score_validation,
         "committee_analysis": committee_analysis,
         "small_vs_large_cap": your_hypothesis,

@@ -263,9 +263,6 @@ class PolymarketTrade(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
-# --- Kalshi Market Data ---
-
-
 # --- Politician Committee Assignments ---
 
 

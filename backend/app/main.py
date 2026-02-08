@@ -34,28 +34,40 @@ logger = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler()
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Startup
-    logger.info("Initializing database...")
-    await init_db()
+async def _run_initial_ingestions():
+    """Run all initial ingestions in background so the app starts immediately."""
+    import asyncio
+    # Small delay to let the app finish starting and pass Railway health check
+    await asyncio.sleep(5)
 
-    # Run initial ingestions (congressional trades first, then others)
     for name, fn in [
+        ("Trump & inner circle data", run_trump_data_ingestion),
+        ("Committee assignments", run_committee_ingestion),
         ("Congressional trades", run_ingestion),
-        ("13F hedge fund holdings", run_13f_ingestion),
         ("Form 4 insider trades", run_insider_ingestion),
         ("Polymarket traders", run_polymarket_ingestion),
         ("Kalshi markets", run_kalshi_ingestion),
-        ("Committee assignments", run_committee_ingestion),
-        ("Trump & inner circle data", run_trump_data_ingestion),
+        ("13F hedge fund holdings", run_13f_ingestion),
     ]:
         try:
-            logger.info(f"Running initial {name} ingestion...")
+            logger.info(f"Background ingestion: {name}...")
             result = await fn()
             logger.info(f"{name}: {result}")
         except Exception as e:
             logger.error(f"{name} ingestion failed (will retry on schedule): {e}")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    import asyncio
+
+    # Startup - init DB only (fast)
+    logger.info("Initializing database...")
+    await init_db()
+    logger.info("Database ready. App is accepting requests.")
+
+    # Run ingestions in background (non-blocking)
+    asyncio.create_task(_run_initial_ingestions())
 
     # Schedule periodic jobs
     scheduler.add_job(

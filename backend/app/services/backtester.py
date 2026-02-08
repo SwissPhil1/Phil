@@ -56,24 +56,80 @@ def _get_price(ticker: str, date: datetime) -> float | None:
 # ─── CONVICTION SCORE BACKTESTER ───
 
 
+async def _find_exit_trades(session: AsyncSession, since: datetime) -> dict[str, dict]:
+    """
+    Build a map of (politician, ticker, buy_date) -> exit trade info.
+    For each purchase, find the first sale of that same ticker by that
+    same politician after the buy date. That's the exit.
+    """
+    # Get all sales in the period
+    sales_stmt = (
+        select(Trade)
+        .where(Trade.tx_type.in_(["sale", "sale_full", "sale_partial"]))
+        .where(Trade.ticker.isnot(None))
+        .where(Trade.tx_date >= since)
+        .where(Trade.ticker != "--")
+        .where(Trade.ticker != "N/A")
+        .order_by(Trade.tx_date.asc())
+    )
+    sales_result = await session.execute(sales_stmt)
+    all_sales = sales_result.scalars().all()
+
+    # Index: (politician_lower, ticker) -> list of sales sorted by date
+    sales_index: dict[tuple[str, str], list] = defaultdict(list)
+    for s in all_sales:
+        if s.ticker and s.tx_date:
+            key = (s.politician.lower(), s.ticker.upper())
+            sales_index[key].append(s)
+
+    return sales_index
+
+
+def _match_exit(
+    sales_index: dict,
+    politician: str,
+    ticker: str,
+    buy_date: datetime,
+) -> dict | None:
+    """Find the first sale of this ticker by this politician after buy_date."""
+    key = (politician.lower(), ticker.upper())
+    sales = sales_index.get(key, [])
+
+    for sale in sales:
+        if sale.tx_date and sale.tx_date > buy_date:
+            return {
+                "exit_date": sale.tx_date,
+                "exit_tx_type": sale.tx_type,
+                "exit_amount_low": sale.amount_low,
+                "exit_amount_high": sale.amount_high,
+                "exit_disclosure_date": sale.disclosure_date,
+            }
+
+    return None
+
+
 async def backtest_conviction_scores(
     days: int = 365,
     forward_days: int = 30,
     max_trades: int = 200,
+    return_mode: str = "both",
 ) -> dict:
     """
     Backtest the conviction scoring system against real trade data.
 
-    For each congressional purchase in the last N days:
-    1. Score it with the conviction engine
-    2. Look up the stock price at trade date and forward_days later
-    3. Calculate actual return
-    4. Group by score bucket and compare average returns
+    return_mode options:
+    - "forward": measure return N days after purchase (fixed window)
+    - "exit": measure return at the actual exit (when politician sold)
+    - "both": show both (default) - compare fixed window vs real P&L
 
-    This answers: "Do higher-scored trades actually perform better?"
+    For each congressional purchase:
+    1. Score it with the conviction engine
+    2. Look up price at purchase date
+    3. Look up price N days later (forward return)
+    4. Find matching exit trade and look up price at exit (realized return)
+    5. Group by score bucket and compare
     """
     since = datetime.utcnow() - timedelta(days=days)
-    # Need trades old enough that we can measure forward returns
     cutoff = datetime.utcnow() - timedelta(days=forward_days)
 
     async with async_session() as session:
@@ -83,7 +139,7 @@ async def backtest_conviction_scores(
             .where(Trade.tx_type == "purchase")
             .where(Trade.ticker.isnot(None))
             .where(Trade.tx_date >= since)
-            .where(Trade.tx_date <= cutoff)  # Must be old enough to measure
+            .where(Trade.tx_date <= cutoff)
             .where(Trade.ticker != "--")
             .where(Trade.ticker != "N/A")
             .order_by(Trade.tx_date.desc())
@@ -97,6 +153,9 @@ async def backtest_conviction_scores(
                 "error": "No trades found in date range to backtest",
                 "trades_checked": 0,
             }
+
+        # Build exit trade index (for matching buy -> sell pairs)
+        sales_index = await _find_exit_trades(session, since)
 
         # Get committee data for all politicians in these trades
         politician_names = list(set(t.politician for t in trades))
@@ -146,9 +205,10 @@ async def backtest_conviction_scores(
         for row in fund_result.all():
             fund_new.add(row[0])
 
-    # Now score each trade and look up forward returns
+    # Now score each trade and look up returns
     scored_trades = []
     price_lookup_count = 0
+    exits_found = 0
 
     for trade in trades:
         ticker = trade.ticker
@@ -200,7 +260,7 @@ async def backtest_conviction_scores(
                     factors.append(f"COMMITTEE OVERLAP: {overlap['committee']}")
                 else:
                     score += 15
-                    factors.append(f"Broad committee overlap")
+                    factors.append("Broad committee overlap")
 
         # Disclosure speed
         delay = trade_dict.get("disclosure_delay_days")
@@ -230,20 +290,63 @@ async def backtest_conviction_scores(
 
         score = min(score, 100)
 
-        # Get forward return
+        # ── PRICE LOOKUPS ──
+
+        price_at_trade = None
+        price_forward = None
+        forward_return = None
+        price_at_exit = None
+        exit_return = None
+        exit_info = None
+        holding_days = None
+        still_holding = True
+
         if trade.tx_date:
             price_at_trade = _get_price(ticker, trade.tx_date)
-            forward_date = trade.tx_date + timedelta(days=forward_days)
-            price_forward = _get_price(ticker, forward_date)
             price_lookup_count += 1
-        else:
-            price_at_trade = None
-            price_forward = None
 
-        if price_at_trade and price_forward and price_at_trade > 0:
-            forward_return = ((price_forward - price_at_trade) / price_at_trade) * 100
-        else:
-            forward_return = None
+            # Forward return (fixed N-day window)
+            if return_mode in ("forward", "both"):
+                forward_date = trade.tx_date + timedelta(days=forward_days)
+                price_forward = _get_price(ticker, forward_date)
+
+                if price_at_trade and price_forward and price_at_trade > 0:
+                    forward_return = ((price_forward - price_at_trade) / price_at_trade) * 100
+
+            # Exit return (actual sell date)
+            if return_mode in ("exit", "both"):
+                exit_match = _match_exit(
+                    sales_index, trade.politician, ticker, trade.tx_date
+                )
+                if exit_match:
+                    exits_found += 1
+                    still_holding = False
+                    exit_date = exit_match["exit_date"]
+                    holding_days = (exit_date - trade.tx_date).days
+
+                    price_at_exit = _get_price(ticker, exit_date)
+
+                    if price_at_trade and price_at_exit and price_at_trade > 0:
+                        exit_return = ((price_at_exit - price_at_trade) / price_at_trade) * 100
+
+                    exit_info = {
+                        "exit_date": exit_date.isoformat(),
+                        "exit_type": exit_match["exit_tx_type"],
+                        "exit_amount_low": exit_match["exit_amount_low"],
+                        "exit_amount_high": exit_match["exit_amount_high"],
+                        "holding_days": holding_days,
+                        "price_at_exit": round(price_at_exit, 2) if price_at_exit else None,
+                        "exit_return_pct": round(exit_return, 2) if exit_return is not None else None,
+                    }
+
+        # For still-held positions, show unrealized return (current price)
+        price_now = None
+        unrealized_return = None
+        if still_holding and price_at_trade and price_at_trade > 0:
+            price_now = _get_price(ticker, datetime.utcnow())
+            if price_now:
+                unrealized_return = ((price_now - price_at_trade) / price_at_trade) * 100
+                holding_days = (datetime.utcnow() - trade.tx_date).days if trade.tx_date else None
 
         scored_trades.append({
             "politician": trade.politician,
@@ -255,10 +358,41 @@ async def backtest_conviction_scores(
             "factors": factors,
             "committees": committees,
             "cluster_count": cluster_count,
+            # Entry
             "price_at_trade": round(price_at_trade, 2) if price_at_trade else None,
+            # Forward return (fixed window)
             "price_forward": round(price_forward, 2) if price_forward else None,
             "forward_return_pct": round(forward_return, 2) if forward_return is not None else None,
+            # Exit return (actual sell)
+            "exit": exit_info,
+            "still_holding": still_holding,
+            # Unrealized (for open positions)
+            "price_now": round(price_now, 2) if price_now else None,
+            "unrealized_return_pct": round(unrealized_return, 2) if unrealized_return is not None else None,
+            "holding_days": holding_days,
+            # Best available return for analysis (exit > forward > unrealized)
+            "best_return_pct": (
+                round(exit_return, 2) if exit_return is not None
+                else round(forward_return, 2) if forward_return is not None
+                else round(unrealized_return, 2) if unrealized_return is not None
+                else None
+            ),
         })
+
+    # ── ANALYSIS ──
+
+    # Use the best available return for bucket analysis
+    def _get_return(t: dict, mode: str) -> float | None:
+        if mode == "exit":
+            if t["exit"] and t["exit"]["exit_return_pct"] is not None:
+                return t["exit"]["exit_return_pct"]
+            return None
+        elif mode == "forward":
+            return t["forward_return_pct"]
+        else:  # "both" - prefer exit, fall back to forward
+            if t["exit"] and t["exit"]["exit_return_pct"] is not None:
+                return t["exit"]["exit_return_pct"]
+            return t["forward_return_pct"]
 
     # Analyze by score bucket
     buckets = {
@@ -270,7 +404,7 @@ async def backtest_conviction_scores(
     }
 
     for t in scored_trades:
-        ret = t["forward_return_pct"]
+        ret = _get_return(t, return_mode)
         if ret is None:
             continue
         s = t["score"]
@@ -305,13 +439,13 @@ async def backtest_conviction_scores(
             }
 
     # Check if higher scores = better returns
-    scored_with_returns = [t for t in scored_trades if t["forward_return_pct"] is not None]
+    scored_with_returns = [t for t in scored_trades if _get_return(t, return_mode) is not None]
     if len(scored_with_returns) >= 2:
         high_score = [t for t in scored_with_returns if t["score"] >= 50]
         low_score = [t for t in scored_with_returns if t["score"] < 50]
 
-        high_avg = sum(t["forward_return_pct"] for t in high_score) / len(high_score) if high_score else 0
-        low_avg = sum(t["forward_return_pct"] for t in low_score) / len(low_score) if low_score else 0
+        high_avg = sum(_get_return(t, return_mode) for t in high_score) / len(high_score) if high_score else 0
+        low_avg = sum(_get_return(t, return_mode) for t in low_score) / len(low_score) if low_score else 0
 
         score_validation = {
             "high_score_avg_return": round(high_avg, 2),
@@ -329,9 +463,9 @@ async def backtest_conviction_scores(
 
     # Committee overlap trades specifically
     committee_trades = [t for t in scored_trades if any("COMMITTEE" in f for f in t["factors"])]
-    committee_returns = [t["forward_return_pct"] for t in committee_trades if t["forward_return_pct"] is not None]
+    committee_returns = [_get_return(t, return_mode) for t in committee_trades if _get_return(t, return_mode) is not None]
     non_committee_trades = [t for t in scored_trades if not any("COMMITTEE" in f for f in t["factors"])]
-    non_committee_returns = [t["forward_return_pct"] for t in non_committee_trades if t["forward_return_pct"] is not None]
+    non_committee_returns = [_get_return(t, return_mode) for t in non_committee_trades if _get_return(t, return_mode) is not None]
 
     committee_analysis = {
         "committee_overlap_trades": len(committee_trades),
@@ -348,8 +482,7 @@ async def backtest_conviction_scores(
         ),
     }
 
-    # Small cap vs large cap analysis (your hypothesis)
-    # Check if single committee member buying small cap > cluster buying NVDA
+    # Small cap vs large cap analysis
     small_cap_tickers = {t for t in TICKER_SECTORS if TICKER_SECTORS[t] not in ("tech", "finance", "pharma")}
     large_cap_tickers = {"NVDA", "AAPL", "MSFT", "GOOGL", "GOOG", "AMZN", "META", "TSLA"}
 
@@ -357,46 +490,86 @@ async def backtest_conviction_scores(
         t for t in scored_trades
         if t["ticker"] in small_cap_tickers
         and any("COMMITTEE" in f for f in t["factors"])
-        and t["forward_return_pct"] is not None
+        and _get_return(t, return_mode) is not None
     ]
     large_cap_cluster = [
         t for t in scored_trades
         if t["ticker"] in large_cap_tickers
         and t["cluster_count"] >= 3
-        and t["forward_return_pct"] is not None
+        and _get_return(t, return_mode) is not None
     ]
 
     your_hypothesis = {
         "question": "Is a committee member buying a small-cap in their sector stronger than 10 politicians buying NVDA?",
         "small_cap_committee_trades": len(small_cap_committee),
         "small_cap_committee_avg_return": (
-            round(sum(t["forward_return_pct"] for t in small_cap_committee) / len(small_cap_committee), 2)
+            round(sum(_get_return(t, return_mode) for t in small_cap_committee) / len(small_cap_committee), 2)
             if small_cap_committee else None
         ),
         "large_cap_cluster_trades": len(large_cap_cluster),
         "large_cap_cluster_avg_return": (
-            round(sum(t["forward_return_pct"] for t in large_cap_cluster) / len(large_cap_cluster), 2)
+            round(sum(_get_return(t, return_mode) for t in large_cap_cluster) / len(large_cap_cluster), 2)
             if large_cap_cluster else None
         ),
         "small_cap_committee_examples": [
-            {"politician": t["politician"], "ticker": t["ticker"], "return": t["forward_return_pct"]}
+            {"politician": t["politician"], "ticker": t["ticker"], "return": _get_return(t, return_mode)}
             for t in small_cap_committee[:5]
         ],
     }
+
+    # Forward vs exit comparison (only when mode=both)
+    forward_vs_exit = None
+    if return_mode == "both":
+        trades_with_both = [
+            t for t in scored_trades
+            if t["forward_return_pct"] is not None
+            and t["exit"] is not None
+            and t["exit"]["exit_return_pct"] is not None
+        ]
+        if trades_with_both:
+            avg_forward = sum(t["forward_return_pct"] for t in trades_with_both) / len(trades_with_both)
+            avg_exit = sum(t["exit"]["exit_return_pct"] for t in trades_with_both) / len(trades_with_both)
+            avg_holding = sum(t["exit"]["holding_days"] for t in trades_with_both) / len(trades_with_both)
+
+            # How many held longer than forward_days?
+            held_longer = sum(1 for t in trades_with_both if t["exit"]["holding_days"] > forward_days)
+            # How many exited for profit vs the forward window?
+            exit_beat_forward = sum(
+                1 for t in trades_with_both
+                if t["exit"]["exit_return_pct"] > t["forward_return_pct"]
+            )
+
+            forward_vs_exit = {
+                "trades_with_both_returns": len(trades_with_both),
+                "avg_forward_return_pct": round(avg_forward, 2),
+                "avg_exit_return_pct": round(avg_exit, 2),
+                "avg_holding_days": round(avg_holding, 1),
+                "held_longer_than_window": held_longer,
+                "exit_beat_forward_count": exit_beat_forward,
+                "politicians_time_exits_well": exit_beat_forward > len(trades_with_both) / 2,
+            }
+
+    # Holding period analysis
+    exited_trades = [t for t in scored_trades if t["exit"] is not None]
+    open_trades = [t for t in scored_trades if t["still_holding"]]
 
     return {
         "backtest_params": {
             "lookback_days": days,
             "forward_days": forward_days,
             "max_trades": max_trades,
+            "return_mode": return_mode,
         },
         "total_trades_checked": len(scored_trades),
         "trades_with_returns": len(scored_with_returns),
+        "exits_found": exits_found,
+        "still_holding": len(open_trades),
         "prices_looked_up": price_lookup_count,
         "score_bucket_analysis": bucket_analysis,
         "score_validation": score_validation,
         "committee_analysis": committee_analysis,
         "small_vs_large_cap": your_hypothesis,
+        "forward_vs_exit": forward_vs_exit,
         "top_scored_trades": top_scored,
     }
 

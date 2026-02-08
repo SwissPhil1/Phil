@@ -47,27 +47,41 @@ async def run_backtest(
     days: int = Query(default=365, ge=30, le=1825, description="Lookback period"),
     forward_days: int = Query(default=30, ge=7, le=180, description="Forward return period (days after trade)"),
     max_trades: int = Query(default=100, ge=10, le=500, description="Max trades to score (more = slower, uses yfinance)"),
+    return_mode: str = Query(
+        default="both",
+        description=(
+            "How to measure returns: "
+            "'forward' = fixed N-day window after purchase, "
+            "'exit' = actual return when politician sold (real P&L), "
+            "'both' = show both + compare if politicians time exits well"
+        ),
+    ),
 ):
     """
     Backtest the conviction scoring system against real trade outcomes.
 
-    Scores each congressional purchase, looks up what the stock actually did
-    over the next N days, and groups results by score bucket.
+    Three return modes:
+    - **forward**: What did the stock do N days after the politician bought?
+    - **exit**: What was the actual P&L when the politician SOLD? (matches
+      buy→sell pairs per politician per ticker). Shows holding period,
+      entry/exit prices, and realized return.
+    - **both**: Shows both + a forward_vs_exit comparison that reveals
+      whether politicians time their exits well (do they sell at the right time
+      or leave money on the table?)
 
-    This validates whether the scoring system actually predicts returns.
-
-    NOTE: This endpoint is SLOW (5-60 seconds) because it calls yfinance
-    for price data on each trade. Use max_trades to control speed.
+    NOTE: SLOW (5-60 seconds) - calls yfinance for price data per trade.
 
     Returns:
     - Score bucket analysis (avg return per bucket)
     - Score validation (do high scores beat low scores?)
     - Committee analysis (do committee overlap trades outperform?)
+    - Forward vs exit comparison (do politicians time exits well?)
     - Small cap vs large cap hypothesis test
-    - Top scored trades with actual returns
+    - Top scored trades with entry, exit, holding period, and all returns
     """
     return await backtest_conviction_scores(
         days=days,
         forward_days=forward_days,
         max_trades=max_trades,
+        return_mode=return_mode,
     )

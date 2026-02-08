@@ -299,6 +299,254 @@ export const autopilot = {
     fetchApi<AutopilotPortfolio[]>("/api/v1/autopilot/portfolios"),
 };
 
+// --- Smart Signals ---
+
+export interface SignalCluster {
+  ticker: string;
+  action: string;
+  politician_count: number;
+  politicians: string[];
+  first_trade: string | null;
+  last_trade: string | null;
+  window_days: number;
+  signal_strength: string;
+}
+
+export interface CrossSourceSignal {
+  ticker: string;
+  sector: string;
+  sources: string[];
+  source_count: number;
+  signal_strength: string;
+  description: string;
+}
+
+export interface ConvictionScore {
+  score: number;
+  rating: string;
+  factors: string[];
+  ticker: string;
+  politician: string | null;
+  committees_checked: string[];
+}
+
+export interface CommitteeAssignment {
+  committee_id: string;
+  committee_name: string;
+  role: string | null;
+  rank: number | null;
+}
+
+export interface CommitteeOverlap {
+  politician: string;
+  ticker: string;
+  committees: CommitteeAssignment[];
+  overlap: {
+    committee: string;
+    stock_sector: string;
+    overlap_type: string;
+    flag: string;
+  } | null;
+  has_conflict: boolean;
+  flag: string | null;
+}
+
+export const signals = {
+  getAll: () =>
+    fetchApi<{
+      timestamp: string;
+      clusters: SignalCluster[];
+      cross_source_signals: CrossSourceSignal[];
+      total_high_signals: number;
+    }>("/api/v1/signals/"),
+
+  getClusters: (days = 14, min_politicians = 3) =>
+    fetchApi<SignalCluster[]>("/api/v1/signals/clusters", { days, min_politicians }),
+
+  getCrossSource: (days = 30) =>
+    fetchApi<CrossSourceSignal[]>("/api/v1/signals/cross-source", { days }),
+
+  scoreTrade: (ticker: string, politician?: string, amount_low?: number) =>
+    fetchApi<ConvictionScore>("/api/v1/signals/score-trade", {
+      ticker,
+      politician,
+      amount_low,
+    } as Record<string, string | number>),
+
+  checkCommitteeConflict: (ticker: string, politician: string) =>
+    fetchApi<CommitteeOverlap>("/api/v1/signals/committee-check", { ticker, politician }),
+
+  getPoliticianCommittees: (name: string) =>
+    fetchApi<CommitteeAssignment[]>(`/api/v1/signals/committees/politician/${encodeURIComponent(name)}`),
+
+  getCommitteeMembers: (committee: string) =>
+    fetchApi<{
+      politician_name: string;
+      bioguide_id: string;
+      party: string;
+      state: string;
+      chamber: string;
+      role: string | null;
+      rank: number | null;
+    }[]>("/api/v1/signals/committees/members", { committee }),
+};
+
+// --- Trump & Inner Circle ---
+
+export interface TrumpInsider {
+  name: string;
+  role: string;
+  category: string;
+  relationship: string;
+  known_interests: string[];
+  board_seats: string[];
+  tickers: string[];
+  notes: string;
+}
+
+export interface TrumpConnectedCompany {
+  company_name?: string;
+  name?: string;
+  ticker: string | null;
+  connection?: string;
+  connection_description?: string;
+  category: string;
+  sector: string;
+  connected_insiders?: string[];
+  insiders?: string[];
+}
+
+export interface TrumpDonor {
+  name: string;
+  amount_known: number;
+  entity: string;
+  interests: string[];
+}
+
+export interface PolicyConnection {
+  policy: string;
+  description: string;
+  winners: string[];
+  losers: string[];
+  tickers_affected: string[];
+}
+
+export interface ConflictOfInterest {
+  insider: string;
+  role: string;
+  category: string;
+  financial_interests: string[];
+  connected_tickers: string[];
+  board_seats: string[];
+  connected_companies: string[];
+  policy_conflicts: {
+    policy: string;
+    description: string;
+    affected_tickers: string[];
+    insider_is_winner: boolean;
+  }[];
+  conflict_severity: string;
+}
+
+export const trump = {
+  getOverview: () =>
+    fetchApi<{
+      description: string;
+      tracked_insiders: number;
+      tracked_companies: number;
+      major_donors: number;
+      policy_connections: number;
+      categories: Record<string, number>;
+    }>("/api/v1/trump/"),
+
+  getInsiders: (category?: string) =>
+    fetchApi<TrumpInsider[]>("/api/v1/trump/insiders", category ? { category } : undefined),
+
+  getInsider: (name: string) =>
+    fetchApi<TrumpInsider & { connected_companies: TrumpConnectedCompany[] }>(
+      `/api/v1/trump/insiders/${encodeURIComponent(name)}`
+    ),
+
+  getCompanies: (category?: string) =>
+    fetchApi<TrumpConnectedCompany[]>("/api/v1/trump/companies", category ? { category } : undefined),
+
+  getDonors: () =>
+    fetchApi<TrumpDonor[]>("/api/v1/trump/donors"),
+
+  getPolicyConnections: () =>
+    fetchApi<PolicyConnection[]>("/api/v1/trump/policy-connections"),
+
+  getTrades: () =>
+    fetchApi<{
+      source: string;
+      ticker: string;
+      company: string;
+      trump_connection: string;
+      [key: string]: unknown;
+    }[]>("/api/v1/trump/trades"),
+
+  getHedgeFundOverlap: () =>
+    fetchApi<{
+      ticker: string;
+      company: string;
+      trump_connection: string;
+      fund_cik: string;
+      value: number;
+      shares: number;
+      is_new_position: boolean;
+    }[]>("/api/v1/trump/hedge-fund-overlap"),
+
+  getConflictMap: () =>
+    fetchApi<ConflictOfInterest[]>("/api/v1/trump/conflict-map"),
+};
+
+// --- Hedge Fund Changes (Q-over-Q) ---
+
+export interface FundChanges {
+  fund: string;
+  manager: string;
+  current_quarter: string;
+  previous_quarter: string | null;
+  summary: {
+    new_positions: number;
+    closed_positions: number;
+    increased: number;
+    decreased: number;
+    unchanged: number;
+  };
+  new_positions: {
+    issuer: string;
+    ticker: string | null;
+    value: number;
+    shares: number;
+  }[];
+  closed_positions: {
+    issuer: string;
+    ticker: string | null;
+    prev_value: number;
+    prev_shares: number;
+  }[];
+  increased: {
+    issuer: string;
+    ticker: string | null;
+    shares_change_pct: number;
+    value: number;
+  }[];
+  decreased: {
+    issuer: string;
+    ticker: string | null;
+    shares_change_pct: number;
+    value: number;
+  }[];
+}
+
+// Add changes endpoint to hedgeFunds
+export const hedgeFundsExtended = {
+  ...hedgeFunds,
+  getChanges: (cik: string) =>
+    fetchApi<FundChanges>(`/api/v1/hedge-funds/${cik}/changes`),
+};
+
 // --- Helpers ---
 
 export function formatMoney(value: number | null | undefined): string {

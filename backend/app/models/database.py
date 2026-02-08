@@ -266,6 +266,81 @@ class PolymarketTrade(Base):
 # --- Kalshi Market Data ---
 
 
+# --- Politician Committee Assignments ---
+
+
+class PoliticianCommittee(Base):
+    __tablename__ = "politician_committees"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    bioguide_id = Column(String(20), nullable=False, index=True)
+    politician_name = Column(String(200), nullable=False, index=True)
+    party = Column(String(50))
+    state = Column(String(5))
+    chamber = Column(String(10))
+
+    committee_id = Column(String(20), nullable=False, index=True)
+    committee_name = Column(String(300), nullable=False)
+    role = Column(String(100))  # Chair, Ranking Member, Member
+    rank = Column(Integer)
+
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("bioguide_id", "committee_id", name="uq_politician_committee"),
+    )
+
+
+# --- Trump & Inner Circle Tracking ---
+
+
+class TrumpInsider(Base):
+    __tablename__ = "trump_insiders"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(200), nullable=False, unique=True, index=True)
+    role = Column(String(300))
+    category = Column(String(50), index=True)  # family, associate, appointee, donor
+    relationship = Column(String(200))
+
+    known_interests = Column(Text)  # semicolon-separated
+    board_seats = Column(Text)  # semicolon-separated
+    tickers = Column(String(200))  # comma-separated
+    sec_ciks = Column(String(200))  # comma-separated
+    notes = Column(Text)
+
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class TrumpConnection(Base):
+    __tablename__ = "trump_connections"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    company_name = Column(String(300), nullable=False, unique=True, index=True)
+    ticker = Column(String(20), index=True)
+    connection_description = Column(Text)
+    category = Column(String(50), index=True)  # trump_owned, musk_empire, defense_tech, etc.
+    sector = Column(String(100))
+    connected_insiders = Column(Text)  # comma-separated names
+
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class TrumpDonor(Base):
+    __tablename__ = "trump_donors"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(200), nullable=False, unique=True, index=True)
+    amount_known = Column(Float)
+    entity = Column(String(300))  # PAC name
+    interests = Column(Text)  # semicolon-separated
+
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# --- Kalshi Market Data ---
+
+
 class KalshiMarket(Base):
     __tablename__ = "kalshi_markets"
 

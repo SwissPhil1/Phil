@@ -156,6 +156,131 @@ async def find_holding_overlap(
     ]
 
 
+@router.get("/{cik}/changes")
+async def get_fund_changes(
+    cik: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get quarter-over-quarter changes for a fund.
+    Shows what they added, removed, increased, and decreased.
+    This is the key 'What did Burry do this quarter?' view.
+    """
+    # Get the two most recent report dates for this fund
+    report_dates_result = await db.execute(
+        select(HedgeFundHolding.report_date)
+        .where(HedgeFundHolding.fund_cik == cik)
+        .distinct()
+        .order_by(HedgeFundHolding.report_date.desc())
+        .limit(2)
+    )
+    report_dates = [r[0] for r in report_dates_result.all()]
+
+    if len(report_dates) < 1:
+        raise HTTPException(status_code=404, detail="No holdings data found")
+
+    # Get the fund
+    fund = await db.execute(select(HedgeFund).where(HedgeFund.cik == cik))
+    fund_obj = fund.scalar_one_or_none()
+    fund_name = fund_obj.name if fund_obj else cik
+    manager_name = fund_obj.manager_name if fund_obj else ""
+
+    latest_date = report_dates[0]
+    prev_date = report_dates[1] if len(report_dates) > 1 else None
+
+    # Get current holdings
+    current_result = await db.execute(
+        select(HedgeFundHolding)
+        .where(HedgeFundHolding.fund_cik == cik)
+        .where(HedgeFundHolding.report_date == latest_date)
+    )
+    current = {h.cusip: h for h in current_result.scalars().all()}
+
+    # Get previous holdings
+    previous = {}
+    if prev_date:
+        prev_result = await db.execute(
+            select(HedgeFundHolding)
+            .where(HedgeFundHolding.fund_cik == cik)
+            .where(HedgeFundHolding.report_date == prev_date)
+        )
+        previous = {h.cusip: h for h in prev_result.scalars().all()}
+
+    # Compute changes
+    new_positions = []
+    closed_positions = []
+    increased = []
+    decreased = []
+    unchanged = []
+
+    for cusip, h in current.items():
+        entry = {
+            "issuer": h.issuer_name,
+            "ticker": h.ticker,
+            "cusip": cusip,
+            "value": h.value,
+            "shares": h.shares,
+            "put_call": h.put_call,
+        }
+
+        if cusip not in previous:
+            new_positions.append(entry)
+        else:
+            prev_h = previous[cusip]
+            if prev_h.shares and h.shares:
+                change_pct = ((h.shares - prev_h.shares) / prev_h.shares * 100) if prev_h.shares else 0
+                entry["prev_shares"] = prev_h.shares
+                entry["shares_change"] = h.shares - prev_h.shares
+                entry["shares_change_pct"] = round(change_pct, 2)
+                entry["prev_value"] = prev_h.value
+                entry["value_change"] = (h.value or 0) - (prev_h.value or 0)
+
+                if abs(change_pct) < 1:
+                    unchanged.append(entry)
+                elif change_pct > 0:
+                    increased.append(entry)
+                else:
+                    decreased.append(entry)
+            else:
+                unchanged.append(entry)
+
+    # Closed positions (in previous but not in current)
+    for cusip, h in previous.items():
+        if cusip not in current:
+            closed_positions.append({
+                "issuer": h.issuer_name,
+                "ticker": h.ticker,
+                "cusip": cusip,
+                "prev_value": h.value,
+                "prev_shares": h.shares,
+                "put_call": h.put_call,
+            })
+
+    # Sort by value
+    new_positions.sort(key=lambda x: x.get("value") or 0, reverse=True)
+    closed_positions.sort(key=lambda x: x.get("prev_value") or 0, reverse=True)
+    increased.sort(key=lambda x: abs(x.get("shares_change_pct") or 0), reverse=True)
+    decreased.sort(key=lambda x: abs(x.get("shares_change_pct") or 0), reverse=True)
+
+    return {
+        "fund": fund_name,
+        "manager": manager_name,
+        "current_quarter": latest_date,
+        "previous_quarter": prev_date,
+        "summary": {
+            "new_positions": len(new_positions),
+            "closed_positions": len(closed_positions),
+            "increased": len(increased),
+            "decreased": len(decreased),
+            "unchanged": len(unchanged),
+        },
+        "new_positions": new_positions,
+        "closed_positions": closed_positions,
+        "increased": increased,
+        "decreased": decreased,
+    }
+
+
 @router.post("/ingest")
 async def trigger_13f_ingestion():
     """Manually trigger 13F ingestion for all tracked funds."""

@@ -12,13 +12,17 @@ from app.api.hedge_funds import router as hedge_funds_router
 from app.api.insiders import router as insiders_router
 from app.api.prediction_markets import router as prediction_markets_router
 from app.api.routes import router as congress_router
+from app.api.signals import router as signals_router
+from app.api.trump import router as trump_router
 from app.config import INGESTION_INTERVAL_MINUTES
 from app.models.database import init_db
+from app.services.committees import run_committee_ingestion
 from app.services.hedge_funds import run_13f_ingestion
 from app.services.ingestion import run_ingestion
 from app.services.insiders import run_insider_ingestion
 from app.services.performance import run_performance_update
 from app.services.prediction_markets import run_kalshi_ingestion, run_polymarket_ingestion
+from app.services.trump_tracker import run_trump_data_ingestion
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,6 +46,8 @@ async def lifespan(app: FastAPI):
         ("Form 4 insider trades", run_insider_ingestion),
         ("Polymarket traders", run_polymarket_ingestion),
         ("Kalshi markets", run_kalshi_ingestion),
+        ("Committee assignments", run_committee_ingestion),
+        ("Trump & inner circle data", run_trump_data_ingestion),
     ]:
         try:
             logger.info(f"Running initial {name} ingestion...")
@@ -77,6 +83,11 @@ async def lifespan(app: FastAPI):
         id="kalshi", name="Kalshi market data ingestion",
     )
     scheduler.add_job(
+        run_committee_ingestion, "interval",
+        hours=24,  # Committees change rarely
+        id="committees", name="Committee assignment ingestion",
+    )
+    scheduler.add_job(
         run_performance_update, "interval",
         minutes=INGESTION_INTERVAL_MINUTES * 2,
         id="performance", name="Price and performance update",
@@ -98,7 +109,7 @@ app = FastAPI(
         "corporate insider trades (Form 4), and prediction market whales (Polymarket/Kalshi). "
         "Built for European investors."
     ),
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
 )
 
@@ -116,15 +127,17 @@ app.include_router(hedge_funds_router, prefix="/api/v1")
 app.include_router(insiders_router, prefix="/api/v1")
 app.include_router(prediction_markets_router, prefix="/api/v1")
 app.include_router(autopilot_router, prefix="/api/v1")
+app.include_router(signals_router, prefix="/api/v1")
+app.include_router(trump_router, prefix="/api/v1")
 
 
 @app.get("/")
 async def root():
     return {
         "name": "SmartFlow API",
-        "version": "0.2.0",
+        "version": "0.3.0",
         "docs": "/docs",
-        "description": "Copy the smartest money - Congress, hedge funds, insiders, prediction markets",
+        "description": "Copy the smartest money - Congress, hedge funds, insiders, prediction markets, Trump tracker",
         "endpoints": {
             "congress": "/api/v1/trades",
             "hedge_funds": "/api/v1/hedge-funds",
@@ -132,6 +145,8 @@ async def root():
             "polymarket": "/api/v1/prediction-markets/polymarket",
             "kalshi": "/api/v1/prediction-markets/kalshi",
             "autopilot": "/api/v1/autopilot",
+            "signals": "/api/v1/signals",
+            "trump": "/api/v1/trump",
         },
     }
 

@@ -7,6 +7,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.autopilot import router as autopilot_router
 from app.api.hedge_funds import router as hedge_funds_router
 from app.api.insiders import router as insiders_router
 from app.api.prediction_markets import router as prediction_markets_router
@@ -114,6 +115,7 @@ app.include_router(congress_router, prefix="/api/v1")
 app.include_router(hedge_funds_router, prefix="/api/v1")
 app.include_router(insiders_router, prefix="/api/v1")
 app.include_router(prediction_markets_router, prefix="/api/v1")
+app.include_router(autopilot_router, prefix="/api/v1")
 
 
 @app.get("/")
@@ -129,6 +131,7 @@ async def root():
             "insiders": "/api/v1/insiders",
             "polymarket": "/api/v1/prediction-markets/polymarket",
             "kalshi": "/api/v1/prediction-markets/kalshi",
+            "autopilot": "/api/v1/autopilot",
         },
     }
 

@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.autopilot import router as autopilot_router
 from app.api.hedge_funds import router as hedge_funds_router
 from app.api.insiders import router as insiders_router
+from app.api.leaderboard import router as leaderboard_router
 from app.api.prediction_markets import router as prediction_markets_router
 from app.api.routes import router as congress_router
 from app.api.signals import router as signals_router
@@ -129,6 +130,7 @@ app.include_router(prediction_markets_router, prefix="/api/v1")
 app.include_router(autopilot_router, prefix="/api/v1")
 app.include_router(signals_router, prefix="/api/v1")
 app.include_router(trump_router, prefix="/api/v1")
+app.include_router(leaderboard_router, prefix="/api/v1")
 
 
 @app.get("/")
@@ -147,6 +149,7 @@ async def root():
             "autopilot": "/api/v1/autopilot",
             "signals": "/api/v1/signals",
             "trump": "/api/v1/trump",
+            "leaderboard": "/api/v1/leaderboard",
         },
     }
 

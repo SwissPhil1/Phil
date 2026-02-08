@@ -547,6 +547,123 @@ export const hedgeFundsExtended = {
     fetchApi<FundChanges>(`/api/v1/hedge-funds/${cik}/changes`),
 };
 
+// --- Leaderboard & Backtest ---
+
+export interface PoliticianLeaderboardEntry {
+  rank: number;
+  politician: string;
+  party: string | null;
+  state: string | null;
+  chamber: string | null;
+  total_trades: number;
+  buys: number;
+  sells: number;
+  avg_return_pct: number | null;
+  win_rate_pct: number | null;
+  trades_with_returns: number;
+  biggest_trade_amount: number | null;
+  best_trade_return_pct: number | null;
+  worst_trade_return_pct: number | null;
+}
+
+export interface YearLeaderboard {
+  year: number;
+  politicians_ranked: number;
+  top_10: PoliticianLeaderboardEntry[];
+  bottom_10: PoliticianLeaderboardEntry[];
+  full_leaderboard: PoliticianLeaderboardEntry[];
+}
+
+export interface LeaderboardResponse {
+  available_years: number[];
+  leaderboards: Record<string, YearLeaderboard>;
+  consistent_winners: {
+    politician: string;
+    years_active: number;
+    avg_rank: number;
+    avg_return_all_years: number;
+    yearly_data: { year: number; rank: number; avg_return: number | null; trades: number }[];
+  }[];
+  party_comparison: Record<string, {
+    avg_return_pct: number | null;
+    total_politicians: number;
+    total_trades: number;
+  }>;
+}
+
+export interface BacktestResponse {
+  backtest_params: { lookback_days: number; forward_days: number; max_trades: number };
+  total_trades_checked: number;
+  trades_with_returns: number;
+  score_bucket_analysis: Record<string, {
+    trade_count: number;
+    avg_return_pct: number | null;
+    median_return_pct?: number;
+    win_rate_pct?: number;
+    best_trade_pct?: number;
+    worst_trade_pct?: number;
+  }>;
+  score_validation: {
+    high_score_avg_return?: number;
+    low_score_avg_return?: number;
+    high_score_count?: number;
+    low_score_count?: number;
+    score_predicts_returns?: boolean;
+    edge_pct?: number;
+    error?: string;
+  };
+  committee_analysis: {
+    committee_overlap_trades: number;
+    committee_avg_return: number | null;
+    non_committee_trades: number;
+    non_committee_avg_return: number | null;
+    committee_edge: number | null;
+  };
+  small_vs_large_cap: {
+    question: string;
+    small_cap_committee_trades: number;
+    small_cap_committee_avg_return: number | null;
+    large_cap_cluster_trades: number;
+    large_cap_cluster_avg_return: number | null;
+  };
+  top_scored_trades: {
+    politician: string;
+    ticker: string;
+    score: number;
+    factors: string[];
+    forward_return_pct: number | null;
+    tx_date: string | null;
+    amount_low: number | null;
+  }[];
+}
+
+export interface ProfitableTrade {
+  rank: number;
+  politician: string;
+  party: string | null;
+  ticker: string;
+  asset: string | null;
+  tx_date: string | null;
+  disclosure_date: string | null;
+  amount_low: number | null;
+  amount_high: number | null;
+  price_at_disclosure: number | null;
+  price_current: number | null;
+  return_pct: number;
+  disclosure_delay_days: number | null;
+}
+
+export const leaderboard = {
+  get: (params?: { year?: number; min_trades?: number; chamber?: string }) =>
+    fetchApi<LeaderboardResponse>("/api/v1/leaderboard/", params as Record<string, string | number>),
+
+  bestTrades: (days = 365, limit = 50) =>
+    fetchApi<ProfitableTrade[]>("/api/v1/leaderboard/best-trades", { days, limit }),
+
+  backtest: (params?: { days?: number; forward_days?: number; max_trades?: number }) =>
+    fetchApi<BacktestResponse>("/api/v1/leaderboard/backtest", params as Record<string, string | number>),
+};
+
 // --- Helpers ---
 
 export function formatMoney(value: number | null | undefined): string {

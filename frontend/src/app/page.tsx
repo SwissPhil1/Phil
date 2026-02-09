@@ -327,24 +327,24 @@ export default function Dashboard() {
         </Card>
       </div>
 
-      {/* Top Traded Tickers */}
-      {stats?.top_traded_tickers && stats.top_traded_tickers.length > 0 && (
+      {/* Most Active Politicians */}
+      {stats?.most_active_politicians && stats.most_active_politicians.length > 0 && (
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-base flex items-center gap-2">
               <TrendingUp className="w-4 h-4" />
-              Most Traded by Politicians
+              Most Active Politicians
             </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="flex flex-wrap gap-2">
-              {stats.top_traded_tickers.slice(0, 20).map((t) => (
+              {stats.most_active_politicians.slice(0, 20).map((p) => (
                 <div
-                  key={t.ticker}
+                  key={p.politician}
                   className="px-3 py-1.5 rounded-lg bg-muted/50 flex items-center gap-2"
                 >
-                  <span className="font-mono-data font-medium text-sm">{t.ticker}</span>
-                  <span className="text-xs text-muted-foreground">{t.count}</span>
+                  <span className="font-medium text-sm">{p.politician}</span>
+                  <span className="text-xs text-muted-foreground">{p.total_trades} trades</span>
                 </div>
               ))}
             </div>

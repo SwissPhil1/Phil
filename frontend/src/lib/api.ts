@@ -1,6 +1,6 @@
-// In production on Vercel, use relative paths (proxied via next.config.ts rewrites).
-// In development, call the Railway backend directly.
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
+// Always use relative paths - Vercel rewrites proxy /api/* to Railway backend.
+// This avoids cross-origin issues (VPN, CORS, regional routing).
+const API_BASE = "";
 
 async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {

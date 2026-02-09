@@ -74,15 +74,31 @@ export default function Dashboard() {
 
   useEffect(() => {
     async function load() {
+      const errors: string[] = [];
       try {
         const [statsData, tradesData, signalsData] = await Promise.allSettled([
           api.getStats(),
           api.getRecentTrades(),
           api.getSignals(),
         ]);
-        if (statsData.status === "fulfilled") setStats(statsData.value);
-        if (tradesData.status === "fulfilled") setTrades(tradesData.value);
-        if (signalsData.status === "fulfilled") setSignals(signalsData.value);
+        if (statsData.status === "fulfilled") {
+          setStats(statsData.value);
+        } else {
+          errors.push(`Stats: ${statsData.reason}`);
+        }
+        if (tradesData.status === "fulfilled") {
+          setTrades(tradesData.value);
+        } else {
+          errors.push(`Trades: ${tradesData.reason}`);
+        }
+        if (signalsData.status === "fulfilled") {
+          setSignals(signalsData.value);
+        } else {
+          errors.push(`Signals: ${signalsData.reason}`);
+        }
+        if (errors.length > 0) {
+          setError(errors.join(" | "));
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to load data");
       } finally {
@@ -120,9 +136,13 @@ export default function Dashboard() {
 
       {error && (
         <Card className="border-destructive/50">
-          <CardContent className="p-4 flex items-center gap-2 text-destructive">
-            <AlertTriangle className="w-4 h-4" />
-            <span className="text-sm">{error}</span>
+          <CardContent className="p-4 space-y-1">
+            <div className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="w-4 h-4" />
+              <span className="text-sm font-medium">API Error</span>
+            </div>
+            <p className="text-xs text-destructive/80 break-all">{error}</p>
+            <p className="text-xs text-muted-foreground">API: {process.env.NEXT_PUBLIC_API_URL || "https://phil-production.up.railway.app"}</p>
           </CardContent>
         </Card>
       )}

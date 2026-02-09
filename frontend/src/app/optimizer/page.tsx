@@ -1,16 +1,29 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, type OptimizerResult } from "@/lib/api";
-import { Brain, Play, CheckCircle, XCircle, TrendingUp, Clock, Zap, BarChart3 } from "lucide-react";
+import { Brain, Play, CheckCircle, XCircle, TrendingUp, Clock, Zap, BarChart3, Info } from "lucide-react";
 
 export default function OptimizerPage() {
   const [result, setResult] = useState<OptimizerResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [available, setAvailable] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    async function checkStatus() {
+      try {
+        await api.getOptimizerStatus();
+        setAvailable(true);
+      } catch {
+        setAvailable(false);
+      }
+    }
+    checkStatus();
+  }, []);
 
   async function runOptimizer() {
     setLoading(true);
@@ -24,7 +37,12 @@ export default function OptimizerPage() {
       });
       setResult(data);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Optimizer failed");
+      const msg = e instanceof Error ? e.message : "Optimizer failed";
+      if (msg.includes("404")) {
+        setError("Optimizer endpoint not available on the current backend deployment. A backend redeployment is needed to enable this feature.");
+      } else {
+        setError(msg);
+      }
     } finally {
       setLoading(false);
     }
@@ -59,6 +77,17 @@ export default function OptimizerPage() {
           )}
         </Button>
       </div>
+
+      {/* Availability warning */}
+      {available === false && (
+        <div className="flex items-start gap-3 p-4 rounded-lg bg-yellow-500/5 border border-yellow-500/10">
+          <Info className="w-4 h-4 text-yellow-400 mt-0.5 shrink-0" />
+          <div className="text-sm text-muted-foreground">
+            <span className="text-foreground font-medium">Backend update needed:</span>{" "}
+            The optimizer module exists in the codebase but is not yet deployed to the backend server. A Railway redeployment will enable this feature.
+          </div>
+        </div>
+      )}
 
       {/* How it works */}
       {!result && !loading && (

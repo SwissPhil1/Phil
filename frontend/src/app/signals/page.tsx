@@ -200,13 +200,17 @@ export default function SignalsPage() {
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div className="p-3 rounded-lg bg-muted/30">
                       <div className="text-xs text-muted-foreground">Trades Analyzed</div>
-                      <div className="text-xl font-bold font-mono-data">{backtest.summary.trades_with_returns}</div>
+                      <div className="text-xl font-bold font-mono-data">{backtest.trades_with_returns ?? 0}</div>
                     </div>
                     <div className="p-3 rounded-lg bg-muted/30">
                       <div className="text-xs text-muted-foreground">Statistical Edge</div>
-                      <div className={`text-xl font-bold font-mono-data ${backtest.score_validation?.edge_pct > 0 ? "text-green-400" : "text-red-400"}`}>
-                        {backtest.score_validation?.edge_pct > 0 ? "+" : ""}{backtest.score_validation?.edge_pct?.toFixed(1)}%
-                      </div>
+                      {backtest.score_validation?.error ? (
+                        <div className="text-sm text-muted-foreground">{backtest.score_validation.error}</div>
+                      ) : (
+                        <div className={`text-xl font-bold font-mono-data ${(backtest.score_validation?.edge_pct ?? 0) > 0 ? "text-green-400" : "text-red-400"}`}>
+                          {(backtest.score_validation?.edge_pct ?? 0) > 0 ? "+" : ""}{(backtest.score_validation?.edge_pct ?? 0).toFixed(1)}%
+                        </div>
+                      )}
                     </div>
                     <div className="p-3 rounded-lg bg-muted/30">
                       <div className="text-xs text-muted-foreground">Statistically Significant</div>
@@ -229,27 +233,13 @@ export default function SignalsPage() {
                       <div key={bucket} className="flex items-center justify-between py-2 border-b border-border/30 last:border-0">
                         <div className="flex items-center gap-3">
                           <span className="text-sm font-medium w-36">{bucket}</span>
-                          <span className="text-xs text-muted-foreground">{stats.count} trades</span>
+                          <span className="text-xs text-muted-foreground">{stats.trade_count} trades</span>
                         </div>
-                        <div className="flex items-center gap-4">
-                          <div className="text-right">
-                            <div className="text-xs text-muted-foreground">Avg Return</div>
-                            <span className={`font-mono-data text-sm ${(stats.avg || 0) >= 0 ? "text-green-400" : "text-red-400"}`}>
-                              {stats.avg != null ? `${stats.avg > 0 ? "+" : ""}${stats.avg.toFixed(1)}%` : "-"}
-                            </span>
-                          </div>
-                          <div className="text-right">
-                            <div className="text-xs text-muted-foreground">Win Rate</div>
-                            <span className="font-mono-data text-sm">
-                              {stats.win_rate != null ? `${stats.win_rate.toFixed(0)}%` : "-"}
-                            </span>
-                          </div>
-                          <div className="text-right">
-                            <div className="text-xs text-muted-foreground">Sharpe</div>
-                            <span className="font-mono-data text-sm">
-                              {stats.sharpe != null ? stats.sharpe.toFixed(2) : "-"}
-                            </span>
-                          </div>
+                        <div className="text-right">
+                          <div className="text-xs text-muted-foreground">Avg Return</div>
+                          <span className={`font-mono-data text-sm ${(stats.avg_return_pct || 0) >= 0 ? "text-green-400" : "text-red-400"}`}>
+                            {stats.avg_return_pct != null ? `${stats.avg_return_pct > 0 ? "+" : ""}${stats.avg_return_pct.toFixed(1)}%` : "-"}
+                          </span>
                         </div>
                       </div>
                     ))}
@@ -257,33 +247,23 @@ export default function SignalsPage() {
                 </CardContent>
               </Card>
 
-              {/* Factor Attribution */}
-              {backtest.factor_attribution && Object.keys(backtest.factor_attribution).length > 0 && (
+              {/* Top Scored Trades */}
+              {backtest.top_scored_trades && backtest.top_scored_trades.length > 0 && (
                 <Card>
                   <CardHeader className="pb-2">
-                    <CardTitle className="text-base">Factor Attribution - Which factors predict returns?</CardTitle>
+                    <CardTitle className="text-base">Top Scored Trades</CardTitle>
                   </CardHeader>
                   <CardContent>
                     <div className="space-y-2">
-                      {Object.entries(backtest.factor_attribution)
-                        .sort((a, b) => (b[1].edge_pct || 0) - (a[1].edge_pct || 0))
-                        .map(([factor, data]) => (
-                        <div key={factor} className="flex items-center justify-between py-2 border-b border-border/30 last:border-0">
+                      {backtest.top_scored_trades.slice(0, 10).map((trade: any, i: number) => (
+                        <div key={i} className="flex items-center justify-between py-2 border-b border-border/30 last:border-0">
                           <div>
-                            <span className="text-sm font-medium">{factor.replace(/_/g, " ")}</span>
-                            <span className="text-xs text-muted-foreground ml-2">({data.trades_with} trades)</span>
+                            <span className="text-sm font-medium">{trade.politician}</span>
+                            <span className="text-xs text-muted-foreground ml-2">{trade.ticker}</span>
                           </div>
                           <div className="flex items-center gap-3">
-                            <div className="text-right">
-                              <div className="text-xs text-muted-foreground">Edge</div>
-                              <span className={`font-mono-data text-sm font-medium ${(data.edge_pct ?? 0) >= 0 ? "text-green-400" : "text-red-400"}`}>
-                                {(data.edge_pct ?? 0) >= 0 ? "+" : ""}{(data.edge_pct ?? 0).toFixed(1)}%
-                              </span>
-                            </div>
-                            <div className="text-right">
-                              <div className="text-xs text-muted-foreground">Win Rate</div>
-                              <span className="font-mono-data text-sm">{(data.win_rate_with ?? 0).toFixed(0)}%</span>
-                            </div>
+                            <span className="font-mono-data text-sm font-medium">{trade.score} pts</span>
+                            <span className="text-xs text-muted-foreground">{(trade.factors || []).join(", ")}</span>
                           </div>
                         </div>
                       ))}

@@ -172,27 +172,21 @@ export interface TrumpOverview {
 
 export interface BacktestResult {
   backtest_params: Record<string, unknown>;
-  summary: {
-    total_trades_checked: number;
-    trades_with_returns: number;
-    exits_found: number;
-  };
+  total_trades_checked: number;
+  trades_with_returns: number;
+  exits_found: number;
+  still_holding: number;
   score_bucket_analysis: Record<string, {
-    count: number;
-    avg: number | null;
-    win_rate: number | null;
-    sharpe: number | null;
+    trade_count: number;
+    avg_return_pct: number | null;
   }>;
   score_validation: {
-    significant_95pct: boolean;
-    edge_pct: number;
-    t_statistic: number;
+    error?: string;
+    significant_95pct?: boolean;
+    edge_pct?: number;
+    t_statistic?: number;
   };
-  factor_attribution: Record<string, {
-    edge_pct: number;
-    win_rate_with: number;
-    trades_with: number;
-  }>;
+  top_scored_trades?: any[];
 }
 
 // ─── API Functions ───

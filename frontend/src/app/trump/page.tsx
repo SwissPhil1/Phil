@@ -129,9 +129,9 @@ export default function TrumpPage() {
                       <div className="text-xs text-muted-foreground">{insider.role}</div>
                       {insider.tickers && (
                         <div className="flex flex-wrap gap-1 mt-2">
-                          {insider.tickers.split(",").map((t: string) => (
+                          {(Array.isArray(insider.tickers) ? insider.tickers : String(insider.tickers).split(",")).map((t: string) => (
                             <span key={t} className="text-[10px] font-mono-data bg-secondary px-1.5 py-0.5 rounded">
-                              {t.trim()}
+                              {String(t).trim()}
                             </span>
                           ))}
                         </div>

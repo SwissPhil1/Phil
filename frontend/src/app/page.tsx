@@ -1,20 +1,35 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import Link from "next/link";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { api, type Trade, type Signal, type CrossSourceSignal, type StatsResponse } from "@/lib/api";
+import { api, type Trade, type StatsResponse, type HedgeFund } from "@/lib/api";
 import {
   Landmark,
   TrendingUp,
-  Zap,
-  Users,
+  Target,
+  BarChart3,
   ArrowUpRight,
   ArrowDownRight,
-  Clock,
-  AlertTriangle,
+  ChevronRight,
+  Info,
 } from "lucide-react";
+
+function timeAgo(dateStr: string) {
+  if (!dateStr) return "";
+  const now = new Date();
+  const d = new Date(dateStr);
+  const diffMs = now.getTime() - d.getTime();
+  const days = Math.floor(diffMs / 86400000);
+  if (days === 0) return "Today";
+  if (days === 1) return "Yesterday";
+  if (days < 7) return `${days}d ago`;
+  if (days < 30) return `${Math.floor(days / 7)}w ago`;
+  if (days < 365) return `${Math.floor(days / 30)}mo ago`;
+  return `${Math.floor(days / 365)}y ago`;
+}
 
 function formatAmount(low: number, high: number) {
   const fmt = (n: number) => {
@@ -22,88 +37,29 @@ function formatAmount(low: number, high: number) {
     if (n >= 1_000) return `$${(n / 1_000).toFixed(0)}K`;
     return `$${n}`;
   };
-  return `${fmt(low)} - ${fmt(high)}`;
-}
-
-function formatDate(dateStr: string) {
-  if (!dateStr) return "-";
-  const d = new Date(dateStr);
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
-
-function SignalBadge({ strength }: { strength: string }) {
-  const colors: Record<string, string> = {
-    VERY_HIGH: "bg-red-500/20 text-red-400 border-red-500/30",
-    HIGH: "bg-orange-500/20 text-orange-400 border-orange-500/30",
-    MEDIUM: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
-    LOW: "bg-blue-500/20 text-blue-400 border-blue-500/30",
-  };
-  return (
-    <Badge variant="outline" className={colors[strength] || colors.LOW}>
-      {strength}
-    </Badge>
-  );
-}
-
-function PartyBadge({ party }: { party: string }) {
-  if (party === "R") return <Badge variant="outline" className="bg-red-500/10 text-red-400 border-red-500/20 text-[10px] px-1.5">R</Badge>;
-  if (party === "D") return <Badge variant="outline" className="bg-blue-500/10 text-blue-400 border-blue-500/20 text-[10px] px-1.5">D</Badge>;
-  return <Badge variant="outline" className="text-[10px] px-1.5">{party}</Badge>;
-}
-
-function ReturnDisplay({ value }: { value: number | null }) {
-  if (value === null || value === undefined) return <span className="text-muted-foreground text-xs">-</span>;
-  const isPositive = value >= 0;
-  return (
-    <span className={`font-mono-data font-medium text-sm ${isPositive ? "text-green-400" : "text-red-400"}`}>
-      {isPositive ? "+" : ""}{value.toFixed(1)}%
-    </span>
-  );
+  return `${fmt(low)} – ${fmt(high)}`;
 }
 
 export default function Dashboard() {
   const [stats, setStats] = useState<StatsResponse | null>(null);
   const [trades, setTrades] = useState<Trade[]>([]);
-  const [signals, setSignals] = useState<{
-    clusters: Signal[];
-    cross_source_signals: CrossSourceSignal[];
-    total_high_signals: number;
-  } | null>(null);
+  const [funds, setFunds] = useState<HedgeFund[]>([]);
+  const [trumpInsiders, setTrumpInsiders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
-      const errors: string[] = [];
-      try {
-        const [statsData, tradesData, signalsData] = await Promise.allSettled([
-          api.getStats(),
-          api.getRecentTrades(),
-          api.getSignals(),
-        ]);
-        if (statsData.status === "fulfilled") {
-          setStats(statsData.value);
-        } else {
-          errors.push(`Stats: ${statsData.reason}`);
-        }
-        if (tradesData.status === "fulfilled") {
-          setTrades(tradesData.value);
-        } else {
-          errors.push(`Trades: ${tradesData.reason}`);
-        }
-        if (signalsData.status === "fulfilled") {
-          setSignals(signalsData.value);
-        } else {
-          errors.push(`Signals: ${signalsData.reason}`);
-        }
-        if (errors.length > 0) {
-          setError(errors.join(" | "));
-        }
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Failed to load data");
-      } finally {
-        setLoading(false);
-      }
+      const [s, t, f, tr] = await Promise.allSettled([
+        api.getStats(),
+        api.getRecentTrades(),
+        api.getHedgeFunds(),
+        api.getTrumpInsiders(),
+      ]);
+      if (s.status === "fulfilled") setStats(s.value);
+      if (t.status === "fulfilled") setTrades(t.value);
+      if (f.status === "fulfilled") setFunds(Array.isArray(f.value) ? f.value : []);
+      if (tr.status === "fulfilled") setTrumpInsiders(Array.isArray(tr.value) ? tr.value : []);
+      setLoading(false);
     }
     load();
   }, []);
@@ -112,245 +68,240 @@ export default function Dashboard() {
     return (
       <div className="space-y-6">
         <div>
-          <h1 className="text-2xl font-bold">Dashboard</h1>
-          <p className="text-muted-foreground text-sm mt-1">Loading market intelligence...</p>
+          <h1 className="text-2xl font-bold">SmartFlow</h1>
+          <p className="text-muted-foreground text-sm mt-1">Loading your intelligence feed...</p>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {[...Array(4)].map((_, i) => (
-            <Card key={i}><CardContent className="p-6"><Skeleton className="h-16 w-full" /></CardContent></Card>
+            <Card key={i}><CardContent className="p-5"><Skeleton className="h-14 w-full" /></CardContent></Card>
           ))}
+        </div>
+        <div className="space-y-3">
+          {[...Array(5)].map((_, i) => <Skeleton key={i} className="h-20 w-full rounded-lg" />)}
         </div>
       </div>
     );
   }
 
+  const totalFundValue = funds.reduce((sum, f) => sum + (f.total_value || 0), 0);
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold">Dashboard</h1>
+        <h1 className="text-2xl font-bold">SmartFlow</h1>
         <p className="text-muted-foreground text-sm mt-1">
-          Real-time intelligence from Congress, hedge funds, insiders, and prediction markets
+          Copy the smartest money — Congress, hedge funds, and Trump&apos;s inner circle
         </p>
       </div>
 
-      {error && (
-        <Card className="border-destructive/50">
-          <CardContent className="p-4 space-y-1">
-            <div className="flex items-center gap-2 text-destructive">
-              <AlertTriangle className="w-4 h-4" />
-              <span className="text-sm font-medium">API Error</span>
-            </div>
-            <p className="text-xs text-destructive/80 break-all">{error}</p>
-            <p className="text-xs text-muted-foreground">API: {process.env.NEXT_PUBLIC_API_URL || "(proxied via /api)"}</p>
-          </CardContent>
-        </Card>
-      )}
+      {/* Hero Stats */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <Link href="/congress">
+          <Card className="hover:border-primary/30 transition-colors cursor-pointer group">
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between mb-3">
+                <Landmark className="w-5 h-5 text-blue-400" />
+                <ChevronRight className="w-4 h-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+              </div>
+              <div className="text-2xl font-bold font-mono-data">
+                {stats?.total_trades?.toLocaleString() || "28,000+"}
+              </div>
+              <div className="text-xs text-muted-foreground mt-1">Congressional trades</div>
+            </CardContent>
+          </Card>
+        </Link>
 
-      {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div className="text-sm text-muted-foreground">Total Trades</div>
-              <Landmark className="w-4 h-4 text-muted-foreground" />
-            </div>
-            <div className="text-2xl font-bold font-mono-data mt-1">
-              {stats?.total_trades?.toLocaleString() || "-"}
-            </div>
-            <div className="text-xs text-muted-foreground mt-1">
-              From {stats?.total_politicians || 0} politicians
-            </div>
-          </CardContent>
-        </Card>
+        <Link href="/hedge-funds">
+          <Card className="hover:border-primary/30 transition-colors cursor-pointer group">
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between mb-3">
+                <TrendingUp className="w-5 h-5 text-green-400" />
+                <ChevronRight className="w-4 h-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+              </div>
+              <div className="text-2xl font-bold font-mono-data">
+                {funds.length || 14}
+              </div>
+              <div className="text-xs text-muted-foreground mt-1">
+                Hedge funds &middot; ${(totalFundValue / 1e12).toFixed(1)}T AUM
+              </div>
+            </CardContent>
+          </Card>
+        </Link>
 
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div className="text-sm text-muted-foreground">Active Signals</div>
-              <Zap className="w-4 h-4 text-yellow-400" />
-            </div>
-            <div className="text-2xl font-bold font-mono-data mt-1 text-yellow-400">
-              {signals?.total_high_signals || 0}
-            </div>
-            <div className="text-xs text-muted-foreground mt-1">
-              High-conviction alerts
-            </div>
-          </CardContent>
-        </Card>
+        <Link href="/trump">
+          <Card className="hover:border-primary/30 transition-colors cursor-pointer group">
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between mb-3">
+                <Target className="w-5 h-5 text-purple-400" />
+                <ChevronRight className="w-4 h-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+              </div>
+              <div className="text-2xl font-bold font-mono-data">
+                {trumpInsiders.length || 18}
+              </div>
+              <div className="text-xs text-muted-foreground mt-1">Trump inner circle tracked</div>
+            </CardContent>
+          </Card>
+        </Link>
 
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div className="text-sm text-muted-foreground">Trade Clusters</div>
-              <Users className="w-4 h-4 text-muted-foreground" />
-            </div>
-            <div className="text-2xl font-bold font-mono-data mt-1">
-              {signals?.clusters?.length || 0}
-            </div>
-            <div className="text-xs text-muted-foreground mt-1">
-              Multiple politicians same stock
-            </div>
-          </CardContent>
-        </Card>
+        <Link href="/prediction-markets">
+          <Card className="hover:border-primary/30 transition-colors cursor-pointer group">
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between mb-3">
+                <BarChart3 className="w-5 h-5 text-orange-400" />
+                <ChevronRight className="w-4 h-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+              </div>
+              <div className="text-2xl font-bold font-mono-data">50</div>
+              <div className="text-xs text-muted-foreground mt-1">Polymarket top traders</div>
+            </CardContent>
+          </Card>
+        </Link>
+      </div>
 
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div className="text-sm text-muted-foreground">Cross-Source</div>
-              <TrendingUp className="w-4 h-4 text-green-400" />
-            </div>
-            <div className="text-2xl font-bold font-mono-data mt-1 text-green-400">
-              {signals?.cross_source_signals?.length || 0}
-            </div>
-            <div className="text-xs text-muted-foreground mt-1">
-              Congress + insiders + funds
-            </div>
-          </CardContent>
-        </Card>
+      {/* Filing delay notice */}
+      <div className="flex items-start gap-3 p-4 rounded-lg bg-blue-500/5 border border-blue-500/10">
+        <Info className="w-4 h-4 text-blue-400 mt-0.5 shrink-0" />
+        <div className="text-sm text-muted-foreground">
+          <span className="text-foreground font-medium">STOCK Act filing delay:</span>{" "}
+          Members of Congress have up to 45 days to disclose trades. Most recent filings may reflect trades from several weeks ago.
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Latest Trades */}
-        <Card className="lg:col-span-2">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Clock className="w-4 h-4" />
-              Latest Congressional Trades
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-1">
-              {trades.length === 0 ? (
-                <p className="text-sm text-muted-foreground py-8 text-center">
-                  No trades loaded yet. Data is being ingested...
-                </p>
-              ) : (
-                trades.slice(0, 12).map((trade, i) => (
-                  <div
-                    key={i}
-                    className="flex items-center justify-between py-2 border-b border-border/50 last:border-0"
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div
-                        className={`w-7 h-7 rounded flex items-center justify-center shrink-0 ${
-                          trade.tx_type === "purchase"
-                            ? "bg-green-500/10"
-                            : "bg-red-500/10"
-                        }`}
-                      >
-                        {trade.tx_type === "purchase" ? (
-                          <ArrowUpRight className="w-3.5 h-3.5 text-green-400" />
-                        ) : (
-                          <ArrowDownRight className="w-3.5 h-3.5 text-red-400" />
+        {/* Recent Trades Feed */}
+        <div className="lg:col-span-2 space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Recent Trades</h2>
+            <Link href="/congress" className="text-xs text-primary hover:underline">View all</Link>
+          </div>
+
+          {trades.length === 0 ? (
+            <Card>
+              <CardContent className="py-12 text-center text-muted-foreground text-sm">
+                Trade data loading...
+              </CardContent>
+            </Card>
+          ) : (
+            trades.slice(0, 8).map((trade, i) => (
+              <Card key={i} className="hover:border-border/80 transition-colors">
+                <CardContent className="p-4">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
+                      trade.tx_type === "purchase" ? "bg-green-500/10" : "bg-red-500/10"
+                    }`}>
+                      {trade.tx_type === "purchase" ? (
+                        <ArrowUpRight className="w-4 h-4 text-green-400" />
+                      ) : (
+                        <ArrowDownRight className="w-4 h-4 text-red-400" />
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-sm truncate">{trade.politician}</span>
+                        {trade.party && (
+                          <Badge variant="outline" className={`text-[10px] px-1.5 shrink-0 ${
+                            trade.party === "R" ? "bg-red-500/10 text-red-400 border-red-500/20" :
+                            trade.party === "D" ? "bg-blue-500/10 text-blue-400 border-blue-500/20" : ""
+                          }`}>{trade.party}</Badge>
                         )}
                       </div>
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-sm font-medium truncate max-w-[180px]">
-                            {trade.politician}
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <span className="font-mono-data text-xs font-medium text-foreground">{trade.ticker}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {trade.tx_type === "purchase" ? "Bought" : "Sold"}
+                        </span>
+                        {trade.amount_low && trade.amount_high && (
+                          <span className="text-xs text-muted-foreground">
+                            {formatAmount(trade.amount_low, trade.amount_high)}
                           </span>
-                          <PartyBadge party={trade.party} />
-                        </div>
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <span className="font-mono-data font-medium text-foreground">
-                            {trade.ticker}
-                          </span>
-                          <span>{formatDate(trade.tx_date)}</span>
-                          {trade.amount_low && trade.amount_high && (
-                            <span>{formatAmount(trade.amount_low, trade.amount_high)}</span>
-                          )}
-                        </div>
+                        )}
                       </div>
                     </div>
-                    <div className="text-right shrink-0 ml-2">
-                      <ReturnDisplay value={trade.return_since_disclosure} />
+                    <div className="text-right shrink-0">
+                      <div className="text-xs text-muted-foreground">{timeAgo(trade.disclosure_date || trade.tx_date)}</div>
                     </div>
                   </div>
-                ))
-              )}
-            </div>
-          </CardContent>
-        </Card>
+                </CardContent>
+              </Card>
+            ))
+          )}
+        </div>
 
-        {/* Smart Signals Sidebar */}
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Zap className="w-4 h-4 text-yellow-400" />
-              Smart Signals
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
+        {/* Right sidebar */}
+        <div className="space-y-6">
+          {/* Top Hedge Funds */}
+          {funds.length > 0 && (
             <div className="space-y-3">
-              {signals?.clusters?.slice(0, 3).map((cluster, i) => (
-                <div key={`cl-${i}`} className="p-3 rounded-lg bg-muted/50 space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono-data font-bold text-sm">{cluster.ticker}</span>
-                    <SignalBadge strength={cluster.signal_strength} />
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    {cluster.politician_count} politicians {(cluster.action || "").toLowerCase()} in {cluster.window_days}d
-                  </p>
-                  <div className="flex flex-wrap gap-1">
-                    {(cluster.politicians || []).slice(0, 3).map((p) => (
-                      <span key={p} className="text-[10px] bg-secondary px-1.5 py-0.5 rounded">
-                        {p.split(" ").pop()}
+              <div className="flex items-center justify-between">
+                <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Top Funds</h2>
+                <Link href="/hedge-funds" className="text-xs text-primary hover:underline">View all</Link>
+              </div>
+              {funds.slice(0, 5).map((fund, i) => (
+                <Card key={i} className="hover:border-border/80 transition-colors">
+                  <CardContent className="p-3">
+                    <div className="font-medium text-sm">{fund.manager_name}</div>
+                    <div className="text-xs text-muted-foreground">{fund.name}</div>
+                    <div className="flex items-center gap-4 mt-2">
+                      <span className="text-xs">
+                        <span className="text-muted-foreground">AUM </span>
+                        <span className="font-mono-data font-medium">
+                          {fund.total_value ? `$${(fund.total_value / 1e9).toFixed(1)}B` : "-"}
+                        </span>
                       </span>
+                      <span className="text-xs">
+                        <span className="text-muted-foreground">Holdings </span>
+                        <span className="font-mono-data font-medium">{fund.num_holdings || "-"}</span>
+                      </span>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+
+          {/* Trump Circle Highlights */}
+          {trumpInsiders.length > 0 && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Trump Circle</h2>
+                <Link href="/trump" className="text-xs text-primary hover:underline">View all</Link>
+              </div>
+              {trumpInsiders.slice(0, 4).map((insider: any, i: number) => (
+                <Card key={i} className="hover:border-border/80 transition-colors">
+                  <CardContent className="p-3">
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium text-sm">{insider.name}</span>
+                      <Badge variant="outline" className="text-[10px] bg-purple-500/10 text-purple-400 border-purple-500/20">
+                        {insider.category}
+                      </Badge>
+                    </div>
+                    <div className="text-xs text-muted-foreground mt-0.5">{insider.role}</div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+
+          {/* Most Traded */}
+          {stats?.most_bought_tickers && stats.most_bought_tickers.length > 0 && (
+            <div className="space-y-3">
+              <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Most Bought</h2>
+              <Card>
+                <CardContent className="p-3">
+                  <div className="flex flex-wrap gap-2">
+                    {stats.most_bought_tickers.slice(0, 10).map((t) => (
+                      <div key={t.ticker} className="flex items-center gap-1.5 bg-muted/50 rounded-md px-2.5 py-1.5">
+                        <span className="font-mono-data text-xs font-medium">{t.ticker}</span>
+                        <span className="text-[10px] text-muted-foreground">{t.count}</span>
+                      </div>
                     ))}
-                    {(cluster.politicians || []).length > 3 && (
-                      <span className="text-[10px] text-muted-foreground">
-                        +{(cluster.politicians || []).length - 3}
-                      </span>
-                    )}
                   </div>
-                </div>
-              ))}
-
-              {signals?.cross_source_signals?.slice(0, 3).map((signal, i) => (
-                <div key={`cs-${i}`} className="p-3 rounded-lg bg-muted/50 space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono-data font-bold text-sm">{signal.ticker}</span>
-                    <SignalBadge strength={signal.signal_strength} />
-                  </div>
-                  <p className="text-xs text-muted-foreground">{signal.description}</p>
-                </div>
-              ))}
-
-              {(!signals?.clusters?.length && !signals?.cross_source_signals?.length) && (
-                <p className="text-sm text-muted-foreground py-4 text-center">
-                  No active signals. Data ingestion in progress...
-                </p>
-              )}
+                </CardContent>
+              </Card>
             </div>
-          </CardContent>
-        </Card>
+          )}
+        </div>
       </div>
-
-      {/* Most Active Politicians */}
-      {stats?.most_active_politicians && stats.most_active_politicians.length > 0 && (
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              <TrendingUp className="w-4 h-4" />
-              Most Active Politicians
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex flex-wrap gap-2">
-              {stats.most_active_politicians.slice(0, 20).map((p) => (
-                <div
-                  key={p.politician}
-                  className="px-3 py-1.5 rounded-lg bg-muted/50 flex items-center gap-2"
-                >
-                  <span className="font-medium text-sm">{p.politician}</span>
-                  <span className="text-xs text-muted-foreground">{p.total_trades} trades</span>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
     </div>
   );
 }

@@ -30,77 +30,81 @@ export default function TrumpPage() {
     load();
   }, []);
 
+  const categories = overview?.categories || {};
+  const uniqueCompanies = new Set(insiders.flatMap((i: any) => Array.isArray(i.tickers) ? i.tickers : []).filter(Boolean)).size;
+
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold">Trump & Inner Circle</h1>
         <p className="text-muted-foreground text-sm mt-1">
-          Track financial interests, conflicts, and trades of Trump family, appointees, associates, and major donors
+          Financial interests, conflicts, and connections of Trump family, appointees, and associates
         </p>
       </div>
 
       {loading ? (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {[...Array(3)].map((_, i) => <Card key={i}><CardContent className="p-6"><Skeleton className="h-16 w-full" /></CardContent></Card>)}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {[...Array(4)].map((_, i) => <Card key={i}><CardContent className="p-5"><Skeleton className="h-14 w-full" /></CardContent></Card>)}
         </div>
       ) : (
         <>
           {/* Stats */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <Card className="border-purple-500/20">
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm text-muted-foreground">Tracked Insiders</div>
-                  <Users className="w-4 h-4 text-purple-400" />
+              <CardContent className="p-5">
+                <div className="flex items-center justify-between mb-2">
+                  <Users className="w-5 h-5 text-purple-400" />
                 </div>
-                <div className="text-2xl font-bold font-mono-data mt-1 text-purple-400">{overview?.total_insiders || insiders.length || 0}</div>
+                <div className="text-2xl font-bold font-mono-data text-purple-400">
+                  {overview?.total_insiders || insiders.length || 0}
+                </div>
+                <div className="text-xs text-muted-foreground mt-1">Tracked Insiders</div>
               </CardContent>
             </Card>
             <Card className="border-purple-500/20">
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm text-muted-foreground">Connected Companies</div>
-                  <Building2 className="w-4 h-4 text-purple-400" />
+              <CardContent className="p-5">
+                <div className="flex items-center justify-between mb-2">
+                  <Building2 className="w-5 h-5 text-purple-400" />
                 </div>
-                <div className="text-2xl font-bold font-mono-data mt-1">{overview?.total_companies || new Set(insiders.flatMap((i: any) => Array.isArray(i.tickers) ? i.tickers : []).filter(Boolean)).size || 0}</div>
+                <div className="text-2xl font-bold font-mono-data">
+                  {overview?.total_companies || uniqueCompanies || 0}
+                </div>
+                <div className="text-xs text-muted-foreground mt-1">Connected Companies</div>
               </CardContent>
             </Card>
             <Card className="border-purple-500/20">
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm text-muted-foreground">Major Donors</div>
-                  <DollarSign className="w-4 h-4 text-purple-400" />
+              <CardContent className="p-5">
+                <div className="flex items-center justify-between mb-2">
+                  <DollarSign className="w-5 h-5 text-purple-400" />
                 </div>
-                <div className="text-2xl font-bold font-mono-data mt-1">{overview?.total_donors || (overview?.categories?.donors ?? 0)}</div>
+                <div className="text-2xl font-bold font-mono-data">
+                  {overview?.total_donors || (categories?.donors ?? 0)}
+                </div>
+                <div className="text-xs text-muted-foreground mt-1">Major Donors</div>
               </CardContent>
             </Card>
             <Card className="border-purple-500/20">
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm text-muted-foreground">Categories</div>
-                  <Target className="w-4 h-4 text-purple-400" />
+              <CardContent className="p-5">
+                <div className="flex items-center justify-between mb-2">
+                  <Target className="w-5 h-5 text-purple-400" />
                 </div>
-                <div className="text-2xl font-bold font-mono-data mt-1">{Object.keys(overview?.categories || {}).length}</div>
+                <div className="text-2xl font-bold font-mono-data">
+                  {Object.keys(categories).length}
+                </div>
+                <div className="text-xs text-muted-foreground mt-1">Categories</div>
               </CardContent>
             </Card>
           </div>
 
           {/* Category breakdown */}
-          {overview?.categories && Object.keys(overview.categories).length > 0 && (
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base">Categories</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="flex flex-wrap gap-2">
-                  {Object.entries(overview.categories).map(([cat, count]) => (
-                    <Badge key={cat} variant="outline" className="bg-purple-500/10 text-purple-400 border-purple-500/20">
-                      {cat}: {count}
-                    </Badge>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
+          {Object.keys(categories).length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {Object.entries(categories).map(([cat, count]) => (
+                <Badge key={cat} variant="outline" className="bg-purple-500/10 text-purple-400 border-purple-500/20">
+                  {cat}: {count}
+                </Badge>
+              ))}
+            </div>
           )}
 
           {/* Insiders List */}
@@ -113,13 +117,13 @@ export default function TrumpPage() {
             </CardHeader>
             <CardContent>
               {insiders.length === 0 ? (
-                <p className="text-sm text-muted-foreground py-6 text-center">
-                  Trump insider data loading...
+                <p className="text-sm text-muted-foreground py-8 text-center">
+                  Loading insider data...
                 </p>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {insiders.slice(0, 20).map((insider: any, i: number) => (
-                    <div key={i} className="p-3 rounded-lg bg-muted/30 border border-border/50">
+                  {insiders.map((insider: any, i: number) => (
+                    <div key={i} className="p-4 rounded-lg bg-muted/30 border border-border/50">
                       <div className="flex items-center justify-between mb-1">
                         <span className="font-medium text-sm">{insider.name}</span>
                         <Badge variant="outline" className="text-[10px] bg-purple-500/10 text-purple-400 border-purple-500/20">
@@ -153,9 +157,30 @@ export default function TrumpPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <pre className="text-xs text-muted-foreground overflow-x-auto">
-                  {JSON.stringify(conflictMap, null, 2)}
-                </pre>
+                {Array.isArray(conflictMap) ? (
+                  <div className="space-y-2">
+                    {conflictMap.map((conflict: any, i: number) => (
+                      <div key={i} className="p-3 rounded-lg bg-yellow-500/5 border border-yellow-500/10">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="font-medium text-sm">{conflict.insider || conflict.name || `Conflict ${i + 1}`}</span>
+                          {conflict.ticker && (
+                            <span className="font-mono-data text-xs font-medium">{conflict.ticker}</span>
+                          )}
+                        </div>
+                        {conflict.conflict_type && (
+                          <div className="text-xs text-muted-foreground">{conflict.conflict_type}</div>
+                        )}
+                        {conflict.description && (
+                          <div className="text-xs text-muted-foreground mt-1">{conflict.description}</div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <pre className="text-xs text-muted-foreground overflow-x-auto">
+                    {JSON.stringify(conflictMap, null, 2)}
+                  </pre>
+                )}
               </CardContent>
             </Card>
           )}

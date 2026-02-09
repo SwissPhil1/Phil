@@ -48,7 +48,7 @@ export default function LeaderboardPage() {
       <div>
         <h1 className="text-2xl font-bold">Leaderboard</h1>
         <p className="text-muted-foreground text-sm mt-1">
-          Who are the best (and worst) investor-politicians? Year-over-year rankings.
+          Most active politician-traders ranked by year — who trades the most?
         </p>
       </div>
 
@@ -58,8 +58,8 @@ export default function LeaderboardPage() {
         </div>
       ) : !data ? (
         <Card>
-          <CardContent className="p-6 text-center text-muted-foreground">
-            No leaderboard data available yet. Data is being ingested...
+          <CardContent className="py-12 text-center text-muted-foreground text-sm">
+            No leaderboard data available yet.
           </CardContent>
         </Card>
       ) : (
@@ -70,22 +70,17 @@ export default function LeaderboardPage() {
               <CardHeader className="pb-2">
                 <CardTitle className="text-base flex items-center gap-2">
                   <Medal className="w-4 h-4 text-yellow-400" />
-                  Consistent Winners (Multi-Year)
+                  Most Consistent Traders
                 </CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                   {data.consistent_winners.slice(0, 6).map((winner, i) => (
-                    <div key={i} className="p-3 rounded-lg bg-muted/30 flex items-center justify-between">
-                      <div>
-                        <div className="font-medium text-sm">{winner.politician}</div>
-                        <div className="text-xs text-muted-foreground">{winner.years_active} years active</div>
-                      </div>
-                      <div className="text-right">
-                        <div className={`font-mono-data font-bold ${(winner.avg_return_all_years ?? 0) >= 0 ? "text-green-400" : "text-red-400"}`}>
-                          {(winner.avg_return_all_years ?? 0) >= 0 ? "+" : ""}{(winner.avg_return_all_years ?? 0).toFixed(1)}%
-                        </div>
-                        <div className="text-xs text-muted-foreground">avg rank #{(winner.avg_rank ?? 0).toFixed(0)}</div>
+                    <div key={i} className="p-4 rounded-lg bg-muted/30 border border-border/50">
+                      <div className="font-medium text-sm">{winner.politician}</div>
+                      <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
+                        <span>{winner.years_active} years active</span>
+                        <span>Avg rank #{(winner.avg_rank ?? 0).toFixed(0)}</span>
                       </div>
                     </div>
                   ))}
@@ -102,58 +97,50 @@ export default function LeaderboardPage() {
               <CardHeader className="pb-2">
                 <CardTitle className="text-base flex items-center gap-2">
                   <Trophy className="w-4 h-4" />
-                  {year} Rankings
+                  {year} — Most Active Traders
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-border text-xs text-muted-foreground">
-                        <th className="text-left py-2 pr-3">#</th>
-                        <th className="text-left py-2 px-3">Politician</th>
-                        <th className="text-left py-2 px-3">Party</th>
-                        <th className="text-right py-2 px-3">Trades</th>
-                        <th className="text-right py-2 px-3">Avg Return</th>
-                        <th className="text-right py-2 pl-3">Win Rate</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {yearData.top_10.map((entry) => (
-                        <tr key={entry.rank} className="border-b border-border/30 hover:bg-muted/30">
-                          <td className="py-2 pr-3 font-mono-data">
-                            {entry.rank <= 3 ? (
-                              <span className={entry.rank === 1 ? "text-yellow-400" : entry.rank === 2 ? "text-gray-400" : "text-orange-400"}>
-                                {entry.rank}
-                              </span>
-                            ) : entry.rank}
-                          </td>
-                          <td className="py-2 px-3 font-medium">{entry.politician}</td>
-                          <td className="py-2 px-3">
-                            {entry.party ? (
-                              <Badge variant="outline" className={
-                                entry.party === "R" ? "bg-red-500/10 text-red-400 border-red-500/20" :
-                                entry.party === "D" ? "bg-blue-500/10 text-blue-400 border-blue-500/20" : ""
-                              }>{entry.party}</Badge>
-                            ) : (
-                              <span className="text-muted-foreground text-xs">-</span>
-                            )}
-                          </td>
-                          <td className="py-2 px-3 text-right font-mono-data">{entry.total_trades}</td>
-                          <td className="py-2 px-3 text-right">
-                            {entry.avg_return_pct != null ? (
-                              <span className={`font-mono-data ${entry.avg_return_pct >= 0 ? "text-green-400" : "text-red-400"}`}>
-                                {entry.avg_return_pct >= 0 ? "+" : ""}{entry.avg_return_pct.toFixed(1)}%
-                              </span>
-                            ) : "-"}
-                          </td>
-                          <td className="py-2 pl-3 text-right font-mono-data">
-                            {entry.win_rate_pct != null ? `${entry.win_rate_pct.toFixed(0)}%` : "-"}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                <div className="space-y-1">
+                  {yearData.top_10.map((entry) => (
+                    <div key={entry.rank} className="flex items-center gap-3 py-2.5 border-b border-border/30 last:border-0">
+                      <div className={`w-7 text-center font-mono-data text-sm font-bold ${
+                        entry.rank === 1 ? "text-yellow-400" :
+                        entry.rank === 2 ? "text-gray-400" :
+                        entry.rank === 3 ? "text-orange-400" : "text-muted-foreground"
+                      }`}>
+                        {entry.rank}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-sm truncate">{entry.politician}</span>
+                          {entry.party && (
+                            <Badge variant="outline" className={`text-[10px] px-1.5 ${
+                              entry.party === "R" ? "bg-red-500/10 text-red-400 border-red-500/20" :
+                              entry.party === "D" ? "bg-blue-500/10 text-blue-400 border-blue-500/20" : ""
+                            }`}>{entry.party}</Badge>
+                          )}
+                          {entry.state && (
+                            <span className="text-[10px] text-muted-foreground">{entry.state}</span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-4 shrink-0">
+                        <div className="text-right">
+                          <div className="font-mono-data text-sm font-medium">{entry.total_trades}</div>
+                          <div className="text-[10px] text-muted-foreground">trades</div>
+                        </div>
+                        {entry.avg_return_pct != null && (
+                          <div className="text-right w-16">
+                            <div className={`font-mono-data text-sm font-medium ${entry.avg_return_pct >= 0 ? "text-green-400" : "text-red-400"}`}>
+                              {entry.avg_return_pct >= 0 ? "+" : ""}{entry.avg_return_pct.toFixed(1)}%
+                            </div>
+                            <div className="text-[10px] text-muted-foreground">avg return</div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </CardContent>
             </Card>

@@ -53,7 +53,7 @@ export default function TrumpPage() {
                   <div className="text-sm text-muted-foreground">Tracked Insiders</div>
                   <Users className="w-4 h-4 text-purple-400" />
                 </div>
-                <div className="text-2xl font-bold font-mono-data mt-1 text-purple-400">{overview?.total_insiders || 0}</div>
+                <div className="text-2xl font-bold font-mono-data mt-1 text-purple-400">{overview?.total_insiders || insiders.length || 0}</div>
               </CardContent>
             </Card>
             <Card className="border-purple-500/20">
@@ -62,7 +62,7 @@ export default function TrumpPage() {
                   <div className="text-sm text-muted-foreground">Connected Companies</div>
                   <Building2 className="w-4 h-4 text-purple-400" />
                 </div>
-                <div className="text-2xl font-bold font-mono-data mt-1">{overview?.total_companies || 0}</div>
+                <div className="text-2xl font-bold font-mono-data mt-1">{overview?.total_companies || new Set(insiders.flatMap((i: any) => Array.isArray(i.tickers) ? i.tickers : []).filter(Boolean)).size || 0}</div>
               </CardContent>
             </Card>
             <Card className="border-purple-500/20">
@@ -71,7 +71,7 @@ export default function TrumpPage() {
                   <div className="text-sm text-muted-foreground">Major Donors</div>
                   <DollarSign className="w-4 h-4 text-purple-400" />
                 </div>
-                <div className="text-2xl font-bold font-mono-data mt-1">{overview?.total_donors || 0}</div>
+                <div className="text-2xl font-bold font-mono-data mt-1">{overview?.total_donors || (overview?.categories?.donors ?? 0)}</div>
               </CardContent>
             </Card>
             <Card className="border-purple-500/20">
@@ -127,7 +127,7 @@ export default function TrumpPage() {
                         </Badge>
                       </div>
                       <div className="text-xs text-muted-foreground">{insider.role}</div>
-                      {insider.tickers && (
+                      {insider.tickers && (Array.isArray(insider.tickers) ? insider.tickers.length > 0 : insider.tickers) && (
                         <div className="flex flex-wrap gap-1 mt-2">
                           {(Array.isArray(insider.tickers) ? insider.tickers : String(insider.tickers).split(",")).map((t: string) => (
                             <span key={t} className="text-[10px] font-mono-data bg-secondary px-1.5 py-0.5 rounded">

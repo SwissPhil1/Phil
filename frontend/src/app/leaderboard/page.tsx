@@ -130,10 +130,14 @@ export default function LeaderboardPage() {
                           </td>
                           <td className="py-2 px-3 font-medium">{entry.politician}</td>
                           <td className="py-2 px-3">
-                            <Badge variant="outline" className={
-                              entry.party === "R" ? "bg-red-500/10 text-red-400 border-red-500/20" :
-                              entry.party === "D" ? "bg-blue-500/10 text-blue-400 border-blue-500/20" : ""
-                            }>{entry.party}</Badge>
+                            {entry.party ? (
+                              <Badge variant="outline" className={
+                                entry.party === "R" ? "bg-red-500/10 text-red-400 border-red-500/20" :
+                                entry.party === "D" ? "bg-blue-500/10 text-blue-400 border-blue-500/20" : ""
+                              }>{entry.party}</Badge>
+                            ) : (
+                              <span className="text-muted-foreground text-xs">-</span>
+                            )}
                           </td>
                           <td className="py-2 px-3 text-right font-mono-data">{entry.total_trades}</td>
                           <td className="py-2 px-3 text-right">

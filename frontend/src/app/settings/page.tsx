@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Server, Database, Clock } from "lucide-react";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://phil-production.up.railway.app";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://phil-production.up.railway.app (proxied via Vercel rewrites)";
 
 export default function SettingsPage() {
   return (

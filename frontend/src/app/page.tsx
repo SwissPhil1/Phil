@@ -142,7 +142,7 @@ export default function Dashboard() {
               <span className="text-sm font-medium">API Error</span>
             </div>
             <p className="text-xs text-destructive/80 break-all">{error}</p>
-            <p className="text-xs text-muted-foreground">API: {process.env.NEXT_PUBLIC_API_URL || "https://phil-production.up.railway.app"}</p>
+            <p className="text-xs text-muted-foreground">API: {process.env.NEXT_PUBLIC_API_URL || "(proxied via /api)"}</p>
           </CardContent>
         </Card>
       )}

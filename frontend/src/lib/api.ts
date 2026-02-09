@@ -1,4 +1,6 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://phil-production.up.railway.app";
+// In production on Vercel, use relative paths (proxied via next.config.ts rewrites).
+// In development, call the Railway backend directly.
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 
 async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {

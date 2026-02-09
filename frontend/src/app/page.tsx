@@ -290,17 +290,17 @@ export default function Dashboard() {
                     <SignalBadge strength={cluster.signal_strength} />
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    {cluster.politician_count} politicians {cluster.action.toLowerCase()} in {cluster.window_days}d
+                    {cluster.politician_count} politicians {(cluster.action || "").toLowerCase()} in {cluster.window_days}d
                   </p>
                   <div className="flex flex-wrap gap-1">
-                    {cluster.politicians.slice(0, 3).map((p) => (
+                    {(cluster.politicians || []).slice(0, 3).map((p) => (
                       <span key={p} className="text-[10px] bg-secondary px-1.5 py-0.5 rounded">
                         {p.split(" ").pop()}
                       </span>
                     ))}
-                    {cluster.politicians.length > 3 && (
+                    {(cluster.politicians || []).length > 3 && (
                       <span className="text-[10px] text-muted-foreground">
-                        +{cluster.politicians.length - 3}
+                        +{(cluster.politicians || []).length - 3}
                       </span>
                     )}
                   </div>

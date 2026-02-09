@@ -82,10 +82,10 @@ export default function LeaderboardPage() {
                         <div className="text-xs text-muted-foreground">{winner.years_active} years active</div>
                       </div>
                       <div className="text-right">
-                        <div className={`font-mono-data font-bold ${winner.avg_return_all_years >= 0 ? "text-green-400" : "text-red-400"}`}>
-                          {winner.avg_return_all_years >= 0 ? "+" : ""}{winner.avg_return_all_years.toFixed(1)}%
+                        <div className={`font-mono-data font-bold ${(winner.avg_return_all_years ?? 0) >= 0 ? "text-green-400" : "text-red-400"}`}>
+                          {(winner.avg_return_all_years ?? 0) >= 0 ? "+" : ""}{(winner.avg_return_all_years ?? 0).toFixed(1)}%
                         </div>
-                        <div className="text-xs text-muted-foreground">avg rank #{winner.avg_rank.toFixed(0)}</div>
+                        <div className="text-xs text-muted-foreground">avg rank #{(winner.avg_rank ?? 0).toFixed(0)}</div>
                       </div>
                     </div>
                   ))}
@@ -137,14 +137,14 @@ export default function LeaderboardPage() {
                           </td>
                           <td className="py-2 px-3 text-right font-mono-data">{entry.total_trades}</td>
                           <td className="py-2 px-3 text-right">
-                            {entry.avg_return_pct !== null ? (
+                            {entry.avg_return_pct != null ? (
                               <span className={`font-mono-data ${entry.avg_return_pct >= 0 ? "text-green-400" : "text-red-400"}`}>
                                 {entry.avg_return_pct >= 0 ? "+" : ""}{entry.avg_return_pct.toFixed(1)}%
                               </span>
                             ) : "-"}
                           </td>
                           <td className="py-2 pl-3 text-right font-mono-data">
-                            {entry.win_rate_pct !== null ? `${entry.win_rate_pct.toFixed(0)}%` : "-"}
+                            {entry.win_rate_pct != null ? `${entry.win_rate_pct.toFixed(0)}%` : "-"}
                           </td>
                         </tr>
                       ))}

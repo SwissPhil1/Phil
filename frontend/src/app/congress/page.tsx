@@ -97,7 +97,7 @@ export default function CongressPage() {
                         {trade.amount_low && trade.amount_high ? formatAmount(trade.amount_low, trade.amount_high) : "-"}
                       </td>
                       <td className="py-2 pl-3 text-right">
-                        {trade.return_since_disclosure !== null ? (
+                        {trade.return_since_disclosure != null ? (
                           <span className={`font-mono-data ${trade.return_since_disclosure >= 0 ? "text-green-400" : "text-red-400"}`}>
                             {trade.return_since_disclosure >= 0 ? "+" : ""}{trade.return_since_disclosure.toFixed(1)}%
                           </span>

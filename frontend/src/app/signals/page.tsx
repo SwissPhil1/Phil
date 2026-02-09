@@ -225,7 +225,7 @@ export default function SignalsPage() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-3">
-                    {Object.entries(backtest.score_bucket_analysis).map(([bucket, stats]) => (
+                    {Object.entries(backtest.score_bucket_analysis || {}).map(([bucket, stats]) => (
                       <div key={bucket} className="flex items-center justify-between py-2 border-b border-border/30 last:border-0">
                         <div className="flex items-center gap-3">
                           <span className="text-sm font-medium w-36">{bucket}</span>
@@ -235,19 +235,19 @@ export default function SignalsPage() {
                           <div className="text-right">
                             <div className="text-xs text-muted-foreground">Avg Return</div>
                             <span className={`font-mono-data text-sm ${(stats.avg || 0) >= 0 ? "text-green-400" : "text-red-400"}`}>
-                              {stats.avg !== null ? `${stats.avg > 0 ? "+" : ""}${stats.avg.toFixed(1)}%` : "-"}
+                              {stats.avg != null ? `${stats.avg > 0 ? "+" : ""}${stats.avg.toFixed(1)}%` : "-"}
                             </span>
                           </div>
                           <div className="text-right">
                             <div className="text-xs text-muted-foreground">Win Rate</div>
                             <span className="font-mono-data text-sm">
-                              {stats.win_rate !== null ? `${stats.win_rate.toFixed(0)}%` : "-"}
+                              {stats.win_rate != null ? `${stats.win_rate.toFixed(0)}%` : "-"}
                             </span>
                           </div>
                           <div className="text-right">
                             <div className="text-xs text-muted-foreground">Sharpe</div>
                             <span className="font-mono-data text-sm">
-                              {stats.sharpe !== null ? stats.sharpe.toFixed(2) : "-"}
+                              {stats.sharpe != null ? stats.sharpe.toFixed(2) : "-"}
                             </span>
                           </div>
                         </div>
@@ -276,13 +276,13 @@ export default function SignalsPage() {
                           <div className="flex items-center gap-3">
                             <div className="text-right">
                               <div className="text-xs text-muted-foreground">Edge</div>
-                              <span className={`font-mono-data text-sm font-medium ${data.edge_pct >= 0 ? "text-green-400" : "text-red-400"}`}>
-                                {data.edge_pct >= 0 ? "+" : ""}{data.edge_pct.toFixed(1)}%
+                              <span className={`font-mono-data text-sm font-medium ${(data.edge_pct ?? 0) >= 0 ? "text-green-400" : "text-red-400"}`}>
+                                {(data.edge_pct ?? 0) >= 0 ? "+" : ""}{(data.edge_pct ?? 0).toFixed(1)}%
                               </span>
                             </div>
                             <div className="text-right">
                               <div className="text-xs text-muted-foreground">Win Rate</div>
-                              <span className="font-mono-data text-sm">{data.win_rate_with.toFixed(0)}%</span>
+                              <span className="font-mono-data text-sm">{(data.win_rate_with ?? 0).toFixed(0)}%</span>
                             </div>
                           </div>
                         </div>

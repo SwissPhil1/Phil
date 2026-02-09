@@ -184,8 +184,8 @@ export default function OptimizerPage() {
             </CardHeader>
             <CardContent>
               <div className="flex items-end gap-4 h-32">
-                {result.generation_history.map((gen) => {
-                  const maxFitness = Math.max(...result.generation_history.map(g => g.best_fitness));
+                {(result.generation_history || []).map((gen) => {
+                  const maxFitness = Math.max(...(result.generation_history || []).map(g => g.best_fitness));
                   const height = maxFitness > 0 ? (gen.best_fitness / maxFitness) * 100 : 0;
                   return (
                     <div key={gen.generation} className="flex-1 flex flex-col items-center gap-1">

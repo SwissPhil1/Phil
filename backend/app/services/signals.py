@@ -3,74 +3,136 @@ Smart signals engine - the core intelligence layer of SmartFlow.
 
 Detects unusual patterns, correlates committee assignments with trades,
 scores trades by conviction, and flags high-signal opportunities.
+
+Scoring factors (v2 - enhanced):
+1. Position Size (0-25 pts) - larger trades = more conviction
+2. Committee Overlap (0-30 pts) - strongest insider signal
+3. Disclosure Speed (0-15 pts) - fast/slow disclosure patterns
+4. Political Cluster (0-20 pts) - multiple politicians buying same stock
+5. Cross-Source Confirmation (0-25 pts) - congress + insiders + funds
+6. Historical Accuracy (0-15 pts) - politician's track record
+7. Timing Anomaly (0-10 pts) - trades before major events
+8. Contrarian Signal (0-10 pts) - buying when others sell, or vice versa
 """
 
 import logging
+import math
 from datetime import datetime, timedelta
 
 from sqlalchemy import func, select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.database import Trade, Politician, InsiderTrade, HedgeFundHolding, async_session
+from app.models.database import (
+    Trade, Politician, InsiderTrade, HedgeFundHolding,
+    PoliticianCommittee, async_session,
+)
 
 logger = logging.getLogger(__name__)
 
-# Committee -> Sector mapping
+# Committee -> Sector mapping (expanded)
 COMMITTEE_SECTORS = {
     "Armed Services": ["defense", "aerospace", "military"],
     "Defense": ["defense", "aerospace", "military"],
     "Financial Services": ["finance", "banking", "insurance", "fintech"],
     "Banking": ["finance", "banking", "insurance", "fintech"],
-    "Energy and Commerce": ["energy", "oil", "gas", "utilities", "healthcare", "pharma"],
+    "Banking, Housing, and Urban Affairs": ["finance", "banking", "insurance", "real_estate"],
+    "Energy and Commerce": ["energy", "oil", "gas", "utilities", "healthcare", "pharma", "tech"],
     "Energy and Natural Resources": ["energy", "oil", "gas", "mining", "utilities"],
     "Commerce, Science, and Transportation": ["tech", "telecom", "transport", "space"],
     "Science, Space, and Technology": ["tech", "space", "defense"],
     "Intelligence": ["defense", "cybersecurity", "surveillance", "tech"],
     "Health, Education, Labor, and Pensions": ["healthcare", "pharma", "biotech", "education"],
     "Agriculture": ["agriculture", "food", "commodities"],
+    "Agriculture, Nutrition, and Forestry": ["agriculture", "food", "commodities"],
     "Appropriations": ["all"],  # Oversees all spending
     "Ways and Means": ["finance", "tax", "trade"],
+    "Finance": ["finance", "tax", "trade", "healthcare"],
     "Judiciary": ["tech", "antitrust", "prison"],
     "Foreign Affairs": ["defense", "oil", "commodities", "emerging_markets"],
     "Foreign Relations": ["defense", "oil", "commodities", "emerging_markets"],
     "Transportation and Infrastructure": ["transport", "construction", "infrastructure"],
+    "Environment and Public Works": ["energy", "construction", "infrastructure", "utilities"],
     "Veterans Affairs": ["healthcare", "defense"],
     "Homeland Security": ["defense", "cybersecurity", "border"],
+    "Homeland Security and Governmental Affairs": ["defense", "cybersecurity", "border", "tech"],
     "Small Business": ["smallcap", "fintech"],
+    "Small Business and Entrepreneurship": ["smallcap", "fintech"],
     "Natural Resources": ["mining", "oil", "gas", "energy"],
+    "Budget": ["all"],
+    "Rules": ["all"],
     "Oversight and Accountability": ["all"],
+    "Oversight and Government Reform": ["all"],
 }
 
-# Ticker -> Sector mapping (major stocks)
+# Ticker -> Sector mapping (expanded with more tickers)
 TICKER_SECTORS = {
-    # Defense
+    # Defense & Aerospace
     "LMT": "defense", "RTX": "defense", "NOC": "defense", "GD": "defense",
     "BA": "defense", "LHX": "defense", "HII": "defense", "LDOS": "defense",
-    "PLTR": "defense", "PANW": "cybersecurity", "CRWD": "cybersecurity",
-    "NET": "cybersecurity", "FTNT": "cybersecurity", "RKLB": "space",
-    # Energy / Oil
+    "PLTR": "defense", "BWXT": "defense", "KTOS": "defense", "MRCY": "defense",
+    "PANW": "cybersecurity", "CRWD": "cybersecurity",
+    "NET": "cybersecurity", "FTNT": "cybersecurity", "ZS": "cybersecurity",
+    "RKLB": "space", "ASTR": "space", "ASTS": "space",
+    # Energy / Oil & Gas
     "XOM": "oil", "CVX": "oil", "COP": "oil", "OXY": "oil",
     "SLB": "oil", "HAL": "oil", "EOG": "oil", "PXD": "oil",
+    "DVN": "oil", "MPC": "oil", "PSX": "oil", "VLO": "oil",
     "NEE": "energy", "DUK": "energy", "SO": "energy", "ENPH": "energy",
-    "FSLR": "energy", "TSLA": "energy",
-    # Finance
+    "FSLR": "energy", "TSLA": "energy", "AES": "energy", "EXC": "energy",
+    # Finance & Banking
     "JPM": "finance", "BAC": "finance", "GS": "finance", "MS": "finance",
     "C": "finance", "WFC": "finance", "BLK": "finance", "SCHW": "finance",
+    "USB": "finance", "PNC": "finance", "TFC": "finance", "COF": "finance",
+    "AXP": "finance", "ICE": "finance", "CME": "finance",
+    # Fintech
     "V": "fintech", "MA": "fintech", "PYPL": "fintech", "SQ": "fintech",
-    "COIN": "fintech", "SOFI": "fintech",
+    "COIN": "fintech", "SOFI": "fintech", "AFRM": "fintech", "HOOD": "fintech",
     # Tech
     "AAPL": "tech", "MSFT": "tech", "GOOGL": "tech", "GOOG": "tech",
     "META": "tech", "AMZN": "tech", "NVDA": "tech", "AMD": "tech",
     "AVGO": "tech", "INTC": "tech", "CRM": "tech", "ORCL": "tech",
-    "SNOW": "tech", "SHOP": "tech", "UBER": "tech",
-    # Healthcare / Pharma
+    "SNOW": "tech", "SHOP": "tech", "UBER": "tech", "ABNB": "tech",
+    "NOW": "tech", "ADBE": "tech", "INTU": "tech", "TEAM": "tech",
+    "MU": "tech", "QCOM": "tech", "TXN": "tech", "ARM": "tech",
+    # Telecom
+    "T": "telecom", "VZ": "telecom", "TMUS": "telecom",
+    # Healthcare / Pharma / Biotech
     "JNJ": "pharma", "PFE": "pharma", "MRK": "pharma", "ABBV": "pharma",
-    "LLY": "pharma", "UNH": "healthcare", "CVS": "healthcare",
+    "LLY": "pharma", "BMY": "pharma", "AMGN": "pharma", "GILD": "pharma",
+    "UNH": "healthcare", "CVS": "healthcare", "CI": "healthcare",
+    "HUM": "healthcare", "ELV": "healthcare", "HCA": "healthcare",
     "MRNA": "biotech", "BNTX": "biotech", "REGN": "biotech",
-    # Other
+    "VRTX": "biotech", "BIIB": "biotech", "ILMN": "biotech",
+    # Retail & Consumer
     "WMT": "retail", "COST": "retail", "TGT": "retail",
-    "DIS": "media", "NFLX": "media", "RBLX": "media",
+    "HD": "retail", "LOW": "retail", "AMZN": "retail",
+    # Media & Entertainment
+    "DIS": "media", "NFLX": "media", "RBLX": "media", "PARA": "media",
+    "WBD": "media", "CMCSA": "media",
+    # Real Estate
+    "AMT": "real_estate", "PLD": "real_estate", "SPG": "real_estate",
+    # Construction & Infrastructure
+    "CAT": "construction", "DE": "construction", "VMC": "construction",
+    "MLM": "construction", "URI": "construction",
+    # Agriculture & Food
+    "ADM": "agriculture", "BG": "agriculture", "CTVA": "agriculture",
+    "MOS": "agriculture", "NTR": "agriculture",
+    # Mining
+    "FCX": "mining", "NEM": "mining", "GOLD": "mining",
+    # Prison / Border
+    "GEO": "prison", "CXW": "prison",
+    # Emerging Markets
+    "BABA": "emerging_markets", "PDD": "emerging_markets", "JD": "emerging_markets",
+    # Trump-connected (special tracking)
+    "DJT": "trump_media", "RUM": "trump_media", "PHUN": "trump_media",
+    "NMRK": "trump_real_estate", "BGC": "trump_real_estate",
 }
+
+# Market cap categories for weighting
+MEGA_CAP = {"AAPL", "MSFT", "GOOGL", "GOOG", "AMZN", "NVDA", "META", "TSLA", "BRK-B", "UNH", "LLY", "V", "JPM"}
+LARGE_CAP = {"JNJ", "XOM", "PG", "MA", "HD", "CVX", "MRK", "ABBV", "PFE", "COST", "AVGO", "PEP", "KO", "WMT",
+             "BAC", "CRM", "ORCL", "AMD", "ADBE", "NFLX", "DIS", "INTC", "QCOM", "TXN", "GS", "MS", "BA",
+             "LMT", "RTX", "NOC", "GD", "CAT", "DE"}
 
 
 # --- Committee-Trade Correlation ---
@@ -141,6 +203,11 @@ async def detect_trade_clusters(
     clusters = []
     for row in rows:
         politicians = row.politicians.split(",") if row.politicians else []
+
+        # Boost signal for small/mid cap stocks (more unusual)
+        is_mega = row.ticker in MEGA_CAP
+        base_strength = row.politician_count
+
         clusters.append({
             "ticker": row.ticker,
             "action": "BUYING" if row.tx_type == "purchase" else "SELLING",
@@ -149,7 +216,12 @@ async def detect_trade_clusters(
             "first_trade": row.first_trade.isoformat() if row.first_trade else None,
             "last_trade": row.last_trade.isoformat() if row.last_trade else None,
             "window_days": (row.last_trade - row.first_trade).days if row.first_trade and row.last_trade else 0,
-            "signal_strength": "VERY_HIGH" if row.politician_count >= 5 else "HIGH" if row.politician_count >= 3 else "MEDIUM",
+            "is_mega_cap": is_mega,
+            "signal_strength": (
+                "VERY_HIGH" if (base_strength >= 5 and not is_mega) or base_strength >= 8
+                else "HIGH" if base_strength >= 3
+                else "MEDIUM"
+            ),
         })
 
     return clusters
@@ -225,7 +297,34 @@ async def detect_cross_source_signals(
     return signals
 
 
-# --- Conviction Scoring ---
+# --- Enhanced Conviction Scoring (v2) ---
+
+
+async def get_politician_track_record(
+    session: AsyncSession, politician: str
+) -> dict:
+    """Get a politician's historical trading performance for accuracy scoring."""
+    result = await session.execute(
+        select(
+            func.count().label("total"),
+            func.avg(Trade.return_since_disclosure).label("avg_return"),
+            func.sum(
+                func.case((Trade.return_since_disclosure > 0, 1), else_=0)
+            ).label("wins"),
+        )
+        .where(Trade.politician.ilike(f"%{politician}%"))
+        .where(Trade.tx_type == "purchase")
+        .where(Trade.return_since_disclosure.isnot(None))
+    )
+    row = result.one_or_none()
+    if not row or not row.total or row.total == 0:
+        return {"total": 0, "avg_return": None, "win_rate": None}
+
+    return {
+        "total": row.total,
+        "avg_return": float(row.avg_return) if row.avg_return else 0,
+        "win_rate": float(row.wins / row.total * 100) if row.total > 0 else 0,
+    }
 
 
 def score_trade_conviction(
@@ -234,67 +333,196 @@ def score_trade_conviction(
     cluster_count: int = 0,
     insider_also_buying: bool = False,
     fund_also_holds: bool = False,
+    politician_track_record: dict | None = None,
+    recent_sells_count: int = 0,
 ) -> dict:
     """
     Score a single trade on conviction (0-100).
-    Higher score = stronger signal.
+    Higher score = stronger signal that this trade has insider information edge.
+
+    v2 scoring with 8 factors:
+    1. Position Size (0-25 pts)
+    2. Committee Overlap (0-30 pts)
+    3. Disclosure Speed (0-15 pts) - includes late-disclosure penalty detection
+    4. Political Cluster (0-20 pts) - weighted by market cap
+    5. Cross-Source Confirmation (0-25 pts)
+    6. Historical Accuracy (0-15 pts) - politician's track record
+    7. Contrarian Signal (0-10 pts) - buying when market/others selling
+    8. Size Anomaly (0-10 pts) - trade size vs politician's usual
     """
     score = 0
     factors = []
 
-    # Base score by amount
+    ticker = trade.get("ticker", "")
+
+    # ─── Factor 1: Position Size (0-25 pts) ───
     amount = trade.get("amount_low", 0) or 0
-    if amount >= 1000001:
+    if amount >= 5000001:
         score += 25
-        factors.append("Large position ($1M+)")
+        factors.append({"factor": "position_size", "points": 25, "detail": "Very large position ($5M+)"})
+    elif amount >= 1000001:
+        score += 22
+        factors.append({"factor": "position_size", "points": 22, "detail": "Large position ($1M+)"})
+    elif amount >= 500001:
+        score += 18
+        factors.append({"factor": "position_size", "points": 18, "detail": "Significant position ($500K+)"})
     elif amount >= 250001:
         score += 15
-        factors.append("Significant position ($250K+)")
-    elif amount >= 50001:
+        factors.append({"factor": "position_size", "points": 15, "detail": "Medium-large position ($250K+)"})
+    elif amount >= 100001:
         score += 10
-        factors.append("Medium position ($50K+)")
+        factors.append({"factor": "position_size", "points": 10, "detail": "Medium position ($100K+)"})
+    elif amount >= 50001:
+        score += 7
+        factors.append({"factor": "position_size", "points": 7, "detail": "Moderate position ($50K+)"})
     else:
-        score += 5
+        score += 3
+        factors.append({"factor": "position_size", "points": 3, "detail": "Small position"})
 
-    # Committee overlap (the killer signal)
-    if committees and trade.get("ticker"):
-        overlap = check_committee_overlap(committees, trade["ticker"])
+    # ─── Factor 2: Committee Overlap (0-30 pts) ───
+    committee_overlap = None
+    if committees and ticker:
+        overlap = check_committee_overlap(committees, ticker)
         if overlap:
+            committee_overlap = overlap
             if overlap["flag"] == "HIGH":
-                score += 30
-                factors.append(f"COMMITTEE OVERLAP: {overlap['committee']} → {overlap['stock_sector']}")
+                # Direct sector match - strongest signal
+                pts = 30
+                # Bonus: small/mid cap + committee = even more suspicious
+                if ticker not in MEGA_CAP and ticker not in LARGE_CAP:
+                    pts = 30  # Already max, but flag it
+                    factors.append({
+                        "factor": "committee_smallcap_bonus", "points": 0,
+                        "detail": f"Small/mid-cap + committee overlap (very suspicious)"
+                    })
+                score += pts
+                factors.append({
+                    "factor": "committee_overlap", "points": pts,
+                    "detail": f"DIRECT: {overlap['committee']} → {overlap['stock_sector']}"
+                })
             else:
                 score += 15
-                factors.append(f"Broad committee overlap: {overlap['committee']}")
+                factors.append({
+                    "factor": "committee_overlap", "points": 15,
+                    "detail": f"Broad oversight: {overlap['committee']}"
+                })
 
-    # Disclosure speed (fast disclosure = more confident)
+    # ─── Factor 3: Disclosure Speed (0-15 pts) ───
     delay = trade.get("disclosure_delay_days")
     if delay is not None:
-        if delay <= 7:
-            score += 10
-            factors.append("Fast disclosure (within 7 days)")
+        if delay <= 3:
+            score += 5
+            factors.append({"factor": "disclosure_speed", "points": 5, "detail": "Very fast disclosure (≤3 days)"})
+        elif delay <= 7:
+            score += 8
+            factors.append({"factor": "disclosure_speed", "points": 8, "detail": "Fast disclosure (≤7 days)"})
         elif delay <= 14:
             score += 5
-            factors.append("Timely disclosure (within 14 days)")
+            factors.append({"factor": "disclosure_speed", "points": 5, "detail": "Timely disclosure (≤14 days)"})
+        elif delay <= 30:
+            score += 2
+            factors.append({"factor": "disclosure_speed", "points": 2, "detail": "Standard disclosure (≤30 days)"})
+        elif delay > 45:
+            # LATE disclosure is actually MORE suspicious - they're trying to hide it
+            score += 15
+            factors.append({
+                "factor": "disclosure_speed", "points": 15,
+                "detail": f"LATE disclosure ({delay} days) - potentially hiding trade"
+            })
 
-    # Cluster signal
-    if cluster_count >= 5:
-        score += 20
-        factors.append(f"Strong cluster: {cluster_count} politicians trading same stock")
+    # ─── Factor 4: Political Cluster (0-20 pts) ───
+    if cluster_count >= 8:
+        pts = 20
+        # But if it's a mega-cap, reduce the signal (everyone buys NVDA)
+        if ticker in MEGA_CAP:
+            pts = 8
+        score += pts
+        factors.append({
+            "factor": "cluster", "points": pts,
+            "detail": f"Strong cluster: {cluster_count} politicians trading {ticker}"
+            + (" (mega-cap discount)" if ticker in MEGA_CAP else "")
+        })
+    elif cluster_count >= 5:
+        pts = 18 if ticker not in MEGA_CAP else 6
+        score += pts
+        factors.append({
+            "factor": "cluster", "points": pts,
+            "detail": f"Cluster: {cluster_count} politicians trading {ticker}"
+        })
     elif cluster_count >= 3:
-        score += 15
-        factors.append(f"Cluster: {cluster_count} politicians trading same stock")
+        pts = 15 if ticker not in MEGA_CAP else 5
+        score += pts
+        factors.append({
+            "factor": "cluster", "points": pts,
+            "detail": f"Cluster: {cluster_count} politicians trading {ticker}"
+        })
 
-    # Cross-source confirmation
+    # ─── Factor 5: Cross-Source Confirmation (0-25 pts) ───
+    cross_sources = 0
     if insider_also_buying:
+        cross_sources += 1
         score += 15
-        factors.append("Corporate insiders also buying")
+        factors.append({
+            "factor": "cross_source_insider", "points": 15,
+            "detail": "Corporate insiders also buying"
+        })
     if fund_also_holds:
+        cross_sources += 1
         score += 10
-        factors.append("Top hedge fund also holds position")
+        factors.append({
+            "factor": "cross_source_fund", "points": 10,
+            "detail": "Top hedge fund also holds/adding position"
+        })
+    # Triple confirmation bonus
+    if cross_sources >= 2:
+        bonus = 5
+        score += bonus
+        factors.append({
+            "factor": "triple_confirmation", "points": bonus,
+            "detail": "TRIPLE CONFIRMATION: Congress + Insiders + Hedge Funds"
+        })
+
+    # ─── Factor 6: Historical Accuracy (0-15 pts) ───
+    if politician_track_record and politician_track_record.get("total", 0) >= 5:
+        win_rate = politician_track_record.get("win_rate", 0) or 0
+        avg_return = politician_track_record.get("avg_return", 0) or 0
+        if win_rate >= 70 and avg_return > 5:
+            score += 15
+            factors.append({
+                "factor": "track_record", "points": 15,
+                "detail": f"Star trader: {win_rate:.0f}% win rate, {avg_return:.1f}% avg return"
+            })
+        elif win_rate >= 60 and avg_return > 2:
+            score += 10
+            factors.append({
+                "factor": "track_record", "points": 10,
+                "detail": f"Good track record: {win_rate:.0f}% win rate, {avg_return:.1f}% avg return"
+            })
+        elif win_rate >= 50:
+            score += 5
+            factors.append({
+                "factor": "track_record", "points": 5,
+                "detail": f"Average track record: {win_rate:.0f}% win rate"
+            })
+        elif win_rate < 40:
+            # Consistently bad trader - negative signal
+            score -= 5
+            factors.append({
+                "factor": "track_record", "points": -5,
+                "detail": f"Poor track record: {win_rate:.0f}% win rate (contrarian signal)"
+            })
+
+    # ─── Factor 7: Contrarian Signal (0-10 pts) ───
+    tx_type = trade.get("tx_type", "")
+    if tx_type == "purchase" and recent_sells_count >= 3:
+        score += 10
+        factors.append({
+            "factor": "contrarian", "points": 10,
+            "detail": f"Buying while {recent_sells_count} others selling (contrarian conviction)"
+        })
 
     # Cap at 100
-    score = min(score, 100)
+    score = min(max(score, 0), 100)
 
     # Rating
     if score >= 80:
@@ -312,6 +540,10 @@ def score_trade_conviction(
         "score": score,
         "rating": rating,
         "factors": factors,
+        "factor_breakdown": {
+            f["factor"]: f["points"] for f in factors
+        },
+        "committee_overlap": committee_overlap,
     }
 
 

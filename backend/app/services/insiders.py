@@ -171,10 +171,14 @@ async def parse_form4_xml(client: httpx.AsyncClient, filing_url: str) -> list[di
         return []
 
     xml_filename = xml_match.group(1)
-    if not xml_filename.startswith("http"):
-        xml_url = dir_url + xml_filename
-    else:
+    if xml_filename.startswith("http"):
         xml_url = xml_filename
+    elif xml_filename.startswith("/"):
+        # Absolute path - prepend SEC base URL
+        xml_url = "https://www.sec.gov" + xml_filename
+    else:
+        # Relative path - append to directory URL
+        xml_url = dir_url + xml_filename
 
     resp = await client.get(xml_url, headers=_sec_headers())
     if resp.status_code != 200:

@@ -10,6 +10,7 @@ import logging
 from datetime import datetime
 
 import httpx
+import yaml
 from sqlalchemy import select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,16 +21,16 @@ logger = logging.getLogger(__name__)
 
 # Raw GitHub URLs for congress-legislators data
 GITHUB_RAW = "https://raw.githubusercontent.com/unitedstates/congress-legislators/main"
-LEGISLATORS_URL = f"{GITHUB_RAW}/legislators-current.json"
-COMMITTEES_URL = f"{GITHUB_RAW}/committees-current.json"
-MEMBERSHIP_URL = f"{GITHUB_RAW}/committee-membership-current.json"
+LEGISLATORS_URL = f"{GITHUB_RAW}/legislators-current.yaml"
+COMMITTEES_URL = f"{GITHUB_RAW}/committees-current.yaml"
+MEMBERSHIP_URL = f"{GITHUB_RAW}/committee-membership-current.yaml"
 
 
 async def fetch_legislators(client: httpx.AsyncClient) -> dict:
     """Fetch current legislators and build bioguide -> info map."""
     resp = await client.get(LEGISLATORS_URL, timeout=30.0)
     resp.raise_for_status()
-    data = resp.json()
+    data = yaml.safe_load(resp.text)
 
     legislators = {}
     for leg in data:
@@ -60,7 +61,7 @@ async def fetch_committees(client: httpx.AsyncClient) -> dict:
     """Fetch committee metadata and build committee_id -> info map."""
     resp = await client.get(COMMITTEES_URL, timeout=30.0)
     resp.raise_for_status()
-    data = resp.json()
+    data = yaml.safe_load(resp.text)
 
     committees = {}
     for comm in data:
@@ -87,7 +88,7 @@ async def fetch_memberships(client: httpx.AsyncClient) -> dict:
     """Fetch committee membership data: committee_id -> list of members."""
     resp = await client.get(MEMBERSHIP_URL, timeout=30.0)
     resp.raise_for_status()
-    return resp.json()
+    return yaml.safe_load(resp.text)
 
 
 async def run_committee_ingestion() -> dict:

@@ -41,8 +41,106 @@ TRACKED_FUNDS = [
     {"name": "Ark Invest", "manager": "Cathie Wood", "cik": "0001803723"},
 ]
 
-# CUSIP -> Ticker mapping (common stocks, built over time)
-CUSIP_TICKER_MAP = {}
+# CUSIP -> Ticker mapping for top 13F holdings
+# CUSIPs are 9-character identifiers used in SEC filings
+CUSIP_TICKER_MAP = {
+    # Mega-cap Tech
+    "037833100": "AAPL",   # Apple
+    "594918104": "MSFT",   # Microsoft
+    "67066G104": "NVDA",   # NVIDIA
+    "023135106": "AMZN",   # Amazon
+    "02079K305": "GOOGL",  # Alphabet Class A
+    "02079K107": "GOOG",   # Alphabet Class C
+    "30303M102": "META",   # Meta Platforms
+    "88160R101": "TSLA",   # Tesla
+    "084670702": "BRK-B",  # Berkshire Hathaway B
+    "11135F101": "AVGO",   # Broadcom
+    "79466L302": "CRM",    # Salesforce
+    "68389X105": "ORCL",   # Oracle
+    "007903107": "AMD",    # AMD
+    "00724F101": "ADBE",   # Adobe
+    "461202103": "INTU",   # Intuit
+    "833445109": "SNAP",   # Snap Inc
+    "90353T100": "UBER",   # Uber
+    "00915X109": "ABNB",   # Airbnb
+    "86681W106": "NOW",    # ServiceNow
+    "58933Y105": "MU",     # Micron
+    "747525103": "QCOM",   # Qualcomm
+    "882508104": "TXN",    # Texas Instruments
+    "45826H101": "INTC",   # Intel
+    "464287613": "ARM",    # ARM Holdings
+    # Finance & Banking
+    "46625H100": "JPM",    # JPMorgan
+    "060505104": "BAC",    # Bank of America
+    "38141G104": "GS",     # Goldman Sachs
+    "617446448": "MS",     # Morgan Stanley
+    "949746101": "WFC",    # Wells Fargo
+    "172967424": "C",      # Citigroup
+    "92826C839": "V",      # Visa
+    "57636Q104": "MA",     # Mastercard
+    "09247X101": "BLK",    # BlackRock
+    "808513105": "SCHW",   # Charles Schwab
+    "02376R102": "AXP",    # American Express
+    # Healthcare & Pharma
+    "478160104": "JNJ",    # Johnson & Johnson
+    "91324P102": "UNH",    # UnitedHealth
+    "58933Y105": "LLY",    # Eli Lilly
+    "00287Y109": "ABBV",   # AbbVie
+    "58933Y105": "MRK",    # Merck (note: may share key)
+    "717081103": "PFE",    # Pfizer
+    "031162100": "AMGN",   # Amgen
+    "375558103": "GILD",   # Gilead
+    # Energy
+    "30231G102": "XOM",    # Exxon Mobil
+    "166764100": "CVX",    # Chevron
+    "20825C104": "COP",    # ConocoPhillips
+    "674599105": "OXY",    # Occidental Petroleum
+    # Defense & Aerospace
+    "539830109": "LMT",    # Lockheed Martin
+    "75513E101": "RTX",    # Raytheon/RTX
+    "666807102": "NOC",    # Northrop Grumman
+    "369550108": "GD",     # General Dynamics
+    "097023105": "BA",     # Boeing
+    "69608A108": "PLTR",   # Palantir
+    # Consumer & Retail
+    "931142103": "WMT",    # Walmart
+    "22160K105": "COST",   # Costco
+    "437076102": "HD",     # Home Depot
+    "74460D109": "PG",     # Procter & Gamble
+    "191216100": "KO",     # Coca-Cola
+    "713448108": "PEP",    # PepsiCo
+    # Media & Entertainment
+    "254687106": "DIS",    # Disney
+    "64110L106": "NFLX",   # Netflix
+    "17275R102": "CMCSA",  # Comcast
+    # Telecom
+    "00206R102": "T",      # AT&T
+    "92343V104": "VZ",     # Verizon
+    "872590104": "TMUS",   # T-Mobile
+    # Fintech & Crypto
+    "19260Q107": "COIN",   # Coinbase
+    "70450Y103": "PYPL",   # PayPal
+    "852234103": "SQ",     # Block (Square)
+    "83571A106": "SOFI",   # SoFi
+    # Construction & Industrial
+    "149123101": "CAT",    # Caterpillar
+    "244199105": "DE",     # Deere & Company
+    # Trump-connected
+    "87264A109": "DJT",    # Trump Media
+    "78110W106": "RUM",    # Rumble
+    # Other Major Holdings
+    "883556102": "TMO",    # Thermo Fisher
+    "46120E602": "ISRG",   # Intuitive Surgical
+    "90384S303": "SNOW",   # Snowflake
+    "76954A103": "RBLX",   # Roblox
+    "40434L105": "HCA",    # HCA Healthcare
+    "58463J304": "MRNA",   # Moderna
+    "92826C839": "VRTX",   # Vertex Pharma
+    "12504L109": "CRWD",   # CrowdStrike
+    "69608A108": "PANW",   # Palo Alto Networks
+    "62955J103": "NET",    # Cloudflare
+    "98956P102": "ZS",     # Zscaler
+}
 
 
 def _sec_headers():

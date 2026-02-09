@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, type HedgeFund } from "@/lib/api";
-import { TrendingUp, Building2 } from "lucide-react";
+import { Building2 } from "lucide-react";
 
 export default function HedgeFundsPage() {
   const [funds, setFunds] = useState<HedgeFund[]>([]);

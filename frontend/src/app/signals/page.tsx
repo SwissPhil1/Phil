@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api, type Signal, type CrossSourceSignal, type BacktestResult } from "@/lib/api";
-import { Zap, Target, BarChart3, AlertTriangle, TrendingUp, ArrowRight } from "lucide-react";
+import { Zap, Target, BarChart3, ArrowRight } from "lucide-react";
 
 function SignalBadge({ strength }: { strength: string }) {
   const colors: Record<string, string> = {
@@ -19,23 +19,6 @@ function SignalBadge({ strength }: { strength: string }) {
     <Badge variant="outline" className={colors[strength] || colors.LOW}>
       {strength}
     </Badge>
-  );
-}
-
-function ScoreBar({ score }: { score: number }) {
-  const color =
-    score >= 80 ? "bg-red-500" :
-    score >= 60 ? "bg-orange-500" :
-    score >= 40 ? "bg-yellow-500" :
-    score >= 20 ? "bg-blue-500" : "bg-gray-500";
-
-  return (
-    <div className="flex items-center gap-2">
-      <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
-        <div className={`h-full rounded-full ${color}`} style={{ width: `${score}%` }} />
-      </div>
-      <span className="font-mono-data text-xs w-8 text-right">{score}</span>
-    </div>
   );
 }
 

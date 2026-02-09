@@ -77,9 +77,10 @@ export interface ConvictionScore {
 export interface StatsResponse {
   total_trades: number;
   total_politicians: number;
-  latest_trade_date: string;
-  top_traded_tickers: { ticker: string; count: number }[];
-  chamber_breakdown: Record<string, number>;
+  trades_last_7d: number;
+  trades_last_30d: number;
+  most_bought_tickers: { ticker: string; count: number }[];
+  most_active_politicians: { politician: string; total_trades: number }[];
   party_breakdown: Record<string, number>;
 }
 

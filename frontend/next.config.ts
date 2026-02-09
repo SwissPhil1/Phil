@@ -1,6 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Prevent Vercel from stripping trailing slashes before rewrites.
+  // FastAPI routes use trailing slashes, and stripping them causes a redirect loop.
+  skipTrailingSlashRedirect: true,
   async rewrites() {
     return [
       {

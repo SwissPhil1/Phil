@@ -23,17 +23,10 @@ export default function CongressPage() {
   useEffect(() => {
     async function load() {
       try {
-        const data = await api.getTrades({ limit: "50" });
-        setTrades(data.trades || []);
-      } catch {
-        // Try fallback
-        try {
-          const recent = await api.getRecentTrades();
-          setTrades(recent);
-        } catch {}
-      } finally {
-        setLoading(false);
-      }
+        const recent = await api.getRecentTrades();
+        setTrades(Array.isArray(recent) ? recent : []);
+      } catch {}
+      setLoading(false);
     }
     load();
   }, []);

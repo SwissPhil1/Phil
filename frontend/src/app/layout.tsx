@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { Sidebar } from "@/components/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { ErrorBoundary } from "@/components/error-boundary";
 
 export const metadata: Metadata = {
   title: "SmartFlow - Copy the Smartest Money",
@@ -21,7 +22,9 @@ export default function RootLayout({
           <div className="flex h-screen overflow-hidden">
             <Sidebar />
             <main className="flex-1 overflow-y-auto">
-              <div className="p-6 max-w-[1600px] mx-auto">{children}</div>
+              <div className="p-6 max-w-[1600px] mx-auto">
+                <ErrorBoundary>{children}</ErrorBoundary>
+              </div>
             </main>
           </div>
         </TooltipProvider>

@@ -1,5 +1,5 @@
-// Always use relative paths - Vercel rewrites proxy /api/* to Railway backend.
-// This avoids cross-origin issues (VPN, CORS, regional routing).
+// Always use relative paths - Next.js API route handler proxies /api/* to Railway backend.
+// This avoids cross-origin issues and trailing-slash redirect loops.
 const API_BASE = "";
 
 async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
@@ -216,7 +216,7 @@ export const api = {
   // Signals
   getSignals: () =>
     fetchApi<{ clusters: Signal[]; cross_source_signals: CrossSourceSignal[]; total_high_signals: number }>(
-      "/api/v1/signals/"
+      "/api/v1/signals"
     ),
   getClusters: () => fetchApi<Signal[]>("/api/v1/signals/clusters"),
   getCrossSourceSignals: () => fetchApi<CrossSourceSignal[]>("/api/v1/signals/cross-source"),
@@ -231,12 +231,12 @@ export const api = {
     return fetchApi<{
       leaderboards: Record<string, { top_10: LeaderboardEntry[]; bottom_10: LeaderboardEntry[] }>;
       consistent_winners: LeaderboardEntry[];
-    }>(`/api/v1/leaderboard/${qs}`);
+    }>(`/api/v1/leaderboard${qs}`);
   },
   getBestTrades: () => fetchApi<Trade[]>("/api/v1/leaderboard/best-trades"),
 
   // Hedge Funds
-  getHedgeFunds: () => fetchApi<HedgeFund[]>("/api/v1/hedge-funds/"),
+  getHedgeFunds: () => fetchApi<HedgeFund[]>("/api/v1/hedge-funds"),
   getHedgeFundHoldings: (cik: string) =>
     fetchApi<{ fund: HedgeFund; holdings: unknown[] }>(`/api/v1/hedge-funds/${cik}/holdings`),
 
@@ -252,7 +252,7 @@ export const api = {
   getKalshiMarkets: () => fetchApi<unknown[]>("/api/v1/prediction-markets/kalshi/markets"),
 
   // Trump
-  getTrumpOverview: () => fetchApi<TrumpOverview>("/api/v1/trump/"),
+  getTrumpOverview: () => fetchApi<TrumpOverview>("/api/v1/trump"),
   getTrumpInsiders: () => fetchApi<unknown[]>("/api/v1/trump/insiders"),
   getTrumpConflictMap: () => fetchApi<unknown>("/api/v1/trump/conflict-map"),
 

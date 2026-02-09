@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -118,7 +119,7 @@ export default function CongressPage() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="font-medium text-sm truncate">{trade.politician}</span>
+                      <Link href={`/politician/${encodeURIComponent(trade.politician)}`} className="font-medium text-sm truncate hover:underline hover:text-primary transition-colors">{trade.politician}</Link>
                       {trade.party && (
                         <Badge variant="outline" className={`text-[10px] px-1.5 shrink-0 ${
                           trade.party === "R" ? "bg-red-500/10 text-red-400 border-red-500/20" :

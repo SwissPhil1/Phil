@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -77,7 +78,7 @@ export default function LeaderboardPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                   {data.consistent_winners.slice(0, 6).map((winner, i) => (
                     <div key={i} className="p-4 rounded-lg bg-muted/30 border border-border/50">
-                      <div className="font-medium text-sm">{winner.politician}</div>
+                      <Link href={`/politician/${encodeURIComponent(winner.politician)}`} className="font-medium text-sm hover:underline hover:text-primary transition-colors">{winner.politician}</Link>
                       <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
                         <span>{winner.years_active} years active</span>
                         <span>Avg rank #{(winner.avg_rank ?? 0).toFixed(0)}</span>
@@ -113,7 +114,7 @@ export default function LeaderboardPage() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
-                          <span className="font-medium text-sm truncate">{entry.politician}</span>
+                          <Link href={`/politician/${encodeURIComponent(entry.politician)}`} className="font-medium text-sm truncate hover:underline hover:text-primary transition-colors">{entry.politician}</Link>
                           {entry.party && (
                             <Badge variant="outline" className={`text-[10px] px-1.5 ${
                               entry.party === "R" ? "bg-red-500/10 text-red-400 border-red-500/20" :

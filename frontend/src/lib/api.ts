@@ -34,6 +34,7 @@ export interface Trade {
   price_at_disclosure: number | null;
   price_current: number | null;
   return_since_disclosure: number | null;
+  disclosure_delay_days?: number;
 }
 
 export interface Politician {
@@ -205,7 +206,9 @@ export const api = {
   // Politicians
   getPoliticians: () => fetchApi<Politician[]>("/api/v1/politicians"),
   getPolitician: (name: string) =>
-    fetchApi<{ politician: Politician; recent_trades: Trade[] }>(`/api/v1/politicians/${encodeURIComponent(name)}`),
+    fetchApi<Politician & { recent_trades: Trade[]; total_buys?: number; total_sells?: number }>(`/api/v1/politicians/${encodeURIComponent(name)}`),
+  getPoliticianCommittees: (name: string) =>
+    fetchApi<{ committee: string; subcommittee?: string }[]>(`/api/v1/signals/committees/politician/${encodeURIComponent(name)}`),
 
   // Signals
   getSignals: () =>

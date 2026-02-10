@@ -222,6 +222,23 @@ async def get_rankings(
     return result.scalars().all()
 
 
+@router.get("/politicians/{name}/portfolio")
+async def get_politician_portfolio(
+    name: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get portfolio simulation for a politician (copy-trading equity curve).
+
+    Simulates buying when the politician buys and selling when they sell,
+    using actual historical prices from Yahoo Finance. Returns weekly NAV
+    series with return percentages for charting.
+    """
+    from app.services.portfolio import compute_portfolio_simulation
+
+    result = await compute_portfolio_simulation(db, name)
+    return result
+
+
 @router.get("/politicians/{name}", response_model=PoliticianDetail)
 async def get_politician_detail(
     name: str,

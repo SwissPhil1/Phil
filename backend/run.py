@@ -1,7 +1,25 @@
 """Startup wrapper that catches and logs any import/startup errors."""
 import os
 import sys
+import threading
+import time
 import traceback
+import urllib.request
+
+
+def health_check(port, retries=10, delay=2):
+    """Poll health endpoint to verify the app is actually responding."""
+    url = f"http://127.0.0.1:{port}/health"
+    for i in range(retries):
+        time.sleep(delay)
+        try:
+            resp = urllib.request.urlopen(url, timeout=5)
+            body = resp.read().decode()
+            print(f"SELF-TEST OK (attempt {i+1}): {resp.status} {body}", flush=True)
+            return
+        except Exception as e:
+            print(f"SELF-TEST attempt {i+1}/{retries}: {e}", flush=True)
+    print("SELF-TEST FAILED: App never responded to health check!", flush=True)
 
 
 def main():
@@ -23,7 +41,11 @@ def main():
         traceback.print_exc()
         sys.exit(1)
 
-    # Phase 2: Start uvicorn
+    # Phase 2: Start self-test in background thread
+    t = threading.Thread(target=health_check, args=(port,), daemon=True)
+    t.start()
+
+    # Phase 3: Start uvicorn (blocks forever)
     try:
         import uvicorn
         print(f"Starting uvicorn on 0.0.0.0:{port}", flush=True)

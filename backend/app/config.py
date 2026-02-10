@@ -6,7 +6,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite+aiosqlite:///{BASE_DIR}/congress_trades.db")
+
+# Use SMARTFLOW_DB_URL first, then DATABASE_URL, then default SQLite.
+# Railway may auto-set DATABASE_URL to a PostgreSQL URL from an addon;
+# we only support SQLite for now, so ignore non-sqlite URLs.
+_default_db = f"sqlite+aiosqlite:///{BASE_DIR}/congress_trades.db"
+_env_url = os.getenv("SMARTFLOW_DB_URL") or os.getenv("DATABASE_URL") or ""
+DATABASE_URL = _env_url if "sqlite" in _env_url else _default_db
 
 # Official government data source URLs
 HOUSE_FD_ZIP_URL = "https://disclosures-clerk.house.gov/public_disc/financial-pdfs/{year}FD.zip"

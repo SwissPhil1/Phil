@@ -9,9 +9,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy app
 COPY . .
 
-# Create data directory
-RUN mkdir -p /app/data
+# Create data directory and make startup script executable
+RUN mkdir -p /app/data && chmod +x /app/start.sh
 
-EXPOSE ${PORT:-8000}
+EXPOSE 8000
 
-CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
+CMD ["/app/start.sh"]

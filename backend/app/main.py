@@ -55,6 +55,7 @@ async def _run_initial_ingestions():
         ("Polymarket traders", run_polymarket_ingestion),
         ("Kalshi markets", run_kalshi_ingestion),
         ("13F hedge fund holdings", run_13f_ingestion),
+        ("Politician stats + prices", run_performance_update),
     ]:
         try:
             logger.info(f"Background ingestion: {name}... (mem: {_get_memory_mb():.0f} MB)")

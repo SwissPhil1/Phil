@@ -11,7 +11,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 
 import httpx
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from app.models.database import dialect_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import InsiderTrade, async_session
@@ -324,7 +324,7 @@ async def run_insider_ingestion() -> dict:
                             trade["accession_number"] = filing["accession"]
 
                             stmt = (
-                                sqlite_insert(InsiderTrade)
+                                dialect_insert(InsiderTrade)
                                 .values(**trade)
                                 .on_conflict_do_nothing(
                                     index_elements=[

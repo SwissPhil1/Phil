@@ -12,7 +12,7 @@ from datetime import datetime
 import httpx
 import yaml
 from sqlalchemy import select
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from app.models.database import dialect_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import PoliticianCommittee, async_session
@@ -131,7 +131,7 @@ async def run_committee_ingestion() -> dict:
                 }
 
                 stmt = (
-                    sqlite_insert(PoliticianCommittee)
+                    dialect_insert(PoliticianCommittee)
                     .values(**record)
                     .on_conflict_do_update(
                         index_elements=["bioguide_id", "committee_id"],

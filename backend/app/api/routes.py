@@ -1,9 +1,12 @@
 """API routes for the Congress Trades app."""
 
+import logging
 from datetime import datetime, timedelta
 
+logger = logging.getLogger(__name__)
+
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import Politician, Trade, get_db
@@ -58,7 +61,7 @@ async def get_trades(
     state: str | None = None,
     ticker: str | None = None,
     tx_type: str | None = None,
-    days: int = Query(default=90, ge=1, le=3650),
+    days: int = Query(default=365, ge=1, le=7300),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
@@ -217,47 +220,57 @@ async def get_politician_detail(
 ):
     """Get detailed info for a specific politician including recent trades."""
     # Try the Politician table first (has pre-computed stats)
-    stmt = select(Politician).where(Politician.name.ilike(f"%{name}%"))
+    # Use order_by total_trades desc to pick the best match when multiple name variants exist
+    stmt = (
+        select(Politician)
+        .where(Politician.name.ilike(f"%{name}%"))
+        .order_by(Politician.total_trades.desc())
+        .limit(1)
+    )
     result = await db.execute(stmt)
     politician = result.scalar_one_or_none()
 
     # Fallback: build profile from Trade data if Politician table not yet populated
     if not politician:
+        # Find all name variants that match (e.g., "Tommy Tuberville" + "Thomas H Tuberville")
+        name_filter = Trade.politician.ilike(f"%{name}%")
         trades_check = await db.execute(
-            select(Trade).where(Trade.politician.ilike(f"%{name}%")).limit(1)
+            select(Trade).where(name_filter).limit(1)
         )
         sample_trade = trades_check.scalar_one_or_none()
         if not sample_trade:
             raise HTTPException(status_code=404, detail=f"Politician '{name}' not found")
 
-        # Build stats from trades directly
-        pol_name = sample_trade.politician
+        # Use ilike filter for ALL aggregations to merge name variants
         total = (await db.execute(
-            select(func.count()).where(Trade.politician == pol_name)
+            select(func.count()).where(name_filter)
         )).scalar()
         buys = (await db.execute(
-            select(func.count()).where(Trade.politician == pol_name).where(Trade.tx_type == "purchase")
+            select(func.count()).where(name_filter).where(Trade.tx_type == "purchase")
         )).scalar()
         sells = (await db.execute(
-            select(func.count()).where(Trade.politician == pol_name).where(
+            select(func.count()).where(name_filter).where(
                 Trade.tx_type.in_(["sale", "sale_full", "sale_partial"])
             )
         )).scalar()
         last_date = (await db.execute(
-            select(func.max(Trade.tx_date)).where(Trade.politician == pol_name)
+            select(func.max(Trade.tx_date)).where(name_filter)
         )).scalar()
 
         trades_stmt = (
             select(Trade)
-            .where(Trade.politician == pol_name)
+            .where(name_filter)
             .order_by(Trade.disclosure_date.desc())
             .limit(500)
         )
         trades = (await db.execute(trades_stmt)).scalars().all()
 
+        # Use the name variant that has the most trades
+        display_name = sample_trade.politician
+
         return PoliticianDetail(
             id=0,
-            name=pol_name,
+            name=display_name,
             chamber=sample_trade.chamber,
             party=sample_trade.party,
             state=sample_trade.state,
@@ -270,9 +283,10 @@ async def get_politician_detail(
             recent_trades=[_trade_to_response(t) for t in trades],
         )
 
+    # Use ilike to also capture name variants (e.g., "Tommy Tuberville" + "Thomas H Tuberville")
     trades_stmt = (
         select(Trade)
-        .where(Trade.politician == politician.name)
+        .where(Trade.politician.ilike(f"%{name}%"))
         .order_by(Trade.disclosure_date.desc())
         .limit(500)
     )
@@ -285,7 +299,7 @@ async def get_politician_detail(
         chamber=politician.chamber,
         party=politician.party,
         state=politician.state,
-        total_trades=politician.total_trades,
+        total_trades=politician.total_trades or len(trades),
         total_buys=politician.total_buys,
         total_sells=politician.total_sells,
         avg_return=politician.avg_return,
@@ -459,12 +473,91 @@ async def trigger_ingestion():
 
 @router.post("/admin/update-prices")
 async def trigger_price_update(
-    limit: int = Query(default=50, ge=1, le=500),
+    limit: int = Query(default=50, ge=1, le=5000),
     force: bool = Query(default=False),
+    background: bool = Query(default=False),
 ):
-    """Manually trigger price updates. Use force=true to recalculate all."""
+    """Manually trigger price updates. Use force=true to recalculate all.
+
+    For large batches (>100), use background=true to avoid timeouts.
+    """
+    if background:
+        import asyncio
+
+        async def _run():
+            try:
+                result = await run_performance_update(price_limit=limit, force=force)
+                logger.info(f"Background price update finished: {result}")
+            except Exception as e:
+                logger.error(f"Background price update failed: {e}")
+
+        asyncio.create_task(_run())
+        return {"status": "started", "limit": limit, "force": force}
+
     result = await run_performance_update(price_limit=limit, force=force)
     return result
+
+
+@router.post("/admin/ingest-historical")
+async def trigger_historical_ingestion(
+    start_year: int = Query(default=2012, ge=2012, le=2026),
+    end_year: int = Query(default=2026, ge=2012, le=2026),
+):
+    """Ingest historical Senate trades from eFD PTR filings (2012-present).
+
+    This scrapes individual PTR pages for transaction-level data (ticker, date, amount).
+    Can take 10-30 minutes for a full run (2012-2026).
+    """
+    import asyncio
+
+    from app.services.historical_ingestion import run_historical_ingestion
+
+    years = list(range(start_year, end_year + 1))
+
+    # Run in background so the endpoint returns immediately
+    async def _run():
+        try:
+            result = await run_historical_ingestion(years=years)
+            logger.info(f"Historical ingestion finished: {result}")
+        except Exception as e:
+            logger.error(f"Historical ingestion failed: {e}")
+
+    asyncio.create_task(_run())
+    return {
+        "status": "started",
+        "years": years,
+        "message": f"Historical ingestion started for {start_year}-{end_year}. Check logs for progress.",
+    }
+
+
+@router.post("/admin/backfill-parties")
+async def backfill_parties(db: AsyncSession = Depends(get_db)):
+    """Backfill party/state for senate trades using fuzzy name matching."""
+    from app.services.historical_ingestion import _lookup_party
+
+    # Find all distinct politicians missing party data (NULL or empty)
+    stmt = (
+        select(Trade.politician)
+        .where((Trade.party.is_(None)) | (Trade.party == ""))
+        .distinct()
+    )
+    result = await db.execute(stmt)
+    politicians = [row[0] for row in result.all()]
+
+    updated = 0
+    for pol_name in politicians:
+        party, state = _lookup_party(pol_name)
+        if party:
+            await db.execute(
+                update(Trade)
+                .where(Trade.politician == pol_name)
+                .where((Trade.party.is_(None)) | (Trade.party == ""))
+                .values(party=party, state=state)
+            )
+            updated += 1
+
+    await db.commit()
+    return {"politicians_updated": updated, "total_missing": len(politicians)}
 
 
 @router.get("/admin/test-prices")

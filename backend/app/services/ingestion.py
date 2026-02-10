@@ -18,7 +18,7 @@ from pathlib import Path
 
 import httpx
 from sqlalchemy import func, select
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from app.models.database import dialect_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import (
@@ -196,7 +196,7 @@ async def ingest_house(session: AsyncSession) -> int:
             }
 
             stmt = (
-                sqlite_insert(Trade)
+                dialect_insert(Trade)
                 .values(**trade_data)
                 .on_conflict_do_nothing(
                     index_elements=[
@@ -338,7 +338,7 @@ async def ingest_senate(session: AsyncSession) -> int:
         }
 
         stmt = (
-            sqlite_insert(Trade)
+            dialect_insert(Trade)
             .values(**trade_data)
             .on_conflict_do_nothing(
                 index_elements=[
@@ -379,7 +379,7 @@ async def load_seed_data(session: AsyncSession) -> int:
         trade["tx_type"] = normalize_tx_type(trade.get("tx_type"))
 
         stmt = (
-            sqlite_insert(Trade)
+            dialect_insert(Trade)
             .values(**trade)
             .on_conflict_do_nothing(
                 index_elements=[

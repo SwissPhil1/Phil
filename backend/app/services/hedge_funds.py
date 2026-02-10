@@ -11,7 +11,7 @@ from datetime import datetime
 
 import httpx
 from sqlalchemy import select
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from app.models.database import dialect_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import HedgeFund, HedgeFundHolding, async_session
@@ -316,7 +316,7 @@ async def ingest_fund(session: AsyncSession, client: httpx.AsyncClient, fund: di
         h["report_date"] = filing["report_date"]
 
         stmt = (
-            sqlite_insert(HedgeFundHolding)
+            dialect_insert(HedgeFundHolding)
             .values(**h)
             .on_conflict_do_nothing(
                 index_elements=["fund_cik", "report_date", "cusip", "put_call"]

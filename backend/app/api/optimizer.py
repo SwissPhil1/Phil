@@ -1,9 +1,12 @@
 """API endpoints for the conviction score optimizer."""
 
+import logging
+
 from fastapi import APIRouter, Query
 
 from app.services.optimizer import run_optimization, WeightConfig, evaluate_formula, extract_trade_features, cross_validate
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/optimizer", tags=["optimizer"])
 
 
@@ -22,13 +25,17 @@ async def run_optimizer(
 
     This is a long-running operation (1-5 minutes depending on data).
     """
-    result = await run_optimization(
-        lookback_days=lookback_days,
-        max_trades=max_trades,
-        generations=generations,
-        top_n=top_n,
-    )
-    return result
+    try:
+        result = await run_optimization(
+            lookback_days=lookback_days,
+            max_trades=max_trades,
+            generations=generations,
+            top_n=top_n,
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Optimizer run failed: {e}")
+        return {"error": str(e), "status": "failed"}
 
 
 @router.get("/test-weights")
@@ -48,42 +55,54 @@ async def test_custom_weights(
     Test a specific set of custom weights against historical data.
     Useful for manually tuning the formula.
     """
-    weights = WeightConfig(
-        position_size_max=position_size_max,
-        committee_overlap_max=committee_overlap_max,
-        disclosure_speed_max=disclosure_speed_max,
-        cluster_max=cluster_max,
-        cross_source_insider_max=cross_source_insider_max,
-        cross_source_fund_max=cross_source_fund_max,
-        track_record_max=track_record_max,
-        contrarian_max=contrarian_max,
-    )
+    try:
+        weights = WeightConfig(
+            position_size_max=position_size_max,
+            committee_overlap_max=committee_overlap_max,
+            disclosure_speed_max=disclosure_speed_max,
+            cluster_max=cluster_max,
+            cross_source_insider_max=cross_source_insider_max,
+            cross_source_fund_max=cross_source_fund_max,
+            track_record_max=track_record_max,
+            contrarian_max=contrarian_max,
+        )
 
-    trades = await extract_trade_features(days=lookback_days, max_trades=max_trades)
-    if not trades:
-        return {"error": "No trades with return data found"}
+        trades = await extract_trade_features(days=lookback_days, max_trades=max_trades)
+        if not trades:
+            return {"error": "No trades with return data found"}
 
-    result = evaluate_formula(trades, weights)
-    cv = cross_validate(trades, weights)
+        result = evaluate_formula(trades, weights)
+        cv = cross_validate(trades, weights)
 
-    return {
-        "weights": weights.to_dict(),
-        "result": result.to_dict(),
-        "cross_validation": cv,
-        "trades_analyzed": len(trades),
-    }
+        return {
+            "weights": weights.to_dict(),
+            "result": result.to_dict(),
+            "cross_validation": cv,
+            "trades_analyzed": len(trades),
+        }
+    except Exception as e:
+        logger.error(f"Test weights failed: {e}")
+        return {"error": str(e), "status": "failed"}
 
 
 @router.get("/status")
 async def optimizer_status():
     """Check what data is available for optimization."""
-    trades = await extract_trade_features(days=730, max_trades=10)
-    return {
-        "status": "ready" if trades else "no_data",
-        "sample_trades": len(trades),
-        "detail": (
-            "Optimizer has trade data with returns ready for analysis"
-            if trades else
-            "No historical trades with return data found. Run data ingestion first."
-        ),
-    }
+    try:
+        trades = await extract_trade_features(days=730, max_trades=10)
+        return {
+            "status": "ready" if trades else "no_data",
+            "sample_trades": len(trades),
+            "detail": (
+                "Optimizer has trade data with returns ready for analysis"
+                if trades else
+                "No historical trades with return data found. Run data ingestion first."
+            ),
+        }
+    except Exception as e:
+        logger.error(f"Optimizer status check failed: {e}")
+        return {
+            "status": "error",
+            "sample_trades": 0,
+            "detail": f"Status check failed: {e}",
+        }

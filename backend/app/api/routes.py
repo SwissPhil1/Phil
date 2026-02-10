@@ -19,6 +19,31 @@ from app.services.alerts import check_and_generate_alerts
 from app.services.ingestion import run_ingestion
 from app.services.performance import run_performance_update
 
+
+def _trade_to_response(t: Trade) -> TradeResponse:
+    """Convert a Trade ORM object to a TradeResponse with all fields."""
+    return TradeResponse(
+        id=t.id,
+        chamber=t.chamber,
+        politician=t.politician,
+        party=t.party,
+        state=t.state,
+        ticker=t.ticker,
+        asset_description=t.asset_description,
+        tx_type=t.tx_type,
+        tx_date=t.tx_date,
+        disclosure_date=t.disclosure_date,
+        amount_low=t.amount_low,
+        amount_high=t.amount_high,
+        price_at_disclosure=t.price_at_disclosure,
+        price_current=t.price_current,
+        return_since_disclosure=t.return_since_disclosure,
+        disclosure_delay_days=(
+            (t.disclosure_date - t.tx_date).days
+            if t.disclosure_date and t.tx_date else None
+        ),
+    )
+
 router = APIRouter()
 
 
@@ -191,12 +216,59 @@ async def get_politician_detail(
     db: AsyncSession = Depends(get_db),
 ):
     """Get detailed info for a specific politician including recent trades."""
+    # Try the Politician table first (has pre-computed stats)
     stmt = select(Politician).where(Politician.name.ilike(f"%{name}%"))
     result = await db.execute(stmt)
     politician = result.scalar_one_or_none()
 
+    # Fallback: build profile from Trade data if Politician table not yet populated
     if not politician:
-        raise HTTPException(status_code=404, detail=f"Politician '{name}' not found")
+        trades_check = await db.execute(
+            select(Trade).where(Trade.politician.ilike(f"%{name}%")).limit(1)
+        )
+        sample_trade = trades_check.scalar_one_or_none()
+        if not sample_trade:
+            raise HTTPException(status_code=404, detail=f"Politician '{name}' not found")
+
+        # Build stats from trades directly
+        pol_name = sample_trade.politician
+        total = (await db.execute(
+            select(func.count()).where(Trade.politician == pol_name)
+        )).scalar()
+        buys = (await db.execute(
+            select(func.count()).where(Trade.politician == pol_name).where(Trade.tx_type == "purchase")
+        )).scalar()
+        sells = (await db.execute(
+            select(func.count()).where(Trade.politician == pol_name).where(
+                Trade.tx_type.in_(["sale", "sale_full", "sale_partial"])
+            )
+        )).scalar()
+        last_date = (await db.execute(
+            select(func.max(Trade.tx_date)).where(Trade.politician == pol_name)
+        )).scalar()
+
+        trades_stmt = (
+            select(Trade)
+            .where(Trade.politician == pol_name)
+            .order_by(Trade.disclosure_date.desc())
+            .limit(50)
+        )
+        trades = (await db.execute(trades_stmt)).scalars().all()
+
+        return PoliticianDetail(
+            id=0,
+            name=pol_name,
+            chamber=sample_trade.chamber,
+            party=sample_trade.party,
+            state=sample_trade.state,
+            total_trades=total,
+            total_buys=buys,
+            total_sells=sells,
+            avg_return=None,
+            win_rate=None,
+            last_trade_date=last_date,
+            recent_trades=[_trade_to_response(t) for t in trades],
+        )
 
     trades_stmt = (
         select(Trade)
@@ -219,30 +291,7 @@ async def get_politician_detail(
         avg_return=politician.avg_return,
         win_rate=politician.win_rate,
         last_trade_date=politician.last_trade_date,
-        recent_trades=[
-            TradeResponse(
-                id=t.id,
-                chamber=t.chamber,
-                politician=t.politician,
-                party=t.party,
-                state=t.state,
-                ticker=t.ticker,
-                asset_description=t.asset_description,
-                tx_type=t.tx_type,
-                tx_date=t.tx_date,
-                disclosure_date=t.disclosure_date,
-                amount_low=t.amount_low,
-                amount_high=t.amount_high,
-                price_at_disclosure=t.price_at_disclosure,
-                return_since_disclosure=t.return_since_disclosure,
-                disclosure_delay_days=(
-                    (t.disclosure_date - t.tx_date).days
-                    if t.disclosure_date and t.tx_date
-                    else None
-                ),
-            )
-            for t in trades
-        ],
+        recent_trades=[_trade_to_response(t) for t in trades],
     )
 
 

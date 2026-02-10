@@ -17,6 +17,7 @@ class TradeResponse(BaseModel):
     amount_low: float | None
     amount_high: float | None
     price_at_disclosure: float | None
+    price_current: float | None = None
     return_since_disclosure: float | None
     disclosure_delay_days: int | None = None
 

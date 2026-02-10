@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,13 +11,25 @@ import {
   ArrowLeft,
   ArrowUpRight,
   ArrowDownRight,
-  Landmark,
   TrendingUp,
-  ShoppingCart,
-  Package,
-  Calendar,
+  TrendingDown,
   Building2,
+  Clock,
+  Briefcase,
+  BarChart3,
+  Calendar,
+  CircleDollarSign,
+  Activity,
 } from "lucide-react";
+import {
+  ResponsiveContainer,
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  Tooltip as RechartsTooltip,
+  CartesianGrid,
+} from "recharts";
 
 type PoliticianDetail = Politician & {
   recent_trades: Trade[];
@@ -25,27 +37,161 @@ type PoliticianDetail = Politician & {
   total_sells?: number;
 };
 
-function timeAgo(dateStr: string) {
-  if (!dateStr) return "";
-  const now = new Date();
-  const d = new Date(dateStr);
-  const diffMs = now.getTime() - d.getTime();
-  const days = Math.floor(diffMs / 86400000);
-  if (days === 0) return "Today";
-  if (days === 1) return "Yesterday";
-  if (days < 7) return `${days}d ago`;
-  if (days < 30) return `${Math.floor(days / 7)}w ago`;
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "2-digit" });
-}
+// ─── Helpers ───
 
 function formatAmount(low: number, high: number) {
   const fmt = (n: number) => {
     if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
     if (n >= 1_000) return `$${(n / 1_000).toFixed(0)}K`;
-    return `$${n}`;
+    return `$${n.toLocaleString()}`;
   };
+  if (low === high) return fmt(low);
   return `${fmt(low)} – ${fmt(high)}`;
 }
+
+function formatPrice(price: number | null | undefined) {
+  if (price == null) return "—";
+  return `$${price.toFixed(2)}`;
+}
+
+function formatPnl(pnl: number | null | undefined) {
+  if (pnl == null) return null;
+  const sign = pnl >= 0 ? "+" : "";
+  return `${sign}${pnl.toFixed(1)}%`;
+}
+
+function formatLargeNumber(n: number) {
+  if (n >= 1_000_000_000) return `$${(n / 1_000_000_000).toFixed(1)}B`;
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `$${(n / 1_000).toFixed(0)}K`;
+  return `$${n.toLocaleString()}`;
+}
+
+const PERIOD_FILTERS = [
+  { label: "3M", days: 90 },
+  { label: "6M", days: 180 },
+  { label: "YTD", days: -1 },
+  { label: "1Y", days: 365 },
+  { label: "2Y", days: 730 },
+  { label: "ALL", days: 0 },
+] as const;
+
+function filterTradesByPeriod(trades: Trade[], periodDays: number): Trade[] {
+  if (periodDays === 0) return trades; // ALL
+  const now = new Date();
+  let cutoff: Date;
+  if (periodDays === -1) {
+    // YTD
+    cutoff = new Date(now.getFullYear(), 0, 1);
+  } else {
+    cutoff = new Date(now.getTime() - periodDays * 86400000);
+  }
+  return trades.filter((t) => {
+    const d = new Date(t.tx_date || t.disclosure_date);
+    return d >= cutoff;
+  });
+}
+
+function buildPerformanceChart(trades: Trade[]) {
+  const sorted = [...trades]
+    .filter((t) => t.tx_date || t.disclosure_date)
+    .sort((a, b) => new Date(a.tx_date || a.disclosure_date).getTime() - new Date(b.tx_date || b.disclosure_date).getTime());
+
+  if (sorted.length === 0) return [];
+
+  let cumReturn = 0;
+  const points: { date: string; label: string; cumReturn: number; trades: number }[] = [];
+  const monthMap = new Map<string, { cumReturn: number; count: number }>();
+
+  for (const t of sorted) {
+    const d = new Date(t.tx_date || t.disclosure_date);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const ret = t.return_since_disclosure ?? 0;
+    cumReturn += ret;
+    const existing = monthMap.get(key);
+    if (existing) {
+      existing.cumReturn = cumReturn;
+      existing.count += 1;
+    } else {
+      monthMap.set(key, { cumReturn, count: 1 });
+    }
+  }
+
+  for (const [key, val] of monthMap) {
+    const [y, m] = key.split("-");
+    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    points.push({
+      date: key,
+      label: `${monthNames[parseInt(m) - 1]} '${y.slice(2)}`,
+      cumReturn: Number(val.cumReturn.toFixed(1)),
+      trades: val.count,
+    });
+  }
+
+  return points;
+}
+
+function buildHoldings(trades: Trade[]) {
+  const map = new Map<
+    string,
+    {
+      ticker: string;
+      description: string;
+      totalBuys: number;
+      totalSells: number;
+      amountMid: number;
+      entryPrice: number | null;
+      currentPrice: number | null;
+      returnPct: number | null;
+      lastDate: string;
+      isHolding: boolean;
+    }
+  >();
+
+  for (const t of trades) {
+    if (!t.ticker) continue;
+    const existing = map.get(t.ticker);
+    const mid = t.amount_low != null && t.amount_high != null ? (t.amount_low + t.amount_high) / 2 : 0;
+    const isBuy = t.tx_type === "purchase";
+
+    if (!existing) {
+      map.set(t.ticker, {
+        ticker: t.ticker,
+        description: t.asset_description || t.ticker,
+        totalBuys: isBuy ? 1 : 0,
+        totalSells: isBuy ? 0 : 1,
+        amountMid: mid,
+        entryPrice: t.price_at_disclosure,
+        currentPrice: t.price_current,
+        returnPct: t.return_since_disclosure,
+        lastDate: t.tx_date || t.disclosure_date,
+        isHolding: isBuy,
+      });
+    } else {
+      if (isBuy) existing.totalBuys++;
+      else existing.totalSells++;
+      existing.amountMid += mid;
+      if (!existing.entryPrice && t.price_at_disclosure) existing.entryPrice = t.price_at_disclosure;
+      if (t.price_current) existing.currentPrice = t.price_current;
+      if (t.return_since_disclosure != null) existing.returnPct = t.return_since_disclosure;
+      const tDate = t.tx_date || t.disclosure_date;
+      if (tDate > existing.lastDate) existing.lastDate = tDate;
+      if (!isBuy) existing.isHolding = false;
+    }
+  }
+
+  const holdings = Array.from(map.values());
+  const totalAmount = holdings.reduce((s, h) => s + h.amountMid, 0);
+
+  return holdings
+    .map((h) => ({
+      ...h,
+      allocationPct: totalAmount > 0 ? (h.amountMid / totalAmount) * 100 : 0,
+    }))
+    .sort((a, b) => b.allocationPct - a.allocationPct);
+}
+
+// ─── Component ───
 
 export default function PoliticianPage() {
   const params = useParams();
@@ -53,6 +199,7 @@ export default function PoliticianPage() {
   const [politician, setPolitician] = useState<PoliticianDetail | null>(null);
   const [committees, setCommittees] = useState<{ committee: string; subcommittee?: string }[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectedPeriod, setSelectedPeriod] = useState(5); // default ALL
 
   useEffect(() => {
     async function load() {
@@ -67,23 +214,61 @@ export default function PoliticianPage() {
     load();
   }, [name]);
 
+  const stockTrades = useMemo(() => politician?.recent_trades.filter((t) => t.ticker) ?? [], [politician]);
+
+  const filteredTrades = useMemo(
+    () => filterTradesByPeriod(stockTrades, PERIOD_FILTERS[selectedPeriod].days),
+    [stockTrades, selectedPeriod]
+  );
+
+  const chartData = useMemo(() => buildPerformanceChart(filteredTrades), [filteredTrades]);
+  const holdings = useMemo(() => buildHoldings(stockTrades), [stockTrades]);
+
+  const stats = useMemo(() => {
+    const tradesWithReturn = stockTrades.filter((t) => t.return_since_disclosure != null);
+    const avgReturn =
+      tradesWithReturn.length > 0
+        ? tradesWithReturn.reduce((s, t) => s + (t.return_since_disclosure ?? 0), 0) / tradesWithReturn.length
+        : null;
+    const winners = tradesWithReturn.filter((t) => (t.return_since_disclosure ?? 0) > 0).length;
+    const winRate = tradesWithReturn.length > 0 ? (winners / tradesWithReturn.length) * 100 : null;
+
+    // Estimated AUM from mid-amounts
+    const estAum = stockTrades.reduce((s, t) => {
+      if (t.amount_low != null && t.amount_high != null) return s + (t.amount_low + t.amount_high) / 2;
+      return s;
+    }, 0);
+
+    // Average disclosure delay
+    const delayTrades = stockTrades.filter((t) => t.disclosure_delay_days != null && t.disclosure_delay_days > 0);
+    const avgDelay = delayTrades.length > 0 ? delayTrades.reduce((s, t) => s + (t.disclosure_delay_days ?? 0), 0) / delayTrades.length : null;
+
+    // Unique active tickers (buys without matching sells)
+    const activeStocks = new Set(holdings.filter((h) => h.isHolding).map((h) => h.ticker)).size;
+
+    return { avgReturn, winRate, winners, tradesWithReturn: tradesWithReturn.length, estAum, avgDelay, activeStocks };
+  }, [stockTrades, holdings]);
+
+  // ─── Loading ───
   if (loading) {
     return (
-      <div className="space-y-6">
-        <Skeleton className="h-8 w-64" />
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {[...Array(4)].map((_, i) => <Card key={i}><CardContent className="p-5"><Skeleton className="h-14 w-full" /></CardContent></Card>)}
+      <div className="space-y-6 max-w-4xl mx-auto">
+        <Skeleton className="h-8 w-48" />
+        <Skeleton className="h-32 w-full rounded-2xl" />
+        <Skeleton className="h-64 w-full rounded-2xl" />
+        <div className="grid grid-cols-4 gap-3">
+          {[...Array(4)].map((_, i) => (
+            <Skeleton key={i} className="h-20 w-full rounded-xl" />
+          ))}
         </div>
-        <div className="space-y-3">
-          {[...Array(6)].map((_, i) => <Skeleton key={i} className="h-20 w-full rounded-lg" />)}
-        </div>
+        <Skeleton className="h-48 w-full rounded-2xl" />
       </div>
     );
   }
 
   if (!politician) {
     return (
-      <div className="space-y-4">
+      <div className="space-y-4 max-w-4xl mx-auto">
         <Link href="/congress" className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
           <ArrowLeft className="w-4 h-4" /> Back to Congress Trades
         </Link>
@@ -96,208 +281,452 @@ export default function PoliticianPage() {
     );
   }
 
-  // Filter to actual stock trades (with tickers), separate from PTR filings
-  const stockTrades = politician.recent_trades.filter((t) => t.ticker);
-  const ptrFilings = politician.recent_trades.filter((t) => !t.ticker);
-
-  // Unique tickers
-  const tickers = [...new Set(stockTrades.map((t) => t.ticker).filter(Boolean))];
-
-  // Buy/sell counts from actual stock trades
-  const buys = stockTrades.filter((t) => t.tx_type === "purchase").length;
-  const sells = stockTrades.filter((t) => t.tx_type === "sale" || t.tx_type === "sale_full" || t.tx_type === "sale_partial").length;
+  const buys = politician.total_buys ?? stockTrades.filter((t) => t.tx_type === "purchase").length;
+  const sells = politician.total_sells ?? stockTrades.filter((t) => t.tx_type !== "purchase").length;
 
   const partyColor =
-    politician.party === "R" ? "bg-red-500/10 text-red-400 border-red-500/20" :
-    politician.party === "D" ? "bg-blue-500/10 text-blue-400 border-blue-500/20" :
-    "bg-muted text-muted-foreground";
+    politician.party === "R"
+      ? "text-red-400"
+      : politician.party === "D"
+        ? "text-blue-400"
+        : "text-muted-foreground";
+
+  const partyBg =
+    politician.party === "R"
+      ? "bg-red-500/10 border-red-500/20"
+      : politician.party === "D"
+        ? "bg-blue-500/10 border-blue-500/20"
+        : "bg-muted border-border";
+
+  const returnVal = politician.avg_return ?? stats.avgReturn;
+  const isPositiveReturn = (returnVal ?? 0) >= 0;
+
+  // Cumulative return for headline
+  const cumReturn = chartData.length > 0 ? chartData[chartData.length - 1].cumReturn : returnVal;
 
   return (
-    <div className="space-y-6">
-      {/* Back link */}
-      <Link href="/congress" className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors">
-        <ArrowLeft className="w-4 h-4" /> Back to Congress Trades
+    <div className="space-y-6 max-w-4xl mx-auto">
+      {/* Back Navigation */}
+      <Link
+        href="/congress"
+        className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+      >
+        <ArrowLeft className="w-4 h-4" /> Congress Trades
       </Link>
 
-      {/* Header */}
-      <div className="flex items-center gap-4">
-        <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center text-lg font-bold">
-          {politician.name.split(" ").map(n => n[0]).join("").slice(0, 2)}
-        </div>
-        <div>
-          <h1 className="text-2xl font-bold">{politician.name}</h1>
-          <div className="flex items-center gap-2 mt-0.5">
-            {politician.party && (
-              <Badge variant="outline" className={partyColor}>
-                {politician.party === "R" ? "Republican" : politician.party === "D" ? "Democrat" : politician.party}
-              </Badge>
-            )}
-            {politician.state && <span className="text-sm text-muted-foreground">{politician.state}</span>}
-            {politician.chamber && (
-              <span className="text-sm text-muted-foreground capitalize">{politician.chamber}</span>
-            )}
+      {/* ─── Hero Header ─── */}
+      <div className="relative overflow-hidden rounded-2xl border border-border bg-gradient-to-br from-card via-card to-muted/20 p-6">
+        <div className="flex items-start justify-between">
+          <div className="flex items-center gap-4">
+            {/* Avatar */}
+            <div className={`w-16 h-16 rounded-2xl flex items-center justify-center text-xl font-bold border ${partyBg} ${partyColor}`}>
+              {politician.name
+                .split(" ")
+                .map((n) => n[0])
+                .join("")
+                .slice(0, 2)}
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight">{politician.name}</h1>
+              <div className="flex items-center gap-2 mt-1">
+                <Badge variant="outline" className={`${partyBg} ${partyColor} text-xs`}>
+                  {politician.party === "R" ? "Republican" : politician.party === "D" ? "Democrat" : politician.party || "—"}
+                </Badge>
+                {politician.state && (
+                  <span className="text-sm text-muted-foreground">{politician.state}</span>
+                )}
+                {politician.chamber && (
+                  <span className="text-sm text-muted-foreground capitalize">• {politician.chamber}</span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Big Return Number */}
+          <div className="text-right">
+            <div className={`text-4xl font-bold tracking-tight font-mono ${isPositiveReturn ? "text-emerald-400" : "text-red-400"}`}>
+              {cumReturn != null ? (
+                <>
+                  <span className="text-2xl">{isPositiveReturn ? "▲" : "▼"}</span>{" "}
+                  {Math.abs(cumReturn).toFixed(1)}%
+                </>
+              ) : (
+                <span className="text-muted-foreground text-2xl">—</span>
+              )}
+            </div>
+            <div className="text-xs text-muted-foreground mt-1">
+              {PERIOD_FILTERS[selectedPeriod].label === "ALL" ? "all time" : PERIOD_FILTERS[selectedPeriod].label} cumulative return
+            </div>
           </div>
         </div>
+
+        {/* Committees inline */}
+        {committees.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mt-4">
+            {committees.slice(0, 4).map((c, i) => (
+              <span key={i} className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md bg-muted/50 border border-border/50 text-muted-foreground">
+                <Building2 className="w-3 h-3" />
+                {c.committee}
+              </span>
+            ))}
+            {committees.length > 4 && (
+              <span className="text-[11px] px-2 py-0.5 text-muted-foreground">+{committees.length - 4} more</span>
+            )}
+          </div>
+        )}
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <Landmark className="w-4 h-4 text-blue-400" />
-              <span className="text-xs text-muted-foreground">Total Trades</span>
+      {/* ─── Performance Chart ─── */}
+      <Card className="overflow-hidden">
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+              <Activity className="w-4 h-4" />
+              Portfolio Performance
+            </CardTitle>
+            {/* Period Selectors */}
+            <div className="flex gap-1">
+              {PERIOD_FILTERS.map((p, i) => (
+                <button
+                  key={p.label}
+                  onClick={() => setSelectedPeriod(i)}
+                  className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                    selectedPeriod === i
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
             </div>
-            <div className="text-2xl font-bold font-mono-data">{politician.total_trades}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <ShoppingCart className="w-4 h-4 text-green-400" />
-              <span className="text-xs text-muted-foreground">Buys</span>
+          </div>
+        </CardHeader>
+        <CardContent className="pt-0 pb-4">
+          {chartData.length > 1 ? (
+            <div className="h-56">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="perfGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor={isPositiveReturn ? "#10b981" : "#ef4444"} stopOpacity={0.3} />
+                      <stop offset="95%" stopColor={isPositiveReturn ? "#10b981" : "#ef4444"} stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#333" vertical={false} />
+                  <XAxis
+                    dataKey="label"
+                    tick={{ fontSize: 11, fill: "#666" }}
+                    axisLine={false}
+                    tickLine={false}
+                    interval="preserveStartEnd"
+                  />
+                  <YAxis
+                    tick={{ fontSize: 11, fill: "#666" }}
+                    tickFormatter={(v) => `${v}%`}
+                    axisLine={false}
+                    tickLine={false}
+                    width={50}
+                  />
+                  <RechartsTooltip
+                    contentStyle={{
+                      background: "#0f0f1a",
+                      border: "1px solid #2a2a3e",
+                      borderRadius: "10px",
+                      fontSize: "12px",
+                      boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
+                    }}
+                    formatter={(value) => [`${Number(value) > 0 ? "+" : ""}${value}%`, "Cumulative Return"]}
+                    labelFormatter={(label) => label}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="cumReturn"
+                    stroke={isPositiveReturn ? "#10b981" : "#ef4444"}
+                    fill="url(#perfGradient)"
+                    strokeWidth={2.5}
+                    dot={false}
+                    activeDot={{ r: 4, fill: isPositiveReturn ? "#10b981" : "#ef4444" }}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
             </div>
-            <div className="text-2xl font-bold font-mono-data text-green-400">
-              {politician.total_buys ?? buys}
+          ) : (
+            <div className="h-56 flex items-center justify-center text-sm text-muted-foreground">
+              Not enough data to chart for this period
             </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <Package className="w-4 h-4 text-red-400" />
-              <span className="text-xs text-muted-foreground">Sells</span>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ─── Stats Row ─── */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="rounded-xl border border-border bg-card p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <div className="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center">
+              <CircleDollarSign className="w-4 h-4 text-emerald-400" />
             </div>
-            <div className="text-2xl font-bold font-mono-data text-red-400">
-              {politician.total_sells ?? sells}
+            <span className="text-xs text-muted-foreground">Est. AUM</span>
+          </div>
+          <div className="text-xl font-bold font-mono">{stats.estAum > 0 ? formatLargeNumber(stats.estAum) : "—"}</div>
+        </div>
+
+        <div className="rounded-xl border border-border bg-card p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <div className="w-8 h-8 rounded-lg bg-amber-500/10 flex items-center justify-center">
+              <Clock className="w-4 h-4 text-amber-400" />
             </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <Calendar className="w-4 h-4 text-muted-foreground" />
-              <span className="text-xs text-muted-foreground">Last Trade</span>
+            <span className="text-xs text-muted-foreground">Avg. Delay</span>
+          </div>
+          <div className="text-xl font-bold font-mono">
+            {stats.avgDelay != null ? `${Math.round(stats.avgDelay)}d` : "—"}
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-border bg-card p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <div className="w-8 h-8 rounded-lg bg-blue-500/10 flex items-center justify-center">
+              <Briefcase className="w-4 h-4 text-blue-400" />
             </div>
-            <div className="text-sm font-medium mt-1">
-              {politician.last_trade_date
-                ? timeAgo(politician.last_trade_date)
-                : "-"}
+            <span className="text-xs text-muted-foreground">Active Stocks</span>
+          </div>
+          <div className="text-xl font-bold font-mono">{stats.activeStocks}</div>
+        </div>
+
+        <div className="rounded-xl border border-border bg-card p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <div className="w-8 h-8 rounded-lg bg-purple-500/10 flex items-center justify-center">
+              <TrendingUp className="w-4 h-4 text-purple-400" />
             </div>
-          </CardContent>
-        </Card>
+            <span className="text-xs text-muted-foreground">Win Rate</span>
+          </div>
+          <div className="text-xl font-bold font-mono">
+            {politician.win_rate != null
+              ? `${politician.win_rate.toFixed(0)}%`
+              : stats.winRate != null
+                ? `${stats.winRate.toFixed(0)}%`
+                : "—"}
+          </div>
+          {stats.tradesWithReturn > 0 && (
+            <div className="text-[10px] text-muted-foreground mt-0.5">
+              {stats.winners}W / {stats.tradesWithReturn - stats.winners}L
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* Tickers traded */}
-      {tickers.length > 0 && (
-        <div className="space-y-2">
-          <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Stocks Traded</h2>
-          <div className="flex flex-wrap gap-2">
-            {tickers.map((t) => {
-              const tickerTrades = stockTrades.filter((tr) => tr.ticker === t);
-              const buyCount = tickerTrades.filter((tr) => tr.tx_type === "purchase").length;
-              const sellCount = tickerTrades.length - buyCount;
+      {/* ─── Current Holdings (Allocation) ─── */}
+      {holdings.length > 0 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                <BarChart3 className="w-4 h-4" />
+                Current Holdings
+              </CardTitle>
+              <span className="text-xs text-muted-foreground">{holdings.length} positions</span>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-2.5">
+            {holdings.slice(0, 15).map((h) => {
+              const hasReturn = h.returnPct != null;
+              const isPos = (h.returnPct ?? 0) >= 0;
               return (
-                <div key={t} className="flex items-center gap-1.5 bg-muted/50 border border-border/50 rounded-lg px-3 py-1.5">
-                  <span className="font-mono-data text-sm font-medium">{t}</span>
-                  {buyCount > 0 && <span className="text-[10px] text-green-400">{buyCount}B</span>}
-                  {sellCount > 0 && <span className="text-[10px] text-red-400">{sellCount}S</span>}
+                <div key={h.ticker} className="group">
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-lg bg-muted/50 border border-border/50 flex items-center justify-center">
+                        <span className="text-[10px] font-bold font-mono">{h.ticker.slice(0, 3)}</span>
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-sm font-bold">{h.ticker}</span>
+                          {h.isHolding ? (
+                            <Badge variant="outline" className="text-[9px] h-4 border-emerald-500/30 text-emerald-400 px-1.5">
+                              HOLDING
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="text-[9px] h-4 border-muted-foreground/30 text-muted-foreground px-1.5">
+                              CLOSED
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-muted-foreground">
+                          {h.totalBuys}B{h.totalSells > 0 ? ` / ${h.totalSells}S` : ""}
+                          {h.entryPrice != null && <> · Entry {formatPrice(h.entryPrice)}</>}
+                          {h.currentPrice != null && <> · Now {formatPrice(h.currentPrice)}</>}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="text-right">
+                      <div className="flex items-center gap-3">
+                        {hasReturn && (
+                          <span className={`text-sm font-mono font-semibold ${isPos ? "text-emerald-400" : "text-red-400"}`}>
+                            {formatPnl(h.returnPct)}
+                          </span>
+                        )}
+                        <span className="text-sm font-mono text-muted-foreground w-12 text-right">
+                          {h.allocationPct.toFixed(0)}%
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Allocation Bar */}
+                  <div className="h-1.5 rounded-full bg-muted/30 overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all duration-500 ${
+                        hasReturn
+                          ? isPos
+                            ? "bg-emerald-500/60"
+                            : "bg-red-500/60"
+                          : "bg-blue-500/40"
+                      }`}
+                      style={{ width: `${Math.min(h.allocationPct, 100)}%` }}
+                    />
+                  </div>
                 </div>
               );
             })}
-          </div>
-        </div>
-      )}
-
-      {/* Committees */}
-      {committees.length > 0 && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Building2 className="w-4 h-4" />
-              Committee Assignments
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              {committees.map((c, i) => (
-                <div key={i} className="p-3 rounded-lg bg-muted/30 border border-border/50">
-                  <div className="text-sm font-medium">{c.committee}</div>
-                  {c.subcommittee && (
-                    <div className="text-xs text-muted-foreground mt-0.5">{c.subcommittee}</div>
-                  )}
-                </div>
-              ))}
-            </div>
+            {holdings.length > 15 && (
+              <div className="text-xs text-muted-foreground text-center pt-2">
+                + {holdings.length - 15} more positions
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
 
-      {/* Stock trades */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
-            Trade History {stockTrades.length > 0 && `(${stockTrades.length})`}
-          </h2>
+      {/* ─── Trade Activity Summary ─── */}
+      <div className="grid grid-cols-3 gap-3">
+        <div className="rounded-xl border border-border bg-card p-4 text-center">
+          <div className="text-2xl font-bold font-mono">{politician.total_trades}</div>
+          <div className="text-xs text-muted-foreground mt-1">Total Trades</div>
         </div>
-
-        {stockTrades.length === 0 ? (
-          <Card>
-            <CardContent className="py-8 text-center text-muted-foreground text-sm">
-              {ptrFilings.length > 0
-                ? `${ptrFilings.length} PTR filings found, but no individual stock trades with tickers in the data.`
-                : "No trade data available."}
-            </CardContent>
-          </Card>
-        ) : (
-          stockTrades.map((trade, i) => (
-            <Card key={i} className="hover:border-border/80 transition-colors">
-              <CardContent className="p-4">
-                <div className="flex items-center gap-3">
-                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
-                    trade.tx_type === "purchase" ? "bg-green-500/10" : "bg-red-500/10"
-                  }`}>
-                    {trade.tx_type === "purchase" ? (
-                      <ArrowUpRight className="w-4 h-4 text-green-400" />
-                    ) : (
-                      <ArrowDownRight className="w-4 h-4 text-red-400" />
-                    )}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono-data text-sm font-bold">{trade.ticker}</span>
-                      <span className="text-xs text-muted-foreground">
-                        {trade.tx_type === "purchase" ? "Bought" : "Sold"}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2 mt-0.5 text-xs text-muted-foreground">
-                      {trade.asset_description && trade.asset_description !== trade.ticker && (
-                        <span className="truncate max-w-[250px]">{trade.asset_description}</span>
-                      )}
-                      {trade.amount_low && trade.amount_high && (
-                        <span>{formatAmount(trade.amount_low, trade.amount_high)}</span>
-                      )}
-                    </div>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <div className="text-xs text-muted-foreground">{timeAgo(trade.disclosure_date || trade.tx_date)}</div>
-                    {trade.tx_date && (
-                      <div className="text-[10px] text-muted-foreground/60 mt-0.5">
-                        Traded {new Date(trade.tx_date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                      </div>
-                    )}
-                    {trade.disclosure_delay_days != null && trade.disclosure_delay_days > 0 && (
-                      <div className="text-[10px] text-yellow-400/70 mt-0.5">
-                        {trade.disclosure_delay_days}d delay
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))
-        )}
+        <div className="rounded-xl border border-border bg-card p-4 text-center">
+          <div className="text-2xl font-bold font-mono text-emerald-400">{buys}</div>
+          <div className="text-xs text-muted-foreground mt-1">Buys</div>
+        </div>
+        <div className="rounded-xl border border-border bg-card p-4 text-center">
+          <div className="text-2xl font-bold font-mono text-red-400">{sells}</div>
+          <div className="text-xs text-muted-foreground mt-1">Sells</div>
+        </div>
       </div>
+
+      {/* ─── Trade Updates Timeline ─── */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+            <Calendar className="w-4 h-4" />
+            Trade Updates
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {stockTrades.length === 0 ? (
+            <div className="py-8 text-center text-muted-foreground text-sm">
+              No stock trades recorded yet.
+            </div>
+          ) : (
+            <div className="relative">
+              {/* Timeline line */}
+              <div className="absolute left-[17px] top-2 bottom-2 w-px bg-border" />
+
+              <div className="space-y-0">
+                {stockTrades
+                  .sort((a, b) => new Date(b.tx_date || b.disclosure_date).getTime() - new Date(a.tx_date || a.disclosure_date).getTime())
+                  .slice(0, 30)
+                  .map((trade, i) => {
+                    const isBuy = trade.tx_type === "purchase";
+                    const hasPnl = trade.return_since_disclosure != null;
+                    const pnlPositive = (trade.return_since_disclosure ?? 0) >= 0;
+                    const tradeDate = new Date(trade.tx_date || trade.disclosure_date);
+
+                    return (
+                      <div key={i} className="relative flex gap-4 py-3 group">
+                        {/* Timeline dot */}
+                        <div
+                          className={`relative z-10 mt-0.5 w-[9px] h-[9px] rounded-full border-2 shrink-0 ml-[13px] ${
+                            isBuy
+                              ? "border-emerald-400 bg-emerald-400/20"
+                              : "border-red-400 bg-red-400/20"
+                          }`}
+                        />
+
+                        {/* Content */}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-mono text-sm font-bold">{trade.ticker}</span>
+                            <span className={`text-xs font-medium ${isBuy ? "text-emerald-400" : "text-red-400"}`}>
+                              {isBuy ? "Bought" : "Sold"}
+                            </span>
+                            {trade.amount_low != null && trade.amount_high != null && (
+                              <span className="text-xs text-muted-foreground">
+                                {formatAmount(trade.amount_low, trade.amount_high)}
+                              </span>
+                            )}
+                            {hasPnl && (
+                              <span
+                                className={`inline-flex items-center gap-0.5 text-xs font-mono font-semibold ${
+                                  pnlPositive ? "text-emerald-400" : "text-red-400"
+                                }`}
+                              >
+                                {pnlPositive ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                                {formatPnl(trade.return_since_disclosure)}
+                              </span>
+                            )}
+                          </div>
+
+                          {trade.asset_description && trade.asset_description !== trade.ticker && (
+                            <div className="text-[11px] text-muted-foreground/60 truncate max-w-sm mt-0.5">
+                              {trade.asset_description}
+                            </div>
+                          )}
+
+                          <div className="flex items-center gap-3 mt-1 text-[11px] text-muted-foreground">
+                            <span>
+                              {tradeDate.toLocaleDateString("en-US", {
+                                month: "short",
+                                day: "numeric",
+                                year: "numeric",
+                              })}
+                            </span>
+                            {trade.price_at_disclosure != null && (
+                              <span>Entry: {formatPrice(trade.price_at_disclosure)}</span>
+                            )}
+                            {trade.price_current != null && (
+                              <span>Now: {formatPrice(trade.price_current)}</span>
+                            )}
+                            {trade.disclosure_delay_days != null && trade.disclosure_delay_days > 0 && (
+                              <span className="text-amber-400/70">{trade.disclosure_delay_days}d delay</span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Buy/Sell icon */}
+                        <div className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${
+                          isBuy ? "bg-emerald-500/10" : "bg-red-500/10"
+                        }`}>
+                          {isBuy ? (
+                            <ArrowUpRight className="w-4 h-4 text-emerald-400" />
+                          ) : (
+                            <ArrowDownRight className="w-4 h-4 text-red-400" />
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+
+              {stockTrades.length > 30 && (
+                <div className="text-xs text-muted-foreground text-center pt-3 border-t border-border/50">
+                  Showing latest 30 of {stockTrades.length} trades
+                </div>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

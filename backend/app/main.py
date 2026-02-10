@@ -1,6 +1,8 @@
 """SmartFlow API - Copy the smartest money in the world."""
 
 import logging
+import os
+import resource
 from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -35,11 +37,15 @@ logger = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler()
 
 
+def _get_memory_mb():
+    """Get current RSS memory usage in MB."""
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+
+
 async def _run_initial_ingestions():
     """Run all initial ingestions in background so the app starts immediately."""
     import asyncio
-    # Small delay to let the app finish starting and pass Railway health check
-    await asyncio.sleep(5)
+    await asyncio.sleep(30)
 
     for name, fn in [
         ("Trump & inner circle data", run_trump_data_ingestion),
@@ -49,70 +55,88 @@ async def _run_initial_ingestions():
         ("Polymarket traders", run_polymarket_ingestion),
         ("Kalshi markets", run_kalshi_ingestion),
         ("13F hedge fund holdings", run_13f_ingestion),
+        ("Politician stats + prices", run_performance_update),
     ]:
         try:
-            logger.info(f"Background ingestion: {name}...")
+            logger.info(f"Background ingestion: {name}... (mem: {_get_memory_mb():.0f} MB)")
             result = await fn()
             logger.info(f"{name}: {result}")
-        except Exception as e:
+        except BaseException as e:
             logger.error(f"{name} ingestion failed (will retry on schedule): {e}")
+            if isinstance(e, (SystemExit, KeyboardInterrupt)):
+                raise
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import asyncio
 
-    # Startup - init DB only (fast)
+    # Phase 1: Init DB (fast, required)
     logger.info("Initializing database...")
-    await init_db()
-    logger.info("Database ready. App is accepting requests.")
+    try:
+        await init_db()
+    except Exception as e:
+        logger.error(f"Database init failed: {e}")
 
-    # Run ingestions in background (non-blocking)
-    asyncio.create_task(_run_initial_ingestions())
+    logger.info(f"Database ready. Memory: {_get_memory_mb():.0f} MB.")
 
-    # Schedule periodic jobs
-    scheduler.add_job(
-        run_ingestion, "interval",
-        minutes=INGESTION_INTERVAL_MINUTES,
-        id="congress", name="Congressional trade ingestion",
-    )
-    scheduler.add_job(
-        run_13f_ingestion, "interval",
-        hours=6,  # 13F filings are quarterly, check every 6h
-        id="hedge_funds", name="13F hedge fund ingestion",
-    )
-    scheduler.add_job(
-        run_insider_ingestion, "interval",
-        hours=2,  # Form 4 filings come in daily
-        id="insiders", name="Form 4 insider trade ingestion",
-    )
-    scheduler.add_job(
-        run_polymarket_ingestion, "interval",
-        minutes=30,  # Polymarket positions change frequently
-        id="polymarket", name="Polymarket trader ingestion",
-    )
-    scheduler.add_job(
-        run_kalshi_ingestion, "interval",
-        hours=1,
-        id="kalshi", name="Kalshi market data ingestion",
-    )
-    scheduler.add_job(
-        run_committee_ingestion, "interval",
-        hours=24,  # Committees change rarely
-        id="committees", name="Committee assignment ingestion",
-    )
-    scheduler.add_job(
-        run_performance_update, "interval",
-        minutes=INGESTION_INTERVAL_MINUTES * 2,
-        id="performance", name="Price and performance update",
-    )
-    scheduler.start()
-    logger.info("All schedulers started")
+    # Phase 2: Setup scheduler (wrapped so it never blocks startup)
+    try:
+        scheduler.add_job(
+            run_ingestion, "interval",
+            minutes=INGESTION_INTERVAL_MINUTES,
+            id="congress", name="Congressional trade ingestion",
+        )
+        scheduler.add_job(
+            run_13f_ingestion, "interval",
+            hours=6,
+            id="hedge_funds", name="13F hedge fund ingestion",
+        )
+        scheduler.add_job(
+            run_insider_ingestion, "interval",
+            hours=2,
+            id="insiders", name="Form 4 insider trade ingestion",
+        )
+        scheduler.add_job(
+            run_polymarket_ingestion, "interval",
+            minutes=30,
+            id="polymarket", name="Polymarket trader ingestion",
+        )
+        scheduler.add_job(
+            run_kalshi_ingestion, "interval",
+            hours=1,
+            id="kalshi", name="Kalshi market data ingestion",
+        )
+        scheduler.add_job(
+            run_committee_ingestion, "interval",
+            hours=24,
+            id="committees", name="Committee assignment ingestion",
+        )
+        scheduler.add_job(
+            run_performance_update, "interval",
+            minutes=INGESTION_INTERVAL_MINUTES * 2,
+            id="performance", name="Price and performance update",
+        )
+        scheduler.start()
+        logger.info("All 7 schedulers started")
+    except Exception as e:
+        logger.error(f"Scheduler setup failed (app will still run): {e}")
+
+    # Phase 3: Background ingestion (non-blocking, 30s delay)
+    try:
+        asyncio.create_task(_run_initial_ingestions())
+    except Exception as e:
+        logger.error(f"Failed to create ingestion task: {e}")
+
+    logger.info("Lifespan complete - app is accepting requests.")
 
     yield
 
-    scheduler.shutdown()
-    logger.info("Scheduler stopped")
+    try:
+        scheduler.shutdown()
+    except Exception:
+        pass
+    logger.info("Shutting down.")
 
 
 app = FastAPI(
@@ -123,7 +147,7 @@ app = FastAPI(
         "corporate insider trades (Form 4), and prediction market whales (Polymarket/Kalshi). "
         "Built for European investors."
     ),
-    version="0.3.0",
+    version="0.4.0",
     lifespan=lifespan,
 )
 
@@ -151,7 +175,7 @@ app.include_router(optimizer_router, prefix="/api/v1")
 async def root():
     return {
         "name": "SmartFlow API",
-        "version": "0.3.0",
+        "version": "0.4.0",
         "docs": "/docs",
         "description": "Copy the smartest money - Congress, hedge funds, insiders, prediction markets, Trump tracker",
         "endpoints": {
@@ -171,4 +195,19 @@ async def root():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "version": "0.4.0", "branch": "claude/investment-tracking-app-phNcX"}
+
+
+@app.get("/debug")
+async def debug():
+    """Diagnostic endpoint showing memory, env, and process info."""
+    import sys
+    return {
+        "memory_mb": round(_get_memory_mb(), 1),
+        "python": sys.version,
+        "pid": os.getpid(),
+        "port": os.environ.get("PORT", "not set"),
+        "scheduler_running": scheduler.running,
+        "scheduled_jobs": len(scheduler.get_jobs()) if scheduler.running else 0,
+        "env_keys": sorted(os.environ.keys()),
+    }

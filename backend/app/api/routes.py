@@ -19,6 +19,31 @@ from app.services.alerts import check_and_generate_alerts
 from app.services.ingestion import run_ingestion
 from app.services.performance import run_performance_update
 
+
+def _trade_to_response(t: Trade) -> TradeResponse:
+    """Convert a Trade ORM object to a TradeResponse with all fields."""
+    return TradeResponse(
+        id=t.id,
+        chamber=t.chamber,
+        politician=t.politician,
+        party=t.party,
+        state=t.state,
+        ticker=t.ticker,
+        asset_description=t.asset_description,
+        tx_type=t.tx_type,
+        tx_date=t.tx_date,
+        disclosure_date=t.disclosure_date,
+        amount_low=t.amount_low,
+        amount_high=t.amount_high,
+        price_at_disclosure=t.price_at_disclosure,
+        price_current=t.price_current,
+        return_since_disclosure=t.return_since_disclosure,
+        disclosure_delay_days=(
+            (t.disclosure_date - t.tx_date).days
+            if t.disclosure_date and t.tx_date else None
+        ),
+    )
+
 router = APIRouter()
 
 
@@ -242,22 +267,7 @@ async def get_politician_detail(
             avg_return=None,
             win_rate=None,
             last_trade_date=last_date,
-            recent_trades=[
-                TradeResponse(
-                    id=t.id, chamber=t.chamber, politician=t.politician,
-                    party=t.party, state=t.state, ticker=t.ticker,
-                    asset_description=t.asset_description, tx_type=t.tx_type,
-                    tx_date=t.tx_date, disclosure_date=t.disclosure_date,
-                    amount_low=t.amount_low, amount_high=t.amount_high,
-                    price_at_disclosure=t.price_at_disclosure,
-                    return_since_disclosure=t.return_since_disclosure,
-                    disclosure_delay_days=(
-                        (t.disclosure_date - t.tx_date).days
-                        if t.disclosure_date and t.tx_date else None
-                    ),
-                )
-                for t in trades
-            ],
+            recent_trades=[_trade_to_response(t) for t in trades],
         )
 
     trades_stmt = (
@@ -281,30 +291,7 @@ async def get_politician_detail(
         avg_return=politician.avg_return,
         win_rate=politician.win_rate,
         last_trade_date=politician.last_trade_date,
-        recent_trades=[
-            TradeResponse(
-                id=t.id,
-                chamber=t.chamber,
-                politician=t.politician,
-                party=t.party,
-                state=t.state,
-                ticker=t.ticker,
-                asset_description=t.asset_description,
-                tx_type=t.tx_type,
-                tx_date=t.tx_date,
-                disclosure_date=t.disclosure_date,
-                amount_low=t.amount_low,
-                amount_high=t.amount_high,
-                price_at_disclosure=t.price_at_disclosure,
-                return_since_disclosure=t.return_since_disclosure,
-                disclosure_delay_days=(
-                    (t.disclosure_date - t.tx_date).days
-                    if t.disclosure_date and t.tx_date
-                    else None
-                ),
-            )
-            for t in trades
-        ],
+        recent_trades=[_trade_to_response(t) for t in trades],
     )
 
 

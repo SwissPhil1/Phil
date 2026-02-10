@@ -55,6 +55,7 @@ router = APIRouter()
 
 @router.get("/trades", response_model=list[TradeResponse])
 async def get_trades(
+    search: str | None = None,
     chamber: str | None = None,
     politician: str | None = None,
     party: str | None = None,
@@ -66,11 +67,18 @@ async def get_trades(
     page_size: int = Query(default=50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get trades with optional filters."""
+    """Get trades with optional filters.
+
+    Use `search` to do a combined politician OR ticker search (ILIKE).
+    """
     since = datetime.utcnow() - timedelta(days=days)
     # Only return real stock trades (not PTR filing metadata)
     stmt = select(Trade).where(Trade.disclosure_date >= since).where(Trade.ticker.isnot(None))
 
+    if search:
+        stmt = stmt.where(
+            Trade.politician.ilike(f"%{search}%") | Trade.ticker.ilike(f"%{search}%")
+        )
     if chamber:
         stmt = stmt.where(Trade.chamber == chamber.lower())
     if politician:
@@ -537,10 +545,10 @@ async def trigger_historical_ingestion(
 
 @router.post("/admin/backfill-parties")
 async def backfill_parties(db: AsyncSession = Depends(get_db)):
-    """Backfill party/state for senate trades using fuzzy name matching."""
+    """Backfill party/state for trades AND politicians using fuzzy name matching."""
     from app.services.historical_ingestion import _lookup_party
 
-    # Find all distinct politicians missing party data (NULL or empty)
+    # 1. Backfill Trade rows missing party
     stmt = (
         select(Trade.politician)
         .where((Trade.party.is_(None)) | (Trade.party == ""))
@@ -549,7 +557,7 @@ async def backfill_parties(db: AsyncSession = Depends(get_db)):
     result = await db.execute(stmt)
     politicians = [row[0] for row in result.all()]
 
-    updated = 0
+    trades_updated = 0
     for pol_name in politicians:
         party, state = _lookup_party(pol_name)
         if party:
@@ -559,10 +567,46 @@ async def backfill_parties(db: AsyncSession = Depends(get_db)):
                 .where((Trade.party.is_(None)) | (Trade.party == ""))
                 .values(party=party, state=state)
             )
-            updated += 1
+            trades_updated += 1
+
+    # 2. Backfill Politician table rows missing party
+    pol_stmt = (
+        select(Politician)
+        .where((Politician.party.is_(None)) | (Politician.party == ""))
+    )
+    pol_result = await db.execute(pol_stmt)
+    null_pols = pol_result.scalars().all()
+
+    pols_updated = 0
+    for pol in null_pols:
+        # First check if any of their trades already have party data
+        trade_party = await db.execute(
+            select(Trade.party, Trade.state).where(
+                Trade.politician == pol.name,
+                Trade.party.isnot(None),
+                Trade.party != "",
+            ).limit(1)
+        )
+        row = trade_party.first()
+        if row:
+            pol.party = row[0]
+            pol.state = row[1] or pol.state
+            pols_updated += 1
+        else:
+            # Fall back to lookup dict
+            party, state = _lookup_party(pol.name)
+            if party:
+                pol.party = party
+                pol.state = state or pol.state
+                pols_updated += 1
 
     await db.commit()
-    return {"politicians_updated": updated, "total_missing": len(politicians)}
+    return {
+        "trades_politicians_updated": trades_updated,
+        "trades_total_missing": len(politicians),
+        "politician_table_updated": pols_updated,
+        "politician_table_total_missing": len(null_pols),
+    }
 
 
 @router.get("/admin/test-prices")

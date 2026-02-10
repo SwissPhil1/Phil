@@ -43,61 +43,216 @@ AMOUNT_RANGES = {
     "Over $50,000,000": (50000001, None),
 }
 
-# Known senator party affiliations (partial list, covers most active traders)
+# Comprehensive party affiliations covering senators (current + recent) and key House members.
+# Includes both common names AND formal eFD names to avoid mismatches.
 SENATOR_PARTIES = {
+    # --- Senate: current & recent (2012-present) ---
+    # Alabama
     "Tommy Tuberville": ("R", "AL"),
-    "Markwayne Mullin": ("R", "OK"),
-    "Pete Ricketts": ("R", "NE"),
-    "Cynthia Lummis": ("R", "WY"),
-    "Bill Hagerty": ("R", "TN"),
-    "John Hickenlooper": ("D", "CO"),
-    "Mark Kelly": ("D", "AZ"),
-    "Gary Peters": ("D", "MI"),
-    "Sheldon Whitehouse": ("D", "RI"),
-    "Thomas Carper": ("D", "DE"),
-    "John Hoeven": ("R", "ND"),
-    "Susan Collins": ("R", "ME"),
-    "Angus King": ("I", "ME"),
-    "Jacky Rosen": ("D", "NV"),
-    "Jerry Moran": ("R", "KS"),
+    "Thomas H Tuberville": ("R", "AL"),
+    "Katie Britt": ("R", "AL"),
+    "Katie Boyd Britt": ("R", "AL"),
+    "Richard Shelby": ("R", "AL"),
+    "Doug Jones": ("D", "AL"),
+    # Alaska
     "Dan Sullivan": ("R", "AK"),
-    "Rick Scott": ("R", "FL"),
-    "Tim Scott": ("R", "SC"),
-    "Mitt Romney": ("R", "UT"),
-    "Ron Wyden": ("D", "OR"),
-    "Dianne Feinstein": ("D", "CA"),
-    "Pat Toomey": ("R", "PA"),
-    "Richard Burr": ("R", "NC"),
-    "Kelly Loeffler": ("R", "GA"),
-    "David Perdue": ("R", "GA"),
-    "James Inhofe": ("R", "OK"),
-    "Rand Paul": ("R", "KY"),
-    "John Boozman": ("R", "AR"),
-    "Roger Marshall": ("R", "KS"),
-    "Mitch McConnell": ("R", "KY"),
-    "Ted Cruz": ("R", "TX"),
+    "Lisa Murkowski": ("R", "AK"),
+    # Arizona
+    "Mark Kelly": ("D", "AZ"),
     "Kyrsten Sinema": ("I", "AZ"),
+    "Ruben Gallego": ("D", "AZ"),
+    "Martha McSally": ("R", "AZ"),
+    "Jeff Flake": ("R", "AZ"),
+    "John McCain": ("R", "AZ"),
+    # Arkansas
+    "John Boozman": ("R", "AR"),
+    "Tom Cotton": ("R", "AR"),
+    "Mark Pryor": ("D", "AR"),
+    # California
+    "Dianne Feinstein": ("D", "CA"),
+    "Alex Padilla": ("D", "CA"),
+    "Kamala Harris": ("D", "CA"),
+    "Adam Schiff": ("D", "CA"),
+    "Adam B Schiff": ("D", "CA"),
+    # Colorado
+    "John Hickenlooper": ("D", "CO"),
+    "John W Hickenlooper": ("D", "CO"),
+    "Michael Bennet": ("D", "CO"),
+    # Connecticut
+    "Chris Murphy": ("D", "CT"),
+    "Richard Blumenthal": ("D", "CT"),
+    # Delaware
+    "Thomas Carper": ("D", "DE"),
+    "Chris Coons": ("D", "DE"),
+    # Florida
+    "Rick Scott": ("R", "FL"),
+    "Marco Rubio": ("R", "FL"),
+    "Ashley Moody": ("R", "FL"),
+    "Bill Nelson": ("D", "FL"),
+    # Georgia
     "Jon Ossoff": ("D", "GA"),
     "Raphael Warnock": ("D", "GA"),
-    "Tina Smith": ("D", "MN"),
-    "Michael Bennet": ("D", "CO"),
-    "Joe Manchin": ("D", "WV"),
-    "Lindsey Graham": ("R", "SC"),
-    "Chris Coons": ("D", "DE"),
-    "Steve Daines": ("R", "MT"),
-    "Debbie Stabenow": ("D", "MI"),
-    "Thom Tillis": ("R", "NC"),
+    "Kelly Loeffler": ("R", "GA"),
+    "David Perdue": ("R", "GA"),
+    "Johnny Isakson": ("R", "GA"),
+    # Hawaii
+    "Mazie Hirono": ("D", "HI"),
+    "Brian Schatz": ("D", "HI"),
+    # Idaho
     "Mike Crapo": ("R", "ID"),
-    "Marco Rubio": ("R", "FL"),
-    "John Cornyn": ("R", "TX"),
-    "Marsha Blackburn": ("R", "TN"),
-    "Patrick Leahy": ("D", "VT"),
-    "Patty Murray": ("D", "WA"),
+    "Jim Risch": ("R", "ID"),
+    # Illinois
+    "Dick Durbin": ("D", "IL"),
+    "Tammy Duckworth": ("D", "IL"),
+    "Ladda Tammy Duckworth": ("D", "IL"),
+    # Indiana
+    "Todd Young": ("R", "IN"),
+    "Mike Braun": ("R", "IN"),
+    "Jim Banks": ("R", "IN"),
+    "James Banks": ("R", "IN"),
+    # Iowa
     "Chuck Grassley": ("R", "IA"),
-    "Sherrod Brown": ("D", "OH"),
-    "Bob Casey": ("D", "PA"),
+    "Joni Ernst": ("R", "IA"),
+    # Kansas
+    "Jerry Moran": ("R", "KS"),
+    "Roger Marshall": ("R", "KS"),
+    # Kentucky
+    "Mitch McConnell": ("R", "KY"),
+    "A. Mitchell McConnell": ("R", "KY"),
+    "Rand Paul": ("R", "KY"),
+    # Louisiana
+    "Bill Cassidy": ("R", "LA"),
+    "William Cassidy": ("R", "LA"),
+    "John N Kennedy": ("R", "LA"),
+    "John Kennedy": ("R", "LA"),
+    # Maine
+    "Susan Collins": ("R", "ME"),
+    "Susan M Collins": ("R", "ME"),
+    "Angus King": ("I", "ME"),
+    "Angus S King": ("I", "ME"),
+    # Maryland
+    "Chris Van Hollen": ("D", "MD"),
+    "Ben Cardin": ("D", "MD"),
+    "Angela Alsobrooks": ("D", "MD"),
+    # Massachusetts
     "Elizabeth Warren": ("D", "MA"),
+    "Ed Markey": ("D", "MA"),
+    # Michigan
+    "Gary Peters": ("D", "MI"),
+    "Debbie Stabenow": ("D", "MI"),
+    "Elissa Slotkin": ("D", "MI"),
+    # Minnesota
+    "Tina Smith": ("D", "MN"),
+    "Amy Klobuchar": ("D", "MN"),
+    # Mississippi
+    "Cindy Hyde-Smith": ("R", "MS"),
+    "Roger Wicker": ("R", "MS"),
+    "Roger F Wicker": ("R", "MS"),
+    # Missouri
+    "Josh Hawley": ("R", "MO"),
+    "Eric Schmitt": ("R", "MO"),
+    "Roy Blunt": ("R", "MO"),
+    # Montana
+    "Steve Daines": ("R", "MT"),
+    "Jon Tester": ("D", "MT"),
+    "Tim Sheehy": ("R", "MT"),
+    # Nebraska
+    "Pete Ricketts": ("R", "NE"),
+    "Deb Fischer": ("R", "NE"),
+    "Debra S Fischer": ("R", "NE"),
+    # Nevada
+    "Jacky Rosen": ("D", "NV"),
+    "Catherine Cortez Masto": ("D", "NV"),
+    # New Hampshire
+    "Jeanne Shaheen": ("D", "NH"),
+    "Maggie Hassan": ("D", "NH"),
+    # New Jersey
+    "Cory Booker": ("D", "NJ"),
+    "Cory A Booker": ("D", "NJ"),
+    "Andy Kim": ("D", "NJ"),
+    "Bob Menendez": ("D", "NJ"),
+    # New Mexico
+    "Martin Heinrich": ("D", "NM"),
+    "Ben Ray Lujan": ("D", "NM"),
+    # New York
+    "Chuck Schumer": ("D", "NY"),
+    "Kirsten Gillibrand": ("D", "NY"),
+    # North Carolina
+    "Thom Tillis": ("R", "NC"),
+    "Richard Burr": ("R", "NC"),
+    "Ted Budd": ("R", "NC"),
+    # North Dakota
+    "John Hoeven": ("R", "ND"),
+    "Kevin Cramer": ("R", "ND"),
+    # Ohio
+    "Sherrod Brown": ("D", "OH"),
+    "J.D. Vance": ("R", "OH"),
+    "Rob Portman": ("R", "OH"),
+    "Bernie Moreno": ("R", "OH"),
+    # Oklahoma
+    "Markwayne Mullin": ("R", "OK"),
+    "James Inhofe": ("R", "OK"),
+    "James Lankford": ("R", "OK"),
+    # Oregon
+    "Ron Wyden": ("D", "OR"),
+    "Ron L Wyden": ("D", "OR"),
+    "Jeff Merkley": ("D", "OR"),
+    # Pennsylvania
+    "Bob Casey": ("D", "PA"),
+    "Pat Toomey": ("R", "PA"),
+    "John Fetterman": ("D", "PA"),
+    "Dave McCormick": ("R", "PA"),
+    "David McCormick": ("R", "PA"),
+    "David H McCormick": ("R", "PA"),
+    # Rhode Island
+    "Sheldon Whitehouse": ("D", "RI"),
+    "Jack Reed": ("D", "RI"),
+    "John F Reed": ("D", "RI"),
+    # South Carolina
+    "Lindsey Graham": ("R", "SC"),
+    "Tim Scott": ("R", "SC"),
+    # South Dakota
+    "John Thune": ("R", "SD"),
+    "John R Thune": ("R", "SD"),
+    "Mike Rounds": ("R", "SD"),
+    # Tennessee
+    "Bill Hagerty": ("R", "TN"),
+    "William F Hagerty": ("R", "TN"),
+    "Marsha Blackburn": ("R", "TN"),
+    "Lamar Alexander": ("R", "TN"),
+    # Texas
+    "Ted Cruz": ("R", "TX"),
+    "John Cornyn": ("R", "TX"),
+    # Utah
+    "Mitt Romney": ("R", "UT"),
+    "Mike Lee": ("R", "UT"),
+    # Vermont
+    "Patrick Leahy": ("D", "VT"),
     "Bernie Sanders": ("I", "VT"),
+    "Peter Welch": ("D", "VT"),
+    # Virginia
+    "Mark Warner": ("D", "VA"),
+    "Mark R Warner": ("D", "VA"),
+    "Tim Kaine": ("D", "VA"),
+    "Timothy M Kaine": ("D", "VA"),
+    # Washington
+    "Patty Murray": ("D", "WA"),
+    "Maria Cantwell": ("D", "WA"),
+    # West Virginia
+    "Joe Manchin": ("D", "WV"),
+    "Shelley Capito": ("R", "WV"),
+    "Shelley M Capito": ("R", "WV"),
+    "Shelley Moore Capito": ("R", "WV"),
+    "Jim Justice": ("R", "WV"),
+    "James Conley Justice": ("R", "WV"),
+    # Wisconsin
+    "Tammy Baldwin": ("D", "WI"),
+    "Ron Johnson": ("R", "WI"),
+    "Eric Hovde": ("R", "WI"),
+    # Wyoming
+    "Cynthia Lummis": ("R", "WY"),
+    "John Barrasso": ("R", "WY"),
+    # --- Key House members ---
     "Nancy Pelosi": ("D", "CA"),
     "Daniel Goldman": ("D", "NY"),
     "Josh Gottheimer": ("D", "NJ"),
@@ -108,6 +263,34 @@ SENATOR_PARTIES = {
     "Virginia Foxx": ("R", "NC"),
     "Marjorie Taylor Greene": ("R", "GA"),
     "Greg Gianforte": ("R", "MT"),
+    "Dan Crenshaw": ("R", "TX"),
+    "Suzan DelBene": ("D", "WA"),
+    "Suzan K. DelBene": ("D", "WA"),
+    "Steve Cohen": ("D", "TN"),
+    "Kelly Louise Morrison": ("D", "MN"),
+    "Sheri Biggs": ("R", "SC"),
+    "Cleo Fields": ("D", "LA"),
+    "David Taylor": ("R", "OH"),
+    "David J. Taylor": ("R", "OH"),
+    "Max Miller": ("R", "OH"),
+    "Michael Garcia": ("R", "CA"),
+    "Mike Garcia": ("R", "CA"),
+    "Debbie Wasserman Schultz": ("D", "FL"),
+    "Tom Malinowski": ("D", "NJ"),
+    "Kevin Brady": ("R", "TX"),
+    "Pat Fallon": ("R", "TX"),
+    "Blake Moore": ("R", "UT"),
+    "Marie Gluesenkamp Perez": ("D", "WA"),
+    "John Curtis": ("R", "UT"),
+    "French Hill": ("R", "AR"),
+    "Michael Cloud": ("R", "TX"),
+    "Lois Frankel": ("D", "FL"),
+    "Kathy Manning": ("D", "NC"),
+    "Kim Schrier": ("D", "WA"),
+    "Dean Phillips": ("D", "MN"),
+    "John Rutherford": ("R", "FL"),
+    "Bob Gibbs": ("R", "OH"),
+    "Tommy Tuberville": ("R", "AL"),
 }
 
 
@@ -121,24 +304,42 @@ for _full_name, _info in SENATOR_PARTIES.items():
 def _lookup_party(name: str) -> tuple[str | None, str | None]:
     """Fuzzy lookup of party/state from SENATOR_PARTIES.
 
-    Handles mismatches like 'Thomas H Tuberville' vs 'Tommy Tuberville'
-    by falling back to last-name matching.
+    Handles mismatches like 'Thomas H Tuberville' vs 'Tommy Tuberville',
+    trailing commas ('Angus S King,'), and Jr/III suffixes.
     """
-    # Try exact match first
-    if name in SENATOR_PARTIES:
-        info = SENATOR_PARTIES[name]
-        return info[0], info[1]
+    # Clean trailing commas / periods / whitespace
+    cleaned = name.strip().rstrip(",").rstrip(".").strip()
 
-    # Strip middle initial/name and try again: "Thomas H Tuberville" -> "Thomas Tuberville"
-    parts = name.split()
+    # Try exact match first
+    if cleaned in SENATOR_PARTIES:
+        return SENATOR_PARTIES[cleaned]
+
+    # Try original name (with comma) in case it's in the dict
+    if name in SENATOR_PARTIES:
+        return SENATOR_PARTIES[name]
+
+    parts = cleaned.split()
+    if not parts:
+        return None, None
+
+    # Strip middle initial/name: "Thomas H Tuberville" -> "Thomas Tuberville"
     if len(parts) >= 3:
         stripped = f"{parts[0]} {parts[-1]}"
         if stripped in SENATOR_PARTIES:
-            info = SENATOR_PARTIES[stripped]
-            return info[0], info[1]
+            return SENATOR_PARTIES[stripped]
 
-    # Try last name only (may have false positives but senators have unique last names mostly)
-    last = parts[-1].lower() if parts else ""
+    # Try first + last only (skip all middle parts): "A. Mitchell McConnell" -> last name match
+    # Also handles "John W Hickenlooper" -> "John Hickenlooper"
+    if len(parts) >= 2:
+        first_last = f"{parts[0]} {parts[-1]}"
+        if first_last in SENATOR_PARTIES:
+            return SENATOR_PARTIES[first_last]
+
+    # Try last name only (senators mostly have unique last names)
+    last = parts[-1].lower()
+    # Skip generic suffixes
+    if last in ("jr", "jr.", "ii", "iii", "iv", "sr", "sr.") and len(parts) >= 2:
+        last = parts[-2].lower()
     if last in _PARTY_BY_LAST_NAME:
         return _PARTY_BY_LAST_NAME[last]
 

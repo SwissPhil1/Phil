@@ -141,6 +141,8 @@ async def update_trade_prices(session: AsyncSession, limit: int = 100, force: bo
 
 async def rebuild_politician_stats(session: AsyncSession):
     """Recalculate aggregate stats for all politicians."""
+    from app.services.historical_ingestion import _lookup_party
+
     # Get all unique politicians
     stmt = select(Trade.politician, Trade.chamber, Trade.party, Trade.state, Trade.district).distinct()
     result = await session.execute(stmt)
@@ -150,6 +152,25 @@ async def rebuild_politician_stats(session: AsyncSession):
     _has_ticker = Trade.ticker.isnot(None)
 
     for pol_name, chamber, party, state, district in politicians:
+        # Prefer non-null party: check existing trades first, then fall back to lookup dict
+        if not party:
+            # Try to find party from other trade rows for this politician
+            party_row = await session.execute(
+                select(Trade.party, Trade.state).where(
+                    Trade.politician == pol_name,
+                    Trade.party.isnot(None),
+                    Trade.party != "",
+                ).limit(1)
+            )
+            row = party_row.first()
+            if row:
+                party, state = row[0], row[1] or state
+            else:
+                # Fall back to hardcoded lookup
+                looked_party, looked_state = _lookup_party(pol_name)
+                if looked_party:
+                    party = looked_party
+                    state = looked_state or state
         # Count only real stock trades (with tickers)
         total = await session.execute(
             select(func.count()).where(Trade.politician == pol_name).where(_has_ticker)

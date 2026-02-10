@@ -220,7 +220,13 @@ async def get_politician_detail(
 ):
     """Get detailed info for a specific politician including recent trades."""
     # Try the Politician table first (has pre-computed stats)
-    stmt = select(Politician).where(Politician.name.ilike(f"%{name}%"))
+    # Use order_by total_trades desc to pick the best match when multiple name variants exist
+    stmt = (
+        select(Politician)
+        .where(Politician.name.ilike(f"%{name}%"))
+        .order_by(Politician.total_trades.desc())
+        .limit(1)
+    )
     result = await db.execute(stmt)
     politician = result.scalar_one_or_none()
 

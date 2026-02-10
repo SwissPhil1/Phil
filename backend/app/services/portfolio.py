@@ -1,11 +1,13 @@
 """Portfolio simulation service.
 
 Computes NAV over time for a politician by simulating copy-trading:
-- Buy when they buy (using midpoint of disclosed amount range)
-- Sell when they sell (close or reduce position)
+- Each buy trade gets an EQUAL allocation (copy-trading style)
+- Sells close the position for that ticker
 - Track portfolio value weekly using actual historical prices from Yahoo Finance
 
-This produces a proper equity curve comparable to Autopilot's portfolio view.
+Equal-weight allocation mirrors how copy-trading products work: the STOCK Act
+ranges ($1K-$15K vs $5M-$25M) are just disclosure buckets, not investable
+amounts. Each trade signal gets the same capital allocation.
 """
 
 import asyncio
@@ -22,6 +24,9 @@ from app.models.database import Trade
 logger = logging.getLogger(__name__)
 
 YAHOO_HEADERS = {"User-Agent": "Mozilla/5.0"}
+
+# Equal $ allocated per buy trade (copy-trading standard)
+POSITION_SIZE = 10_000.0
 
 
 async def _fetch_weekly_prices(
@@ -87,9 +92,12 @@ async def compute_portfolio_simulation(
 ) -> dict:
     """Simulate a copy-trading portfolio for a politician.
 
-    For each BUY trade, invest the midpoint of the disclosed amount range
-    at the market price on the trade date. For each SELL, close (or reduce)
-    the position. Track portfolio NAV weekly using historical Yahoo prices.
+    Uses EQUAL-WEIGHT allocation: each buy trade gets $POSITION_SIZE
+    regardless of the disclosed STOCK Act range. This mirrors how
+    copy-trading products (like Autopilot) work.
+
+    Sells close the position for that ticker. Cash from sells funds
+    subsequent buys (no double-counting of reinvested capital).
 
     Returns:
         dict with nav_series (weekly data points), total_return, etc.
@@ -150,17 +158,12 @@ async def compute_portfolio_simulation(
     if weeks and (end_date - weeks[-1]).days > 3:
         weeks.append(end_date)
 
-    # 6. Simulate portfolio with proper cash accounting
+    # 6. Simulate portfolio — equal-weight, proper cash accounting
     #
-    # Key insight: when a politician sells stock and buys another, the sell
-    # proceeds fund the new purchase. We must NOT double-count that as fresh
-    # capital. We track a cash balance: sells add to cash, buys draw from
-    # cash first, and only inject new capital when cash is insufficient.
-    #
-    # For sells: generic "sale" is treated as proportional (amount / position
-    # value), not a full position closure, unless the amount is >= 90% of
-    # the position or the type is explicitly "sale_full".
-    positions: dict[str, dict] = {}  # ticker -> {shares, cost_basis}
+    # Each buy: allocate $POSITION_SIZE (equal weight, not STOCK Act amounts).
+    # Each sell: close position for that ticker (cash back to balance).
+    # Cash from sells funds future buys; only inject new capital when needed.
+    positions: dict[str, dict] = {}  # ticker -> {shares, cost}
     cash = 0.0  # Available cash from sell proceeds
     total_injected = 0.0  # Fresh capital injected (NOT recycled proceeds)
     trade_idx = 0
@@ -184,12 +187,8 @@ async def compute_portfolio_simulation(
                 trade_idx += 1
                 continue
 
-            # Investment amount (midpoint of disclosed range)
-            amount = 10_000.0
-            if t.amount_low and t.amount_high:
-                amount = (t.amount_low + t.amount_high) / 2
-
             if t.tx_type == "purchase":
+                amount = POSITION_SIZE
                 shares = amount / price
 
                 # Use existing cash (from prior sells) first, then inject
@@ -202,40 +201,28 @@ async def compute_portfolio_simulation(
 
                 if ticker in positions:
                     positions[ticker]["shares"] += shares
-                    positions[ticker]["cost_basis"] += amount
+                    positions[ticker]["cost"] += amount
                 else:
-                    positions[ticker] = {"shares": shares, "cost_basis": amount}
+                    positions[ticker] = {"shares": shares, "cost": amount}
 
             elif t.tx_type in ("sale", "sale_full", "sale_partial"):
                 if ticker in positions:
                     pos = positions[ticker]
                     current_value = pos["shares"] * price
 
-                    if t.tx_type == "sale_full":
-                        # Explicitly full sale — close entire position
+                    if t.tx_type == "sale_partial":
+                        # Explicitly partial — sell half
+                        sell_value = current_value * 0.5
+                        cash += sell_value
+                        pos["shares"] *= 0.5
+                        pos["cost"] *= 0.5
+                        if pos["shares"] <= 0.001:
+                            del positions[ticker]
+                    else:
+                        # "sale" or "sale_full" — close entire position
+                        # (politician signaled exit from this stock)
                         cash += current_value
                         del positions[ticker]
-                    else:
-                        # "sale" or "sale_partial": sell proportional to
-                        # disclosed amount; close entirely only if >= 90%
-                        sell_fraction = (
-                            min(amount / current_value, 1.0)
-                            if current_value > 0
-                            else 1.0
-                        )
-
-                        if sell_fraction >= 0.9:
-                            # Close to full — close position
-                            cash += current_value
-                            del positions[ticker]
-                        else:
-                            sold_shares = pos["shares"] * sell_fraction
-                            sell_value = sold_shares * price
-                            cash += sell_value
-                            pos["shares"] -= sold_shares
-                            pos["cost_basis"] *= 1 - sell_fraction
-                            if pos["shares"] <= 0.001:
-                                del positions[ticker]
 
             trade_idx += 1
 
@@ -246,7 +233,7 @@ async def compute_portfolio_simulation(
             if p:
                 holdings_value += pos["shares"] * p
             else:
-                holdings_value += pos["cost_basis"]  # fallback
+                holdings_value += pos["cost"]  # fallback
 
         total_value = holdings_value + cash
         return_pct = (

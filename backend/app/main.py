@@ -24,6 +24,7 @@ from app.services.committees import run_committee_ingestion
 from app.services.hedge_funds import run_13f_ingestion
 from app.services.ingestion import run_ingestion
 from app.services.insiders import run_insider_ingestion
+from app.services.historical_ingestion import run_historical_ingestion
 from app.services.performance import run_performance_update
 from app.services.prediction_markets import run_kalshi_ingestion, run_polymarket_ingestion
 from app.services.trump_tracker import run_trump_data_ingestion
@@ -55,7 +56,8 @@ async def _run_initial_ingestions():
         ("Polymarket traders", run_polymarket_ingestion),
         ("Kalshi markets", run_kalshi_ingestion),
         ("13F hedge fund holdings", run_13f_ingestion),
-        ("Politician stats + prices", run_performance_update),
+        ("Senate historical trades (2012+)", run_historical_ingestion),
+        ("Politician stats + prices", lambda: run_performance_update(price_limit=500)),
     ]:
         try:
             logger.info(f"Background ingestion: {name}... (mem: {_get_memory_mb():.0f} MB)")

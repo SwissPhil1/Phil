@@ -68,7 +68,8 @@ async def get_trades(
 ):
     """Get trades with optional filters."""
     since = datetime.utcnow() - timedelta(days=days)
-    stmt = select(Trade).where(Trade.disclosure_date >= since)
+    # Only return real stock trades (not PTR filing metadata)
+    stmt = select(Trade).where(Trade.disclosure_date >= since).where(Trade.ticker.isnot(None))
 
     if chamber:
         stmt = stmt.where(Trade.chamber == chamber.lower())
@@ -230,6 +231,9 @@ async def get_politician_detail(
     result = await db.execute(stmt)
     politician = result.scalar_one_or_none()
 
+    # Only return real stock trades (not PTR filing metadata)
+    _has_ticker = Trade.ticker.isnot(None)
+
     # Fallback: build profile from Trade data if Politician table not yet populated
     if not politician:
         # Find all name variants that match (e.g., "Tommy Tuberville" + "Thomas H Tuberville")
@@ -241,9 +245,9 @@ async def get_politician_detail(
         if not sample_trade:
             raise HTTPException(status_code=404, detail=f"Politician '{name}' not found")
 
-        # Use ilike filter for ALL aggregations to merge name variants
+        # Count only real stock trades (with tickers)
         total = (await db.execute(
-            select(func.count()).where(name_filter)
+            select(func.count()).where(name_filter).where(_has_ticker)
         )).scalar()
         buys = (await db.execute(
             select(func.count()).where(name_filter).where(Trade.tx_type == "purchase")
@@ -260,12 +264,12 @@ async def get_politician_detail(
         trades_stmt = (
             select(Trade)
             .where(name_filter)
+            .where(_has_ticker)
             .order_by(Trade.disclosure_date.desc())
             .limit(500)
         )
         trades = (await db.execute(trades_stmt)).scalars().all()
 
-        # Use the name variant that has the most trades
         display_name = sample_trade.politician
 
         return PoliticianDetail(
@@ -287,6 +291,7 @@ async def get_politician_detail(
     trades_stmt = (
         select(Trade)
         .where(Trade.politician.ilike(f"%{name}%"))
+        .where(_has_ticker)
         .order_by(Trade.disclosure_date.desc())
         .limit(500)
     )

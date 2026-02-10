@@ -519,6 +519,38 @@ async def trigger_historical_ingestion(
     }
 
 
+@router.post("/admin/backfill-parties")
+async def backfill_parties(db: AsyncSession = Depends(get_db)):
+    """Backfill party/state for senate trades using fuzzy name matching."""
+    from app.services.historical_ingestion import _lookup_party
+
+    from sqlalchemy import update
+
+    # Find all distinct politicians missing party data
+    stmt = (
+        select(Trade.politician)
+        .where(Trade.party.is_(None))
+        .distinct()
+    )
+    result = await db.execute(stmt)
+    politicians = [row[0] for row in result.all()]
+
+    updated = 0
+    for name in politicians:
+        party, state = _lookup_party(name)
+        if party:
+            await db.execute(
+                update(Trade)
+                .where(Trade.politician == name)
+                .where(Trade.party.is_(None))
+                .values(party=party, state=state)
+            )
+            updated += 1
+
+    await db.commit()
+    return {"politicians_updated": updated, "total_missing": len(politicians)}
+
+
 @router.get("/admin/test-prices")
 async def test_prices(ticker: str = Query(default="AAPL")):
     """Test price fetching using Yahoo v8 API (via httpx)."""

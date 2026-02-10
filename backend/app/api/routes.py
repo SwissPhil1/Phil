@@ -1,6 +1,9 @@
 """API routes for the Congress Trades app."""
 
+import logging
 from datetime import datetime, timedelta
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
@@ -465,6 +468,38 @@ async def trigger_price_update(
     """Manually trigger price updates. Use force=true to recalculate all."""
     result = await run_performance_update(price_limit=limit, force=force)
     return result
+
+
+@router.post("/admin/ingest-historical")
+async def trigger_historical_ingestion(
+    start_year: int = Query(default=2012, ge=2012, le=2026),
+    end_year: int = Query(default=2026, ge=2012, le=2026),
+):
+    """Ingest historical Senate trades from eFD PTR filings (2012-present).
+
+    This scrapes individual PTR pages for transaction-level data (ticker, date, amount).
+    Can take 10-30 minutes for a full run (2012-2026).
+    """
+    import asyncio
+
+    from app.services.historical_ingestion import run_historical_ingestion
+
+    years = list(range(start_year, end_year + 1))
+
+    # Run in background so the endpoint returns immediately
+    async def _run():
+        try:
+            result = await run_historical_ingestion(years=years)
+            logger.info(f"Historical ingestion finished: {result}")
+        except Exception as e:
+            logger.error(f"Historical ingestion failed: {e}")
+
+    asyncio.create_task(_run())
+    return {
+        "status": "started",
+        "years": years,
+        "message": f"Historical ingestion started for {start_year}-{end_year}. Check logs for progress.",
+    }
 
 
 @router.get("/admin/test-prices")

@@ -226,41 +226,45 @@ async def get_politician_detail(
 
     # Fallback: build profile from Trade data if Politician table not yet populated
     if not politician:
+        # Find all name variants that match (e.g., "Tommy Tuberville" + "Thomas H Tuberville")
+        name_filter = Trade.politician.ilike(f"%{name}%")
         trades_check = await db.execute(
-            select(Trade).where(Trade.politician.ilike(f"%{name}%")).limit(1)
+            select(Trade).where(name_filter).limit(1)
         )
         sample_trade = trades_check.scalar_one_or_none()
         if not sample_trade:
             raise HTTPException(status_code=404, detail=f"Politician '{name}' not found")
 
-        # Build stats from trades directly
-        pol_name = sample_trade.politician
+        # Use ilike filter for ALL aggregations to merge name variants
         total = (await db.execute(
-            select(func.count()).where(Trade.politician == pol_name)
+            select(func.count()).where(name_filter)
         )).scalar()
         buys = (await db.execute(
-            select(func.count()).where(Trade.politician == pol_name).where(Trade.tx_type == "purchase")
+            select(func.count()).where(name_filter).where(Trade.tx_type == "purchase")
         )).scalar()
         sells = (await db.execute(
-            select(func.count()).where(Trade.politician == pol_name).where(
+            select(func.count()).where(name_filter).where(
                 Trade.tx_type.in_(["sale", "sale_full", "sale_partial"])
             )
         )).scalar()
         last_date = (await db.execute(
-            select(func.max(Trade.tx_date)).where(Trade.politician == pol_name)
+            select(func.max(Trade.tx_date)).where(name_filter)
         )).scalar()
 
         trades_stmt = (
             select(Trade)
-            .where(Trade.politician == pol_name)
+            .where(name_filter)
             .order_by(Trade.disclosure_date.desc())
             .limit(500)
         )
         trades = (await db.execute(trades_stmt)).scalars().all()
 
+        # Use the name variant that has the most trades
+        display_name = sample_trade.politician
+
         return PoliticianDetail(
             id=0,
-            name=pol_name,
+            name=display_name,
             chamber=sample_trade.chamber,
             party=sample_trade.party,
             state=sample_trade.state,
@@ -273,9 +277,10 @@ async def get_politician_detail(
             recent_trades=[_trade_to_response(t) for t in trades],
         )
 
+    # Use ilike to also capture name variants (e.g., "Tommy Tuberville" + "Thomas H Tuberville")
     trades_stmt = (
         select(Trade)
-        .where(Trade.politician == politician.name)
+        .where(Trade.politician.ilike(f"%{name}%"))
         .order_by(Trade.disclosure_date.desc())
         .limit(500)
     )
@@ -288,7 +293,7 @@ async def get_politician_detail(
         chamber=politician.chamber,
         party=politician.party,
         state=politician.state,
-        total_trades=politician.total_trades,
+        total_trades=politician.total_trades or len(trades),
         total_buys=politician.total_buys,
         total_sells=politician.total_sells,
         avg_return=politician.avg_return,

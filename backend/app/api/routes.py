@@ -464,3 +464,33 @@ async def trigger_price_update(
     """Manually trigger price updates for trades (uses yfinance, rate-limited)."""
     result = await run_performance_update(price_limit=limit)
     return result
+
+
+@router.get("/admin/test-yfinance")
+async def test_yfinance(ticker: str = Query(default="AAPL")):
+    """Test if yfinance can fetch prices on this server."""
+    import traceback
+    from app.services.performance import get_current_price, get_price_on_date
+    errors = []
+    current = None
+    historical = None
+
+    try:
+        current = get_current_price(ticker)
+    except Exception as e:
+        errors.append(f"current_price error: {e}\n{traceback.format_exc()}")
+
+    try:
+        from datetime import datetime, timedelta
+        test_date = datetime.now() - timedelta(days=30)
+        historical = get_price_on_date(ticker, test_date)
+    except Exception as e:
+        errors.append(f"historical_price error: {e}\n{traceback.format_exc()}")
+
+    return {
+        "ticker": ticker,
+        "current_price": current,
+        "historical_price": historical,
+        "working": current is not None or historical is not None,
+        "errors": errors,
+    }

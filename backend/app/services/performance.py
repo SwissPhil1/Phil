@@ -19,12 +19,15 @@ def get_price_on_date(ticker: str, date: datetime) -> float | None:
         end = date + timedelta(days=5)
         data = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=True)
         if data.empty:
+            logger.warning(f"yfinance returned empty data for {ticker} on {date}")
             return None
         # Find nearest date
         idx = data.index.get_indexer([date], method="nearest")[0]
-        return float(data.iloc[idx]["Close"].iloc[0]) if hasattr(data.iloc[idx]["Close"], "iloc") else float(data.iloc[idx]["Close"])
+        price = float(data.iloc[idx]["Close"].iloc[0]) if hasattr(data.iloc[idx]["Close"], "iloc") else float(data.iloc[idx]["Close"])
+        logger.info(f"Price for {ticker} on {date.date()}: ${price:.2f}")
+        return price
     except Exception as e:
-        logger.debug(f"Could not fetch price for {ticker} on {date}: {e}")
+        logger.warning(f"Could not fetch price for {ticker} on {date}: {e}")
         return None
 
 
@@ -34,10 +37,13 @@ def get_current_price(ticker: str) -> float | None:
         t = yf.Ticker(ticker)
         hist = t.history(period="5d")
         if hist.empty:
+            logger.warning(f"yfinance returned empty history for {ticker}")
             return None
-        return float(hist["Close"].iloc[-1])
+        price = float(hist["Close"].iloc[-1])
+        logger.info(f"Current price for {ticker}: ${price:.2f}")
+        return price
     except Exception as e:
-        logger.debug(f"Could not fetch current price for {ticker}: {e}")
+        logger.warning(f"Could not fetch current price for {ticker}: {e}")
         return None
 
 

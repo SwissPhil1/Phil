@@ -1,7 +1,9 @@
 """API routes for conviction score backtesting and politician leaderboard."""
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.database import get_db
 from app.services.backtester import (
     backtest_conviction_scores,
     get_most_profitable_trades,
@@ -28,6 +30,28 @@ async def get_leaderboard(
         min_trades=min_trades,
         chamber=chamber,
     )
+
+
+@router.get("/portfolio-returns")
+async def get_portfolio_returns(
+    min_trades: int = Query(default=5, ge=1, description="Minimum priced buy trades to be included"),
+    sort_by: str = Query(default="equal_weight", description="Sort by: equal_weight or conviction_weighted"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Portfolio-simulated returns for all politicians (both equal-weight and conviction-weighted).
+
+    Uses stored prices from the DB — no Yahoo API calls, fast enough for a leaderboard.
+    Returns annual CAGR and total return for each politician under both strategies.
+    """
+    from app.services.portfolio import compute_leaderboard_returns
+
+    results = await compute_leaderboard_returns(db, min_priced_trades=min_trades)
+
+    if sort_by == "conviction_weighted":
+        results.sort(key=lambda x: x["conviction_weighted"]["annual_return"] or 0, reverse=True)
+
+    return results
 
 
 @router.get("/best-trades")

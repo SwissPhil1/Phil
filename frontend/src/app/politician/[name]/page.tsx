@@ -96,6 +96,12 @@ function filterTradesByPeriod(trades: Trade[], periodDays: number): Trade[] {
   });
 }
 
+/**
+ * Build chart data using a proper WEIGHTED portfolio return.
+ * Only purchases count toward portfolio return (buys open positions).
+ * Each trade's return is weighted by its dollar amount (mid of range).
+ * This models: "If you copied each buy with proportional dollars, what's the portfolio return?"
+ */
 function buildPerformanceChart(trades: Trade[]) {
   const sorted = [...trades]
     .filter((t) => t.tx_date || t.disclosure_date)
@@ -109,31 +115,50 @@ function buildPerformanceChart(trades: Trade[]) {
 
   const monthMap = new Map<
     string,
-    { cumReturn: number; count: number; buys: number; sells: number; volumeMid: number }
+    {
+      weightedReturn: number;
+      totalInvested: number;
+      count: number;
+      buys: number;
+      sells: number;
+      volumeMid: number;
+    }
   >();
-  let cumReturn = 0;
+
+  // Running totals for weighted return
+  let totalInvested = 0;
+  let totalWeightedReturn = 0;
 
   for (const t of sorted) {
     const d = new Date(t.tx_date || t.disclosure_date);
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-    const ret = t.return_since_disclosure ?? 0;
-    cumReturn += ret;
     const isBuy = t.tx_type === "purchase";
     const vol =
       t.amount_low != null && t.amount_high != null
         ? (t.amount_low + t.amount_high) / 2
         : 0;
 
+    // Only purchases contribute to portfolio return
+    if (isBuy && t.return_since_disclosure != null && vol > 0) {
+      totalInvested += vol;
+      totalWeightedReturn += vol * (t.return_since_disclosure / 100);
+    }
+
+    const portfolioReturn =
+      totalInvested > 0 ? (totalWeightedReturn / totalInvested) * 100 : 0;
+
     const existing = monthMap.get(key);
     if (existing) {
-      existing.cumReturn = cumReturn;
+      existing.weightedReturn = portfolioReturn;
+      existing.totalInvested = totalInvested;
       existing.count += 1;
       if (isBuy) existing.buys++;
       else existing.sells++;
       existing.volumeMid += vol;
     } else {
       monthMap.set(key, {
-        cumReturn,
+        weightedReturn: portfolioReturn,
+        totalInvested,
         count: 1,
         buys: isBuy ? 1 : 0,
         sells: isBuy ? 0 : 1,
@@ -162,7 +187,7 @@ function buildPerformanceChart(trades: Trade[]) {
     points.push({
       date: key,
       label: `${monthNames[parseInt(m) - 1]} '${y.slice(2)}`,
-      cumReturn: Number(val.cumReturn.toFixed(1)),
+      cumReturn: Number(val.weightedReturn.toFixed(1)),
       trades: val.count,
       buys: val.buys,
       sells: val.sells,
@@ -285,34 +310,46 @@ export default function PoliticianPage() {
 
   const stats = useMemo(() => {
     const trades = filteredTrades;
-    const buys = trades.filter((t) => t.tx_type === "purchase").length;
+    const buyTrades = trades.filter((t) => t.tx_type === "purchase");
+    const buys = buyTrades.length;
     const sells = trades.filter((t) => t.tx_type !== "purchase").length;
 
-    const tradesWithReturn = trades.filter(
+    // Only purchases count for portfolio performance
+    const buysWithReturn = buyTrades.filter(
       (t) => t.return_since_disclosure != null
     );
+    const tradesWithReturn = buysWithReturn.length;
+
+    // Weighted portfolio return (weight by dollar amount)
+    let totalInvested = 0;
+    let totalWeightedReturn = 0;
+    for (const t of buysWithReturn) {
+      const mid =
+        t.amount_low != null && t.amount_high != null
+          ? (t.amount_low + t.amount_high) / 2
+          : 0;
+      if (mid > 0) {
+        totalInvested += mid;
+        totalWeightedReturn += mid * ((t.return_since_disclosure ?? 0) / 100);
+      }
+    }
+    const cumReturn =
+      totalInvested > 0
+        ? (totalWeightedReturn / totalInvested) * 100
+        : null;
     const avgReturn =
-      tradesWithReturn.length > 0
-        ? tradesWithReturn.reduce(
+      buysWithReturn.length > 0
+        ? buysWithReturn.reduce(
             (s, t) => s + (t.return_since_disclosure ?? 0),
             0
-          ) / tradesWithReturn.length
+          ) / buysWithReturn.length
         : null;
-    const winners = tradesWithReturn.filter(
+    const winners = buysWithReturn.filter(
       (t) => (t.return_since_disclosure ?? 0) > 0
     ).length;
     const winRate =
-      tradesWithReturn.length > 0
-        ? (winners / tradesWithReturn.length) * 100
-        : null;
-
-    // Cumulative return (sum of individual trade returns)
-    const cumReturn =
-      tradesWithReturn.length > 0
-        ? tradesWithReturn.reduce(
-            (s, t) => s + (t.return_since_disclosure ?? 0),
-            0
-          )
+      buysWithReturn.length > 0
+        ? (winners / buysWithReturn.length) * 100
         : null;
 
     // Estimated AUM from mid-amounts
@@ -346,7 +383,7 @@ export default function PoliticianPage() {
       avgReturn,
       winRate,
       winners,
-      tradesWithReturn: tradesWithReturn.length,
+      tradesWithReturn,
       cumReturn,
       estAum,
       avgDelay,

@@ -460,9 +460,10 @@ async def trigger_ingestion():
 @router.post("/admin/update-prices")
 async def trigger_price_update(
     limit: int = Query(default=50, ge=1, le=500),
+    force: bool = Query(default=False),
 ):
-    """Manually trigger price updates for trades (uses yfinance, rate-limited)."""
-    result = await run_performance_update(price_limit=limit)
+    """Manually trigger price updates. Use force=true to recalculate all."""
+    result = await run_performance_update(price_limit=limit, force=force)
     return result
 
 

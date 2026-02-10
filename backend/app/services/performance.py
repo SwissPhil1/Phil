@@ -89,17 +89,16 @@ async def get_current_price(ticker: str) -> float | None:
         return None
 
 
-async def update_trade_prices(session: AsyncSession, limit: int = 100):
-    """Update prices for trades that don't have price data yet."""
-    stmt = (
-        select(Trade)
-        .where(Trade.price_at_disclosure.is_(None))
-        .where(Trade.ticker.isnot(None))
-        .where(Trade.disclosure_date.isnot(None))
-        .where(Trade.tx_type.in_(["purchase", "sale", "sale_partial", "sale_full"]))
-        .order_by(Trade.disclosure_date.desc())
-        .limit(limit)
+async def update_trade_prices(session: AsyncSession, limit: int = 100, force: bool = False):
+    """Update prices for trades that don't have price data yet (or all if force=True)."""
+    stmt = select(Trade).where(
+        Trade.ticker.isnot(None),
+        Trade.disclosure_date.isnot(None),
+        Trade.tx_type.in_(["purchase", "sale", "sale_partial", "sale_full"]),
     )
+    if not force:
+        stmt = stmt.where(Trade.price_at_disclosure.is_(None))
+    stmt = stmt.order_by(Trade.disclosure_date.desc()).limit(limit)
     result = await session.execute(stmt)
     trades = result.scalars().all()
 
@@ -114,8 +113,9 @@ async def update_trade_prices(session: AsyncSession, limit: int = 100):
 
         if price_at_disclosure and current_price:
             ret = ((current_price - price_at_disclosure) / price_at_disclosure) * 100
-            if trade.tx_type in ("sale", "sale_full", "sale_partial"):
-                ret = -ret  # Inverse for sales
+            # return_since_disclosure always represents stock price movement
+            # since disclosure, regardless of buy/sell. Portfolio logic on the
+            # frontend handles the sign based on position type.
 
             await session.execute(
                 update(Trade)
@@ -235,9 +235,9 @@ async def rebuild_politician_stats(session: AsyncSession):
     logger.info(f"Rebuilt stats for {len(politicians)} politicians")
 
 
-async def run_performance_update(price_limit: int = 100):
+async def run_performance_update(price_limit: int = 100, force: bool = False):
     """Run full performance update cycle."""
     async with async_session() as session:
-        updated = await update_trade_prices(session, limit=price_limit)
+        updated = await update_trade_prices(session, limit=price_limit, force=force)
         await rebuild_politician_stats(session)
         return {"prices_updated": updated}

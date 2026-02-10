@@ -468,29 +468,54 @@ async def trigger_price_update(
 
 @router.get("/admin/test-yfinance")
 async def test_yfinance(ticker: str = Query(default="AAPL")):
-    """Test if yfinance can fetch prices on this server."""
+    """Test price fetching with multiple methods."""
     import traceback
-    from app.services.performance import get_current_price, get_price_on_date
-    errors = []
-    current = None
-    historical = None
+    import httpx
+    results = {}
 
+    # Method 1: yfinance
     try:
-        current = get_current_price(ticker)
+        from app.services.performance import get_current_price, get_price_on_date
+        yf_current = get_current_price(ticker)
+        results["yfinance_current"] = yf_current
     except Exception as e:
-        errors.append(f"current_price error: {e}\n{traceback.format_exc()}")
+        results["yfinance_error"] = f"{e}"
 
+    # Method 2: Direct Yahoo Finance v8 API
     try:
-        from datetime import datetime, timedelta
-        test_date = datetime.now() - timedelta(days=30)
-        historical = get_price_on_date(ticker, test_date)
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=5d&interval=1d"
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
+            results["yahoo_api_status"] = resp.status_code
+            if resp.status_code == 200:
+                data = resp.json()
+                closes = data.get("chart", {}).get("result", [{}])[0].get("indicators", {}).get("quote", [{}])[0].get("close", [])
+                valid_closes = [c for c in closes if c is not None]
+                results["yahoo_api_price"] = valid_closes[-1] if valid_closes else None
+            else:
+                results["yahoo_api_body"] = resp.text[:200]
     except Exception as e:
-        errors.append(f"historical_price error: {e}\n{traceback.format_exc()}")
+        results["yahoo_api_error"] = f"{e}"
 
-    return {
-        "ticker": ticker,
-        "current_price": current,
-        "historical_price": historical,
-        "working": current is not None or historical is not None,
-        "errors": errors,
-    }
+    # Method 3: Yahoo Finance v7 (crumb-free)
+    try:
+        url = f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{ticker}?modules=price"
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
+            results["yahoo_v10_status"] = resp.status_code
+            if resp.status_code == 200:
+                data = resp.json()
+                price_data = data.get("quoteSummary", {}).get("result", [{}])[0].get("price", {})
+                results["yahoo_v10_price"] = price_data.get("regularMarketPrice", {}).get("raw")
+            else:
+                results["yahoo_v10_body"] = resp.text[:200]
+    except Exception as e:
+        results["yahoo_v10_error"] = f"{e}"
+
+    has_price = any(
+        results.get(k) is not None
+        for k in ["yfinance_current", "yahoo_api_price", "yahoo_v10_price"]
+    )
+    results["working"] = has_price
+    results["ticker"] = ticker
+    return results

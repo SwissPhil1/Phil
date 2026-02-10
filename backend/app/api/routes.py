@@ -61,7 +61,7 @@ async def get_trades(
     state: str | None = None,
     ticker: str | None = None,
     tx_type: str | None = None,
-    days: int = Query(default=90, ge=1, le=3650),
+    days: int = Query(default=365, ge=1, le=7300),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),

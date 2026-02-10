@@ -183,8 +183,9 @@ def _parse_date(date_str: str | None) -> datetime | None:
 
 
 def _clean_html(text: str) -> str:
-    """Remove HTML tags and decode entities."""
-    text = re.sub(r"<[^>]+>", "", text).strip()
+    """Remove HTML tags, whitespace, and decode entities."""
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
     text = text.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
     text = text.replace("&#39;", "'").replace("&quot;", '"')
     return text.strip()
@@ -352,7 +353,7 @@ async def _parse_ptr_page(client: httpx.AsyncClient, uuid: str) -> list[dict]:
         # Skip row number column (cells[0])
         tx_date_str = _clean_html(cells[1])
         # cells[2] = Owner (Self, Spouse, Child, Joint)
-        ticker = _clean_html(cells[3])
+        raw_ticker = _clean_html(cells[3])
         asset_name = _clean_html(cells[4])
         asset_type = _clean_html(cells[5]) if len(cells) > 5 else ""
         tx_type = _clean_html(cells[6]) if len(cells) > 6 else ""
@@ -360,8 +361,11 @@ async def _parse_ptr_page(client: httpx.AsyncClient, uuid: str) -> list[dict]:
         comment = _clean_html(cells[8]) if len(cells) > 8 else ""
 
         # Skip non-stock/non-ticker entries
-        if not ticker or ticker in ("--", "N/A", ""):
+        if not raw_ticker or raw_ticker in ("--", "N/A", ""):
             continue
+
+        # Take only the first ticker if multiple (e.g., exchange: "FTV VNT")
+        ticker = raw_ticker.split()[0] if raw_ticker else raw_ticker
 
         trades.append(
             {

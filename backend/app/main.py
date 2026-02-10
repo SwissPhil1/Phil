@@ -1,4 +1,7 @@
-"""SmartFlow API - Copy the smartest money in the world."""
+"""SmartFlow API - Copy the smartest money in the world.
+
+Now backed by PostgreSQL for persistent data across deploys.
+"""
 
 import logging
 import os

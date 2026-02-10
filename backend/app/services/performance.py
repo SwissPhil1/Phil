@@ -146,10 +146,13 @@ async def rebuild_politician_stats(session: AsyncSession):
     result = await session.execute(stmt)
     politicians = result.all()
 
+    # Filter for real stock trades (not PTR filing metadata)
+    _has_ticker = Trade.ticker.isnot(None)
+
     for pol_name, chamber, party, state, district in politicians:
-        # Count trades
+        # Count only real stock trades (with tickers)
         total = await session.execute(
-            select(func.count()).where(Trade.politician == pol_name)
+            select(func.count()).where(Trade.politician == pol_name).where(_has_ticker)
         )
         total_trades = total.scalar()
 

@@ -462,10 +462,27 @@ async def trigger_ingestion():
 
 @router.post("/admin/update-prices")
 async def trigger_price_update(
-    limit: int = Query(default=50, ge=1, le=500),
+    limit: int = Query(default=50, ge=1, le=5000),
     force: bool = Query(default=False),
+    background: bool = Query(default=False),
 ):
-    """Manually trigger price updates. Use force=true to recalculate all."""
+    """Manually trigger price updates. Use force=true to recalculate all.
+
+    For large batches (>100), use background=true to avoid timeouts.
+    """
+    if background:
+        import asyncio
+
+        async def _run():
+            try:
+                result = await run_performance_update(price_limit=limit, force=force)
+                logger.info(f"Background price update finished: {result}")
+            except Exception as e:
+                logger.error(f"Background price update failed: {e}")
+
+        asyncio.create_task(_run())
+        return {"status": "started", "limit": limit, "force": force}
+
     result = await run_performance_update(price_limit=limit, force=force)
     return result
 

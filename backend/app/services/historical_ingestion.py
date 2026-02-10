@@ -111,6 +111,40 @@ SENATOR_PARTIES = {
 }
 
 
+# Build a lookup index: last_name -> (party, state) for fuzzy matching
+_PARTY_BY_LAST_NAME: dict[str, tuple[str, str]] = {}
+for _full_name, _info in SENATOR_PARTIES.items():
+    _last = _full_name.split()[-1].lower()
+    _PARTY_BY_LAST_NAME[_last] = _info
+
+
+def _lookup_party(name: str) -> tuple[str | None, str | None]:
+    """Fuzzy lookup of party/state from SENATOR_PARTIES.
+
+    Handles mismatches like 'Thomas H Tuberville' vs 'Tommy Tuberville'
+    by falling back to last-name matching.
+    """
+    # Try exact match first
+    if name in SENATOR_PARTIES:
+        info = SENATOR_PARTIES[name]
+        return info[0], info[1]
+
+    # Strip middle initial/name and try again: "Thomas H Tuberville" -> "Thomas Tuberville"
+    parts = name.split()
+    if len(parts) >= 3:
+        stripped = f"{parts[0]} {parts[-1]}"
+        if stripped in SENATOR_PARTIES:
+            info = SENATOR_PARTIES[stripped]
+            return info[0], info[1]
+
+    # Try last name only (may have false positives but senators have unique last names mostly)
+    last = parts[-1].lower() if parts else ""
+    if last in _PARTY_BY_LAST_NAME:
+        return _PARTY_BY_LAST_NAME[last]
+
+    return None, None
+
+
 def _parse_amount(amount_str: str | None) -> tuple[float | None, float | None]:
     if not amount_str:
         return None, None
@@ -380,9 +414,7 @@ async def ingest_senate_historical(
                         amount_low, amount_high = _parse_amount(trade["amount"])
                         tx_type = _normalize_tx_type(trade["tx_type"])
 
-                        party_info = SENATOR_PARTIES.get(filing["name"])
-                        party = party_info[0] if party_info else None
-                        state = party_info[1] if party_info else None
+                        party, state = _lookup_party(filing["name"])
 
                         trade_data = {
                             "chamber": "senate",

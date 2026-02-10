@@ -142,12 +142,18 @@ async def lifespan(app: FastAPI):
             id="committees", name="Committee assignment ingestion",
         )
         scheduler.add_job(
+            lambda: run_capitoltrades_ingestion(chamber="house", max_pages=20),
+            "interval",
+            hours=6,
+            id="capitoltrades", name="CapitolTrades House trade refresh",
+        )
+        scheduler.add_job(
             run_performance_update, "interval",
             minutes=INGESTION_INTERVAL_MINUTES * 2,
             id="performance", name="Price and performance update",
         )
         scheduler.start()
-        logger.info("All 7 schedulers started")
+        logger.info("All 8 schedulers started")
     except Exception as e:
         logger.error(f"Scheduler setup failed (app will still run): {e}")
 

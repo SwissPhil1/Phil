@@ -14,6 +14,5 @@ RUN mkdir -p /app/data
 
 EXPOSE 8000
 
-# Use shell form so $PORT gets expanded at runtime
-# Railway sets PORT dynamically; default to 8000 for local dev
-CMD exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
+# Use Python launcher for proper error logging on Railway
+CMD ["python", "run.py"]

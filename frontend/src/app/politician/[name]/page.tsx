@@ -25,10 +25,13 @@ import {
   ResponsiveContainer,
   AreaChart,
   Area,
+  BarChart,
+  Bar,
   XAxis,
   YAxis,
   Tooltip as RechartsTooltip,
   CartesianGrid,
+  Cell,
 } from "recharts";
 
 type PoliticianDetail = Politician & {
@@ -93,6 +96,12 @@ function filterTradesByPeriod(trades: Trade[], periodDays: number): Trade[] {
   });
 }
 
+/**
+ * Build chart data using a proper WEIGHTED portfolio return.
+ * Only purchases count toward portfolio return (buys open positions).
+ * Each trade's return is weighted by its dollar amount (mid of range).
+ * This models: "If you copied each buy with proportional dollars, what's the portfolio return?"
+ */
 function buildPerformanceChart(trades: Trade[]) {
   const sorted = [...trades]
     .filter((t) => t.tx_date || t.disclosure_date)
@@ -104,21 +113,57 @@ function buildPerformanceChart(trades: Trade[]) {
 
   if (sorted.length === 0) return [];
 
-  // Build monthly aggregation of cumulative return
-  let cumReturn = 0;
-  const monthMap = new Map<string, { cumReturn: number; count: number }>();
+  const monthMap = new Map<
+    string,
+    {
+      weightedReturn: number;
+      totalInvested: number;
+      count: number;
+      buys: number;
+      sells: number;
+      volumeMid: number;
+    }
+  >();
+
+  // Running totals for weighted return
+  let totalInvested = 0;
+  let totalWeightedReturn = 0;
 
   for (const t of sorted) {
     const d = new Date(t.tx_date || t.disclosure_date);
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-    const ret = t.return_since_disclosure ?? 0;
-    cumReturn += ret;
+    const isBuy = t.tx_type === "purchase";
+    const vol =
+      t.amount_low != null && t.amount_high != null
+        ? (t.amount_low + t.amount_high) / 2
+        : 0;
+
+    // Only purchases contribute to portfolio return
+    if (isBuy && t.return_since_disclosure != null && vol > 0) {
+      totalInvested += vol;
+      totalWeightedReturn += vol * (t.return_since_disclosure / 100);
+    }
+
+    const portfolioReturn =
+      totalInvested > 0 ? (totalWeightedReturn / totalInvested) * 100 : 0;
+
     const existing = monthMap.get(key);
     if (existing) {
-      existing.cumReturn = cumReturn;
+      existing.weightedReturn = portfolioReturn;
+      existing.totalInvested = totalInvested;
       existing.count += 1;
+      if (isBuy) existing.buys++;
+      else existing.sells++;
+      existing.volumeMid += vol;
     } else {
-      monthMap.set(key, { cumReturn, count: 1 });
+      monthMap.set(key, {
+        weightedReturn: portfolioReturn,
+        totalInvested,
+        count: 1,
+        buys: isBuy ? 1 : 0,
+        sells: isBuy ? 0 : 1,
+        volumeMid: vol,
+      });
     }
   }
 
@@ -126,15 +171,27 @@ function buildPerformanceChart(trades: Trade[]) {
     "Jan", "Feb", "Mar", "Apr", "May", "Jun",
     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
   ];
-  const points: { date: string; label: string; cumReturn: number; trades: number }[] = [];
+
+  const points: {
+    date: string;
+    label: string;
+    cumReturn: number;
+    trades: number;
+    buys: number;
+    sells: number;
+    volumeK: number;
+  }[] = [];
 
   for (const [key, val] of monthMap) {
     const [y, m] = key.split("-");
     points.push({
       date: key,
       label: `${monthNames[parseInt(m) - 1]} '${y.slice(2)}`,
-      cumReturn: Number(val.cumReturn.toFixed(1)),
+      cumReturn: Number(val.weightedReturn.toFixed(1)),
       trades: val.count,
+      buys: val.buys,
+      sells: val.sells,
+      volumeK: Math.round(val.volumeMid / 1000),
     });
   }
 
@@ -253,34 +310,46 @@ export default function PoliticianPage() {
 
   const stats = useMemo(() => {
     const trades = filteredTrades;
-    const buys = trades.filter((t) => t.tx_type === "purchase").length;
+    const buyTrades = trades.filter((t) => t.tx_type === "purchase");
+    const buys = buyTrades.length;
     const sells = trades.filter((t) => t.tx_type !== "purchase").length;
 
-    const tradesWithReturn = trades.filter(
+    // Only purchases count for portfolio performance
+    const buysWithReturn = buyTrades.filter(
       (t) => t.return_since_disclosure != null
     );
+    const tradesWithReturn = buysWithReturn.length;
+
+    // Weighted portfolio return (weight by dollar amount)
+    let totalInvested = 0;
+    let totalWeightedReturn = 0;
+    for (const t of buysWithReturn) {
+      const mid =
+        t.amount_low != null && t.amount_high != null
+          ? (t.amount_low + t.amount_high) / 2
+          : 0;
+      if (mid > 0) {
+        totalInvested += mid;
+        totalWeightedReturn += mid * ((t.return_since_disclosure ?? 0) / 100);
+      }
+    }
+    const cumReturn =
+      totalInvested > 0
+        ? (totalWeightedReturn / totalInvested) * 100
+        : null;
     const avgReturn =
-      tradesWithReturn.length > 0
-        ? tradesWithReturn.reduce(
+      buysWithReturn.length > 0
+        ? buysWithReturn.reduce(
             (s, t) => s + (t.return_since_disclosure ?? 0),
             0
-          ) / tradesWithReturn.length
+          ) / buysWithReturn.length
         : null;
-    const winners = tradesWithReturn.filter(
+    const winners = buysWithReturn.filter(
       (t) => (t.return_since_disclosure ?? 0) > 0
     ).length;
     const winRate =
-      tradesWithReturn.length > 0
-        ? (winners / tradesWithReturn.length) * 100
-        : null;
-
-    // Cumulative return (sum of individual trade returns)
-    const cumReturn =
-      tradesWithReturn.length > 0
-        ? tradesWithReturn.reduce(
-            (s, t) => s + (t.return_since_disclosure ?? 0),
-            0
-          )
+      buysWithReturn.length > 0
+        ? (winners / buysWithReturn.length) * 100
         : null;
 
     // Estimated AUM from mid-amounts
@@ -314,7 +383,7 @@ export default function PoliticianPage() {
       avgReturn,
       winRate,
       winners,
-      tradesWithReturn: tradesWithReturn.length,
+      tradesWithReturn,
       cumReturn,
       estAum,
       avgDelay,
@@ -327,6 +396,7 @@ export default function PoliticianPage() {
       ? "all time"
       : PERIOD_FILTERS[selectedPeriod].label;
 
+  const hasReturnData = stats.tradesWithReturn > 0;
   const isPositiveReturn = (stats.cumReturn ?? 0) >= 0;
 
   // ─── Loading ───
@@ -430,25 +500,34 @@ export default function PoliticianPage() {
             </div>
           </div>
 
-          {/* Big Return Number */}
+          {/* Big Return Number or Volume */}
           <div className="text-right">
-            <div
-              className={`text-4xl font-bold tracking-tight font-mono ${isPositiveReturn ? "text-emerald-400" : "text-red-400"}`}
-            >
-              {stats.cumReturn != null ? (
-                <>
+            {hasReturnData ? (
+              <>
+                <div
+                  className={`text-4xl font-bold tracking-tight font-mono ${isPositiveReturn ? "text-emerald-400" : "text-red-400"}`}
+                >
                   <span className="text-2xl">
                     {isPositiveReturn ? "▲" : "▼"}
                   </span>{" "}
-                  {Math.abs(stats.cumReturn).toFixed(1)}%
-                </>
-              ) : (
-                <span className="text-muted-foreground text-2xl">—</span>
-              )}
-            </div>
-            <div className="text-xs text-muted-foreground mt-1">
-              {periodLabel} cumulative return
-            </div>
+                  {Math.abs(stats.cumReturn ?? 0).toFixed(1)}%
+                </div>
+                <div className="text-xs text-muted-foreground mt-1">
+                  {periodLabel} cumulative return
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="text-4xl font-bold tracking-tight font-mono text-blue-400">
+                  {stats.estAum > 0 ? formatLargeNumber(stats.estAum) : `${stats.totalTrades}`}
+                </div>
+                <div className="text-xs text-muted-foreground mt-1">
+                  {stats.estAum > 0
+                    ? `${periodLabel} est. volume`
+                    : `${periodLabel} trades`}
+                </div>
+              </>
+            )}
           </div>
         </div>
 
@@ -479,7 +558,7 @@ export default function PoliticianPage() {
           <div className="flex items-center justify-between">
             <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
               <Activity className="w-4 h-4" />
-              Portfolio Performance
+              {hasReturnData ? "Portfolio Performance" : "Trading Activity"}
             </CardTitle>
             {/* Period Selectors */}
             <div className="flex gap-1">
@@ -500,94 +579,150 @@ export default function PoliticianPage() {
           </div>
         </CardHeader>
         <CardContent className="pt-0 pb-4">
-          {chartData.length > 1 ? (
-            <div className="h-56">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart
-                  data={chartData}
-                  margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
-                >
-                  <defs>
-                    <linearGradient
-                      id="perfGradient"
-                      x1="0"
-                      y1="0"
-                      x2="0"
-                      y2="1"
-                    >
-                      <stop
-                        offset="5%"
-                        stopColor={isPositiveReturn ? "#10b981" : "#ef4444"}
-                        stopOpacity={0.3}
-                      />
-                      <stop
-                        offset="95%"
-                        stopColor={isPositiveReturn ? "#10b981" : "#ef4444"}
-                        stopOpacity={0}
-                      />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid
-                    strokeDasharray="3 3"
-                    stroke="#333"
-                    vertical={false}
-                  />
-                  <XAxis
-                    dataKey="label"
-                    tick={{ fontSize: 11, fill: "#666" }}
-                    axisLine={false}
-                    tickLine={false}
-                    interval="preserveStartEnd"
-                  />
-                  <YAxis
-                    tick={{ fontSize: 11, fill: "#666" }}
-                    tickFormatter={(v) => `${v}%`}
-                    axisLine={false}
-                    tickLine={false}
-                    width={50}
-                  />
-                  <RechartsTooltip
-                    contentStyle={{
-                      background: "#0f0f1a",
-                      border: "1px solid #2a2a3e",
-                      borderRadius: "10px",
-                      fontSize: "12px",
-                      boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
-                    }}
-                    formatter={(value) => [
-                      `${Number(value) > 0 ? "+" : ""}${value}%`,
-                      "Cumulative Return",
-                    ]}
-                    labelFormatter={(label) => `${label}`}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="cumReturn"
-                    stroke={isPositiveReturn ? "#10b981" : "#ef4444"}
-                    fill="url(#perfGradient)"
-                    strokeWidth={2.5}
-                    dot={false}
-                    activeDot={{
-                      r: 4,
-                      fill: isPositiveReturn ? "#10b981" : "#ef4444",
-                    }}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          ) : chartData.length === 1 ? (
-            <div className="h-56 flex items-center justify-center">
-              <div className="text-center">
-                <div className="text-3xl font-bold font-mono mb-1">
-                  {chartData[0].cumReturn > 0 ? "+" : ""}
-                  {chartData[0].cumReturn}%
-                </div>
-                <div className="text-sm text-muted-foreground">
-                  {chartData[0].trades} trade{chartData[0].trades !== 1 ? "s" : ""} in{" "}
-                  {chartData[0].label}
+          {chartData.length > 0 ? (
+            hasReturnData ? (
+              /* ─── Return Chart (when price data exists) ─── */
+              <div className="h-56">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart
+                    data={chartData}
+                    margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
+                  >
+                    <defs>
+                      <linearGradient id="perfGradient" x1="0" y1="0" x2="0" y2="1">
+                        <stop
+                          offset="5%"
+                          stopColor={isPositiveReturn ? "#10b981" : "#ef4444"}
+                          stopOpacity={0.3}
+                        />
+                        <stop
+                          offset="95%"
+                          stopColor={isPositiveReturn ? "#10b981" : "#ef4444"}
+                          stopOpacity={0}
+                        />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#333" vertical={false} />
+                    <XAxis
+                      dataKey="label"
+                      tick={{ fontSize: 11, fill: "#666" }}
+                      axisLine={false}
+                      tickLine={false}
+                      interval="preserveStartEnd"
+                    />
+                    <YAxis
+                      tick={{ fontSize: 11, fill: "#666" }}
+                      tickFormatter={(v) => `${v}%`}
+                      axisLine={false}
+                      tickLine={false}
+                      width={50}
+                    />
+                    <RechartsTooltip
+                      contentStyle={{
+                        background: "#0f0f1a",
+                        border: "1px solid #2a2a3e",
+                        borderRadius: "10px",
+                        fontSize: "12px",
+                        boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
+                      }}
+                      formatter={(value) => [
+                        `${Number(value) > 0 ? "+" : ""}${value}%`,
+                        "Cumulative Return",
+                      ]}
+                      labelFormatter={(label) => `${label}`}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="cumReturn"
+                      stroke={isPositiveReturn ? "#10b981" : "#ef4444"}
+                      fill="url(#perfGradient)"
+                      strokeWidth={2.5}
+                      dot={false}
+                      activeDot={{
+                        r: 4,
+                        fill: isPositiveReturn ? "#10b981" : "#ef4444",
+                      }}
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              /* ─── Volume Bar Chart (when no price data) ─── */
+              <div className="h-56">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={chartData}
+                    margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="#333" vertical={false} />
+                    <XAxis
+                      dataKey="label"
+                      tick={{ fontSize: 11, fill: "#666" }}
+                      axisLine={false}
+                      tickLine={false}
+                      interval="preserveStartEnd"
+                    />
+                    <YAxis
+                      tick={{ fontSize: 11, fill: "#666" }}
+                      tickFormatter={(v) =>
+                        v >= 1000 ? `$${(v / 1000).toFixed(0)}M` : `$${v}K`
+                      }
+                      axisLine={false}
+                      tickLine={false}
+                      width={55}
+                    />
+                    <RechartsTooltip
+                      contentStyle={{
+                        background: "#0f0f1a",
+                        border: "1px solid #2a2a3e",
+                        borderRadius: "10px",
+                        fontSize: "12px",
+                        boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
+                      }}
+                      formatter={(value, dataKey) => {
+                        if (dataKey === "volumeK") {
+                          const v = Number(value);
+                          return [
+                            v >= 1000
+                              ? `$${(v / 1000).toFixed(1)}M`
+                              : `$${v}K`,
+                            "Est. Volume",
+                          ];
+                        }
+                        return [`${value}`, String(dataKey)];
+                      }}
+                      labelFormatter={(label) => `${label}`}
+                    />
+                    <Bar dataKey="volumeK" radius={[4, 4, 0, 0]}>
+                      {chartData.map((entry, idx) => (
+                        <Cell
+                          key={idx}
+                          fill={
+                            entry.buys > entry.sells
+                              ? "#10b981"
+                              : entry.sells > entry.buys
+                                ? "#ef4444"
+                                : "#6366f1"
+                          }
+                          fillOpacity={0.7}
+                        />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+                <div className="flex items-center justify-center gap-4 mt-1 text-[10px] text-muted-foreground">
+                  <span className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-sm bg-emerald-500/70" /> Net buying
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-sm bg-red-500/70" /> Net selling
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-sm bg-indigo-500/70" /> Mixed
+                  </span>
                 </div>
               </div>
-            </div>
+            )
           ) : (
             <div className="h-56 flex items-center justify-center text-sm text-muted-foreground">
               No trades in this period
@@ -599,7 +734,7 @@ export default function PoliticianPage() {
               {stats.totalTrades} stock trade{stats.totalTrades !== 1 ? "s" : ""} in{" "}
               {periodLabel}
             </span>
-            {stats.avgReturn != null && (
+            {stats.avgReturn != null ? (
               <span>
                 Avg return per trade:{" "}
                 <span
@@ -611,6 +746,10 @@ export default function PoliticianPage() {
                 >
                   {formatPnl(stats.avgReturn)}
                 </span>
+              </span>
+            ) : (
+              <span className="text-muted-foreground/60">
+                Price data pending
               </span>
             )}
           </div>

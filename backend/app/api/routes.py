@@ -460,7 +460,22 @@ async def trigger_ingestion():
 @router.post("/admin/update-prices")
 async def trigger_price_update(
     limit: int = Query(default=50, ge=1, le=500),
+    force: bool = Query(default=False),
 ):
-    """Manually trigger price updates for trades (uses yfinance, rate-limited)."""
-    result = await run_performance_update(price_limit=limit)
+    """Manually trigger price updates. Use force=true to recalculate all."""
+    result = await run_performance_update(price_limit=limit, force=force)
     return result
+
+
+@router.get("/admin/test-prices")
+async def test_prices(ticker: str = Query(default="AAPL")):
+    """Test price fetching using Yahoo v8 API (via httpx)."""
+    from app.services.performance import get_current_price, get_price_on_date
+    current = await get_current_price(ticker)
+    historical = await get_price_on_date(ticker, datetime.utcnow() - timedelta(days=30))
+    return {
+        "ticker": ticker,
+        "current_price": current,
+        "price_30d_ago": historical,
+        "working": current is not None,
+    }

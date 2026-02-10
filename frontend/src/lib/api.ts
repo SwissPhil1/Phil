@@ -200,7 +200,7 @@ export const api = {
   getRecentTrades: () => fetchApi<Trade[]>("/api/v1/trades/recent"),
   getTrades: (params?: Record<string, string>) => {
     const qs = params ? "?" + new URLSearchParams(params).toString() : "";
-    return fetchApi<{ trades: Trade[]; total: number }>(`/api/v1/trades${qs}`);
+    return fetchApi<Trade[]>(`/api/v1/trades${qs}`);
   },
 
   // Politicians

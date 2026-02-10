@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, type Trade } from "@/lib/api";
-import { ArrowUpRight, ArrowDownRight, Info, Search } from "lucide-react";
+import { ArrowUpRight, ArrowDownRight, Info, Search, Loader2 } from "lucide-react";
 
 function timeAgo(dateStr: string) {
   if (!dateStr) return "";
@@ -33,8 +33,11 @@ function formatAmount(low: number, high: number) {
 export default function CongressPage() {
   const [trades, setTrades] = useState<Trade[]>([]);
   const [loading, setLoading] = useState(true);
+  const [searching, setSearching] = useState(false);
   const [filter, setFilter] = useState("");
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Load recent trades on mount
   useEffect(() => {
     async function load() {
       try {
@@ -46,12 +49,36 @@ export default function CongressPage() {
     load();
   }, []);
 
-  const filtered = filter
-    ? trades.filter(t =>
-        t.politician.toLowerCase().includes(filter.toLowerCase()) ||
-        t.ticker.toLowerCase().includes(filter.toLowerCase())
-      )
-    : trades;
+  // Server-side search with debounce
+  const doSearch = useCallback(async (query: string) => {
+    if (!query.trim()) {
+      // Empty search: go back to recent trades
+      setSearching(true);
+      try {
+        const recent = await api.getRecentTrades();
+        setTrades(Array.isArray(recent) ? recent : []);
+      } catch {}
+      setSearching(false);
+      return;
+    }
+
+    setSearching(true);
+    try {
+      const results = await api.getTrades({
+        search: query.trim(),
+        days: "3650",
+        page_size: "50",
+      });
+      setTrades(Array.isArray(results) ? results : []);
+    } catch {}
+    setSearching(false);
+  }, []);
+
+  const handleFilterChange = (value: string) => {
+    setFilter(value);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => doSearch(value), 400);
+  };
 
   return (
     <div className="space-y-6">
@@ -78,15 +105,18 @@ export default function CongressPage() {
           type="text"
           placeholder="Search by politician or ticker..."
           value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          className="w-full pl-10 pr-4 py-2.5 bg-muted/30 border border-border rounded-lg text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
+          onChange={(e) => handleFilterChange(e.target.value)}
+          className="w-full pl-10 pr-10 py-2.5 bg-muted/30 border border-border rounded-lg text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
         />
+        {searching && (
+          <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground animate-spin" />
+        )}
       </div>
 
       {/* Stats bar */}
       {!loading && trades.length > 0 && (
         <div className="flex items-center gap-4 text-xs text-muted-foreground">
-          <span>{trades.length} trades loaded</span>
+          <span>{trades.length} trades{filter ? " found" : " loaded"}</span>
           <span>{new Set(trades.map(t => t.politician)).size} politicians</span>
           <span>{new Set(trades.map(t => t.ticker)).size} unique tickers</span>
         </div>
@@ -96,7 +126,7 @@ export default function CongressPage() {
         <div className="space-y-3">
           {[...Array(8)].map((_, i) => <Skeleton key={i} className="h-20 w-full rounded-lg" />)}
         </div>
-      ) : filtered.length === 0 ? (
+      ) : trades.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground text-sm">
             {filter ? "No trades match your search." : "No trades loaded yet."}
@@ -104,7 +134,7 @@ export default function CongressPage() {
         </Card>
       ) : (
         <div className="space-y-2">
-          {filtered.map((trade, i) => (
+          {trades.map((trade, i) => (
             <Card key={i} className="hover:border-border/80 transition-colors">
               <CardContent className="p-4">
                 <div className="flex items-center gap-3">

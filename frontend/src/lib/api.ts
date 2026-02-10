@@ -190,6 +190,25 @@ export interface BacktestResult {
   top_scored_trades?: any[];
 }
 
+export interface PortfolioPoint {
+  date: string;
+  nav: number;
+  return_pct: number;
+  positions: number;
+  invested: number;
+}
+
+export interface PortfolioSimulation {
+  nav_series: PortfolioPoint[];
+  total_return: number;
+  total_invested: number;
+  positions_open: number;
+  tickers_traded: number;
+  tickers_priced: number;
+  total_trades: number;
+  error?: string;
+}
+
 // ─── API Functions ───
 
 export const api = {
@@ -209,6 +228,8 @@ export const api = {
     fetchApi<Politician & { recent_trades: Trade[]; total_buys?: number; total_sells?: number }>(`/api/v1/politicians/${encodeURIComponent(name)}`),
   getPoliticianCommittees: (name: string) =>
     fetchApi<{ committee: string; subcommittee?: string }[]>(`/api/v1/signals/committees/politician/${encodeURIComponent(name)}`),
+  getPoliticianPortfolio: (name: string) =>
+    fetchApi<PortfolioSimulation>(`/api/v1/politicians/${encodeURIComponent(name)}/portfolio`),
 
   // Signals
   getSignals: () =>

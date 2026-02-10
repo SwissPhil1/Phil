@@ -5,6 +5,7 @@ import os
 import resource
 from contextlib import asynccontextmanager
 
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -17,7 +18,15 @@ from app.api.prediction_markets import router as prediction_markets_router
 from app.api.routes import router as congress_router
 from app.api.signals import router as signals_router
 from app.api.trump import router as trump_router
+from app.config import INGESTION_INTERVAL_MINUTES
 from app.models.database import init_db
+from app.services.committees import run_committee_ingestion
+from app.services.hedge_funds import run_13f_ingestion
+from app.services.ingestion import run_ingestion
+from app.services.insiders import run_insider_ingestion
+from app.services.performance import run_performance_update
+from app.services.prediction_markets import run_kalshi_ingestion, run_polymarket_ingestion
+from app.services.trump_tracker import run_trump_data_ingestion
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,25 +34,107 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+scheduler = AsyncIOScheduler()
+
 
 def _get_memory_mb():
     """Get current RSS memory usage in MB."""
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
 
 
+async def _run_initial_ingestions():
+    """Run all initial ingestions in background so the app starts immediately."""
+    import asyncio
+    await asyncio.sleep(30)
+
+    for name, fn in [
+        ("Trump & inner circle data", run_trump_data_ingestion),
+        ("Committee assignments", run_committee_ingestion),
+        ("Congressional trades", run_ingestion),
+        ("Form 4 insider trades", run_insider_ingestion),
+        ("Polymarket traders", run_polymarket_ingestion),
+        ("Kalshi markets", run_kalshi_ingestion),
+        ("13F hedge fund holdings", run_13f_ingestion),
+    ]:
+        try:
+            logger.info(f"Background ingestion: {name}... (mem: {_get_memory_mb():.0f} MB)")
+            result = await fn()
+            logger.info(f"{name}: {result}")
+        except BaseException as e:
+            logger.error(f"{name} ingestion failed (will retry on schedule): {e}")
+            if isinstance(e, (SystemExit, KeyboardInterrupt)):
+                raise
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup - init DB only (keep it minimal so healthcheck passes fast)
+    import asyncio
+
+    # Phase 1: Init DB (fast, required)
     logger.info("Initializing database...")
     try:
         await init_db()
     except Exception as e:
         logger.error(f"Database init failed: {e}")
 
-    logger.info(f"Database ready. Memory: {_get_memory_mb():.0f} MB. App is accepting requests.")
+    logger.info(f"Database ready. Memory: {_get_memory_mb():.0f} MB.")
+
+    # Phase 2: Setup scheduler (wrapped so it never blocks startup)
+    try:
+        scheduler.add_job(
+            run_ingestion, "interval",
+            minutes=INGESTION_INTERVAL_MINUTES,
+            id="congress", name="Congressional trade ingestion",
+        )
+        scheduler.add_job(
+            run_13f_ingestion, "interval",
+            hours=6,
+            id="hedge_funds", name="13F hedge fund ingestion",
+        )
+        scheduler.add_job(
+            run_insider_ingestion, "interval",
+            hours=2,
+            id="insiders", name="Form 4 insider trade ingestion",
+        )
+        scheduler.add_job(
+            run_polymarket_ingestion, "interval",
+            minutes=30,
+            id="polymarket", name="Polymarket trader ingestion",
+        )
+        scheduler.add_job(
+            run_kalshi_ingestion, "interval",
+            hours=1,
+            id="kalshi", name="Kalshi market data ingestion",
+        )
+        scheduler.add_job(
+            run_committee_ingestion, "interval",
+            hours=24,
+            id="committees", name="Committee assignment ingestion",
+        )
+        scheduler.add_job(
+            run_performance_update, "interval",
+            minutes=INGESTION_INTERVAL_MINUTES * 2,
+            id="performance", name="Price and performance update",
+        )
+        scheduler.start()
+        logger.info("All 7 schedulers started")
+    except Exception as e:
+        logger.error(f"Scheduler setup failed (app will still run): {e}")
+
+    # Phase 3: Background ingestion (non-blocking, 30s delay)
+    try:
+        asyncio.create_task(_run_initial_ingestions())
+    except Exception as e:
+        logger.error(f"Failed to create ingestion task: {e}")
+
+    logger.info("Lifespan complete - app is accepting requests.")
 
     yield
 
+    try:
+        scheduler.shutdown()
+    except Exception:
+        pass
     logger.info("Shutting down.")
 
 
@@ -55,7 +146,7 @@ app = FastAPI(
         "corporate insider trades (Form 4), and prediction market whales (Polymarket/Kalshi). "
         "Built for European investors."
     ),
-    version="0.3.0",
+    version="0.4.0",
     lifespan=lifespan,
 )
 
@@ -83,7 +174,7 @@ app.include_router(optimizer_router, prefix="/api/v1")
 async def root():
     return {
         "name": "SmartFlow API",
-        "version": "0.3.0",
+        "version": "0.4.0",
         "docs": "/docs",
         "description": "Copy the smartest money - Congress, hedge funds, insiders, prediction markets, Trump tracker",
         "endpoints": {
@@ -115,5 +206,7 @@ async def debug():
         "python": sys.version,
         "pid": os.getpid(),
         "port": os.environ.get("PORT", "not set"),
+        "scheduler_running": scheduler.running,
+        "scheduled_jobs": len(scheduler.get_jobs()) if scheduler.running else 0,
         "env_keys": sorted(os.environ.keys()),
     }

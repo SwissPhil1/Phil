@@ -251,7 +251,7 @@ async def get_politician_detail(
             select(Trade)
             .where(Trade.politician == pol_name)
             .order_by(Trade.disclosure_date.desc())
-            .limit(50)
+            .limit(500)
         )
         trades = (await db.execute(trades_stmt)).scalars().all()
 
@@ -274,7 +274,7 @@ async def get_politician_detail(
         select(Trade)
         .where(Trade.politician == politician.name)
         .order_by(Trade.disclosure_date.desc())
-        .limit(50)
+        .limit(500)
     )
     trades_result = await db.execute(trades_stmt)
     trades = trades_result.scalars().all()

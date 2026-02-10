@@ -360,6 +360,13 @@ class KalshiMarket(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+# Dialect-aware insert for upserts (on_conflict_do_nothing / on_conflict_do_update)
+# Both PostgreSQL and SQLite dialects support the same API.
+if "postgresql" in DATABASE_URL or "postgres" in DATABASE_URL:
+    from sqlalchemy.dialects.postgresql import insert as dialect_insert
+else:
+    from sqlalchemy.dialects.sqlite import insert as dialect_insert
+
 engine = create_async_engine(DATABASE_URL, echo=False)
 async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 

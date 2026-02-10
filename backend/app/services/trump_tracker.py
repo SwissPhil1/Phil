@@ -17,7 +17,7 @@ from datetime import datetime
 
 import httpx
 from sqlalchemy import select
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from app.models.database import dialect_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import (
@@ -639,7 +639,7 @@ async def run_trump_data_ingestion() -> dict:
                 "updated_at": datetime.utcnow(),
             }
             stmt = (
-                sqlite_insert(TrumpInsider)
+                dialect_insert(TrumpInsider)
                 .values(**record)
                 .on_conflict_do_update(
                     index_elements=["name"],
@@ -669,7 +669,7 @@ async def run_trump_data_ingestion() -> dict:
                 "updated_at": datetime.utcnow(),
             }
             stmt = (
-                sqlite_insert(TrumpConnection)
+                dialect_insert(TrumpConnection)
                 .values(**record)
                 .on_conflict_do_update(
                     index_elements=["company_name"],
@@ -695,7 +695,7 @@ async def run_trump_data_ingestion() -> dict:
                 "updated_at": datetime.utcnow(),
             }
             stmt = (
-                sqlite_insert(TrumpDonor)
+                dialect_insert(TrumpDonor)
                 .values(**record)
                 .on_conflict_do_update(
                     index_elements=["name"],

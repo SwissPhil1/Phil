@@ -43,22 +43,44 @@ def _get_memory_mb():
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
 
 
+async def _check_db_has_data() -> bool:
+    """Check if the database already has substantial data (i.e., persisted from prior run)."""
+    try:
+        from sqlalchemy import func, select
+        from app.models.database import Trade, async_session
+        async with async_session() as session:
+            count = (await session.execute(select(func.count()).select_from(Trade))).scalar()
+            return (count or 0) > 1000
+    except Exception:
+        return False
+
+
 async def _run_initial_ingestions():
     """Run all initial ingestions in background so the app starts immediately."""
     import asyncio
     await asyncio.sleep(30)
 
-    for name, fn in [
-        ("Trump & inner circle data", run_trump_data_ingestion),
-        ("Committee assignments", run_committee_ingestion),
-        ("Congressional trades", run_ingestion),
-        ("Form 4 insider trades", run_insider_ingestion),
-        ("Polymarket traders", run_polymarket_ingestion),
-        ("Kalshi markets", run_kalshi_ingestion),
-        ("13F hedge fund holdings", run_13f_ingestion),
-        ("Senate historical trades (2012+)", run_historical_ingestion),
-        ("Politician stats + prices", lambda: run_performance_update(price_limit=500)),
-    ]:
+    # If DB already has data (PostgreSQL persists across deploys), skip heavy historical ingestion
+    has_data = await _check_db_has_data()
+    if has_data:
+        logger.info("Database already has data - skipping historical ingestion (PostgreSQL persistent)")
+
+    jobs = [
+        ("Trump & inner circle data", run_trump_data_ingestion, False),
+        ("Committee assignments", run_committee_ingestion, False),
+        ("Congressional trades", run_ingestion, False),
+        ("Form 4 insider trades", run_insider_ingestion, False),
+        ("Polymarket traders", run_polymarket_ingestion, False),
+        ("Kalshi markets", run_kalshi_ingestion, False),
+        ("13F hedge fund holdings", run_13f_ingestion, False),
+        ("Senate historical trades (2012+)", run_historical_ingestion, True),  # skip if has data
+        ("Politician stats + prices", lambda: run_performance_update(price_limit=500), False),
+    ]
+
+    for name, fn, skip_if_has_data in jobs:
+        if skip_if_has_data and has_data:
+            logger.info(f"Skipping {name} (data already exists)")
+            continue
         try:
             logger.info(f"Background ingestion: {name}... (mem: {_get_memory_mb():.0f} MB)")
             result = await fn()

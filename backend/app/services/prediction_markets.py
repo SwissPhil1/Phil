@@ -11,7 +11,7 @@ from datetime import datetime
 
 import httpx
 from sqlalchemy import delete
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from app.models.database import dialect_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import (
@@ -140,7 +140,7 @@ async def ingest_leaderboard(session: AsyncSession, client: httpx.AsyncClient) -
         data["portfolio_value"] = value
 
         stmt = (
-            sqlite_insert(PolymarketTrader)
+            dialect_insert(PolymarketTrader)
             .values(**data)
             .on_conflict_do_update(
                 index_elements=["wallet"],
@@ -195,7 +195,7 @@ async def ingest_trader_positions(
         }
 
         stmt = (
-            sqlite_insert(PolymarketPosition)
+            dialect_insert(PolymarketPosition)
             .values(**data)
             .on_conflict_do_update(
                 index_elements=["wallet", "condition_id", "outcome"],
@@ -242,7 +242,7 @@ async def ingest_trader_trades(
         }
 
         stmt = (
-            sqlite_insert(PolymarketTrade)
+            dialect_insert(PolymarketTrade)
             .values(**data)
             .on_conflict_do_nothing(index_elements=["tx_hash"])
         )
@@ -298,7 +298,7 @@ async def ingest_kalshi_markets(session: AsyncSession, client: httpx.AsyncClient
         }
 
         stmt = (
-            sqlite_insert(KalshiMarket)
+            dialect_insert(KalshiMarket)
             .values(**data)
             .on_conflict_do_update(
                 index_elements=["ticker"],

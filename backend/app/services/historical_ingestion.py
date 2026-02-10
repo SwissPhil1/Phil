@@ -16,7 +16,7 @@ from datetime import datetime
 
 import httpx
 from sqlalchemy import func, select
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from app.models.database import dialect_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import Trade, async_session
@@ -438,7 +438,7 @@ async def ingest_senate_historical(
                         }
 
                         stmt = (
-                            sqlite_insert(Trade)
+                            dialect_insert(Trade)
                             .values(**trade_data)
                             .on_conflict_do_nothing(
                                 index_elements=[

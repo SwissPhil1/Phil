@@ -150,11 +150,19 @@ async def compute_portfolio_simulation(
     if weeks and (end_date - weeks[-1]).days > 3:
         weeks.append(end_date)
 
-    # 6. Simulate portfolio
-    # positions: ticker -> {shares: float, cost_basis: float}
-    positions: dict[str, dict] = {}
-    total_invested = 0.0
-    realized_proceeds = 0.0  # Cash received from sells
+    # 6. Simulate portfolio with proper cash accounting
+    #
+    # Key insight: when a politician sells stock and buys another, the sell
+    # proceeds fund the new purchase. We must NOT double-count that as fresh
+    # capital. We track a cash balance: sells add to cash, buys draw from
+    # cash first, and only inject new capital when cash is insufficient.
+    #
+    # For sells: generic "sale" is treated as proportional (amount / position
+    # value), not a full position closure, unless the amount is >= 90% of
+    # the position or the type is explicitly "sale_full".
+    positions: dict[str, dict] = {}  # ticker -> {shares, cost_basis}
+    cash = 0.0  # Available cash from sell proceeds
+    total_injected = 0.0  # Fresh capital injected (NOT recycled proceeds)
     trade_idx = 0
     nav_series = []
 
@@ -183,40 +191,55 @@ async def compute_portfolio_simulation(
 
             if t.tx_type == "purchase":
                 shares = amount / price
+
+                # Use existing cash (from prior sells) first, then inject
+                if cash >= amount:
+                    cash -= amount
+                else:
+                    needed = amount - cash
+                    total_injected += needed
+                    cash = 0.0
+
                 if ticker in positions:
                     positions[ticker]["shares"] += shares
                     positions[ticker]["cost_basis"] += amount
                 else:
                     positions[ticker] = {"shares": shares, "cost_basis": amount}
-                total_invested += amount
 
             elif t.tx_type in ("sale", "sale_full", "sale_partial"):
                 if ticker in positions:
                     pos = positions[ticker]
-                    if t.tx_type in ("sale", "sale_full"):
-                        # Close entire position
-                        sell_value = pos["shares"] * price
-                        realized_proceeds += sell_value
+                    current_value = pos["shares"] * price
+
+                    if t.tx_type == "sale_full":
+                        # Explicitly full sale — close entire position
+                        cash += current_value
                         del positions[ticker]
                     else:
-                        # Partial sell — estimate fraction from amount
-                        current_value = pos["shares"] * price
+                        # "sale" or "sale_partial": sell proportional to
+                        # disclosed amount; close entirely only if >= 90%
                         sell_fraction = (
-                            min(amount / current_value, 0.9)
+                            min(amount / current_value, 1.0)
                             if current_value > 0
-                            else 0.5
+                            else 1.0
                         )
-                        sold_shares = pos["shares"] * sell_fraction
-                        sell_value = sold_shares * price
-                        realized_proceeds += sell_value
-                        pos["shares"] -= sold_shares
-                        pos["cost_basis"] *= 1 - sell_fraction
-                        if pos["shares"] <= 0.001:
+
+                        if sell_fraction >= 0.9:
+                            # Close to full — close position
+                            cash += current_value
                             del positions[ticker]
+                        else:
+                            sold_shares = pos["shares"] * sell_fraction
+                            sell_value = sold_shares * price
+                            cash += sell_value
+                            pos["shares"] -= sold_shares
+                            pos["cost_basis"] *= 1 - sell_fraction
+                            if pos["shares"] <= 0.001:
+                                del positions[ticker]
 
             trade_idx += 1
 
-        # Compute NAV: market value of open positions + cash from sells
+        # Compute NAV = market value of open positions + idle cash
         holdings_value = 0.0
         for ticker, pos in positions.items():
             p = _nearest_price(price_data[ticker], week_date)
@@ -225,9 +248,11 @@ async def compute_portfolio_simulation(
             else:
                 holdings_value += pos["cost_basis"]  # fallback
 
-        total_value = holdings_value + realized_proceeds
+        total_value = holdings_value + cash
         return_pct = (
-            ((total_value / total_invested) - 1) * 100 if total_invested > 0 else 0.0
+            ((total_value / total_injected) - 1) * 100
+            if total_injected > 0
+            else 0.0
         )
 
         nav_series.append(
@@ -236,7 +261,7 @@ async def compute_portfolio_simulation(
                 "nav": round(total_value, 0),
                 "return_pct": round(return_pct, 1),
                 "positions": len(positions),
-                "invested": round(total_invested, 0),
+                "invested": round(total_injected, 0),
             }
         )
 
@@ -245,7 +270,7 @@ async def compute_portfolio_simulation(
     return {
         "nav_series": nav_series,
         "total_return": final_return,
-        "total_invested": round(total_invested, 0),
+        "total_invested": round(total_injected, 0),
         "positions_open": len(positions),
         "tickers_traded": len(tickers),
         "tickers_priced": len(price_data),

@@ -609,6 +609,39 @@ async def backfill_parties(db: AsyncSession = Depends(get_db)):
     }
 
 
+@router.post("/admin/ingest-capitoltrades")
+async def trigger_capitoltrades_ingestion(
+    chamber: str = Query(default="house", regex="^(house|senate)$"),
+    max_pages: int = Query(default=0, ge=0, le=5000),
+):
+    """Ingest House (or Senate) trades from CapitolTrades.com.
+
+    Each page has 12 trades. Total House trades ~2,600+ pages.
+    Use max_pages=0 for all pages. Runs in background.
+    """
+    import asyncio
+    from app.services.capitoltrades import run_capitoltrades_ingestion
+
+    effective_max = max_pages if max_pages > 0 else None
+
+    async def _run():
+        try:
+            result = await run_capitoltrades_ingestion(
+                chamber=chamber, max_pages=effective_max
+            )
+            logger.info(f"CapitolTrades ingestion finished: {result}")
+        except Exception as e:
+            logger.error(f"CapitolTrades ingestion failed: {e}")
+
+    asyncio.create_task(_run())
+    return {
+        "status": "started",
+        "chamber": chamber,
+        "max_pages": effective_max or "all",
+        "message": f"CapitolTrades {chamber} ingestion started. Check logs for progress.",
+    }
+
+
 @router.get("/admin/test-prices")
 async def test_prices(ticker: str = Query(default="AAPL")):
     """Test price fetching using Yahoo v8 API (via httpx)."""

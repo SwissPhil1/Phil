@@ -28,6 +28,7 @@ from app.services.hedge_funds import run_13f_ingestion
 from app.services.ingestion import run_ingestion
 from app.services.insiders import run_insider_ingestion
 from app.services.historical_ingestion import run_historical_ingestion
+from app.services.capitoltrades import run_capitoltrades_ingestion
 from app.services.performance import run_performance_update
 from app.services.prediction_markets import run_kalshi_ingestion, run_polymarket_ingestion
 from app.services.trump_tracker import run_trump_data_ingestion
@@ -77,6 +78,7 @@ async def _run_initial_ingestions():
         ("Kalshi markets", run_kalshi_ingestion, False),
         ("13F hedge fund holdings", run_13f_ingestion, False),
         ("Senate historical trades (2012+)", run_historical_ingestion, True),  # skip if has data
+        ("House trades (CapitolTrades)", lambda: run_capitoltrades_ingestion(chamber="house"), True),  # skip if has data
         ("Politician stats + prices", lambda: run_performance_update(price_limit=500), False),
     ]
 
@@ -140,12 +142,18 @@ async def lifespan(app: FastAPI):
             id="committees", name="Committee assignment ingestion",
         )
         scheduler.add_job(
+            lambda: run_capitoltrades_ingestion(chamber="house", max_pages=20),
+            "interval",
+            hours=6,
+            id="capitoltrades", name="CapitolTrades House trade refresh",
+        )
+        scheduler.add_job(
             run_performance_update, "interval",
             minutes=INGESTION_INTERVAL_MINUTES * 2,
             id="performance", name="Price and performance update",
         )
         scheduler.start()
-        logger.info("All 7 schedulers started")
+        logger.info("All 8 schedulers started")
     except Exception as e:
         logger.error(f"Scheduler setup failed (app will still run): {e}")
 

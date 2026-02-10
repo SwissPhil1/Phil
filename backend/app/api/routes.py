@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import Politician, Trade, get_db
@@ -535,25 +535,23 @@ async def backfill_parties(db: AsyncSession = Depends(get_db)):
     """Backfill party/state for senate trades using fuzzy name matching."""
     from app.services.historical_ingestion import _lookup_party
 
-    from sqlalchemy import update
-
-    # Find all distinct politicians missing party data
+    # Find all distinct politicians missing party data (NULL or empty)
     stmt = (
         select(Trade.politician)
-        .where(Trade.party.is_(None))
+        .where((Trade.party.is_(None)) | (Trade.party == ""))
         .distinct()
     )
     result = await db.execute(stmt)
     politicians = [row[0] for row in result.all()]
 
     updated = 0
-    for name in politicians:
-        party, state = _lookup_party(name)
+    for pol_name in politicians:
+        party, state = _lookup_party(pol_name)
         if party:
             await db.execute(
                 update(Trade)
-                .where(Trade.politician == name)
-                .where(Trade.party.is_(None))
+                .where(Trade.politician == pol_name)
+                .where((Trade.party.is_(None)) | (Trade.party == ""))
                 .values(party=party, state=state)
             )
             updated += 1

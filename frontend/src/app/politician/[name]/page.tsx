@@ -39,6 +39,12 @@ type PoliticianDetail = Politician & {
   recent_trades: Trade[];
   total_buys?: number;
   total_sells?: number;
+  portfolio_return?: number | null;
+  portfolio_cagr?: number | null;
+  conviction_return?: number | null;
+  conviction_cagr?: number | null;
+  priced_buy_count?: number | null;
+  years_active?: number | null;
 };
 
 // ─── Helpers ───
@@ -395,10 +401,12 @@ export default function PoliticianPage() {
       ? "all time"
       : PERIOD_FILTERS[selectedPeriod].label;
 
-  // Use portfolio simulation return if available, otherwise fall back to trade-level data
+  // Use portfolio simulation return if available, otherwise fall back to pre-computed stats
   const hasPortfolioData = portfolioChartData.length > 0;
-  const displayReturn = portfolioReturn;
-  const heroReturn = displayReturn ?? null;
+  // Pre-computed CAGR from Politician table (same as leaderboard)
+  const precomputedCagr = politician?.portfolio_cagr ?? null;
+  const precomputedReturn = politician?.portfolio_return ?? null;
+  const heroReturn = portfolioReturn ?? precomputedReturn ?? null;
   const isPositiveReturn = (heroReturn ?? 0) >= 0;
 
   // ─── Loading ───
@@ -520,14 +528,12 @@ export default function PoliticianPage() {
                   {Math.abs(heroReturn).toFixed(1)}%
                 </div>
                 <div className="text-xs text-muted-foreground mt-1">
-                  {periodLabel} {chartMode === "conv" ? "conviction" : "copy trading"} return
+                  {hasPortfolioData ? `${periodLabel} ${chartMode === "conv" ? "conviction" : "copy trading"} return` : "portfolio return"}
                 </div>
-                {portfolio && selectedPeriod === 6 && (
+                {precomputedCagr != null && (
                   <div className="text-[10px] text-muted-foreground/60 mt-0.5">
-                    {chartMode === "conv"
-                      ? `${portfolio.conviction_weighted.annual_return}% CAGR`
-                      : `${portfolio.equal_weight.annual_return}% CAGR`
-                    } over {portfolio.years}yr
+                    {precomputedCagr > 0 ? "+" : ""}{precomputedCagr}% CAGR
+                    {politician?.years_active ? ` over ${politician.years_active}yr` : ""}
                   </div>
                 )}
               </>
@@ -868,16 +874,28 @@ export default function PoliticianPage() {
             <div className="w-8 h-8 rounded-lg bg-purple-500/10 flex items-center justify-center">
               <TrendingUp className="w-4 h-4 text-purple-400" />
             </div>
-            <span className="text-xs text-muted-foreground">Win Rate</span>
+            <span className="text-xs text-muted-foreground">
+              {precomputedCagr != null ? "CAGR" : "Win Rate"}
+            </span>
           </div>
-          <div className="text-xl font-bold font-mono">
-            {stats.winRate != null ? `${stats.winRate.toFixed(0)}%` : "—"}
+          <div className={`text-xl font-bold font-mono ${
+            precomputedCagr != null
+              ? (precomputedCagr >= 0 ? "text-emerald-400" : "text-red-400")
+              : ""
+          }`}>
+            {precomputedCagr != null
+              ? `${precomputedCagr > 0 ? "+" : ""}${precomputedCagr}%`
+              : stats.winRate != null ? `${stats.winRate.toFixed(0)}%` : "—"
+            }
           </div>
-          {stats.tradesWithReturn > 0 && (
-            <div className="text-[10px] text-muted-foreground mt-0.5">
-              {stats.winners}W / {stats.tradesWithReturn - stats.winners}L
-            </div>
-          )}
+          <div className="text-[10px] text-muted-foreground mt-0.5">
+            {precomputedCagr != null
+              ? `${stats.winRate?.toFixed(0) ?? "—"}% win rate`
+              : stats.tradesWithReturn > 0
+                ? `${stats.winners}W / ${stats.tradesWithReturn - stats.winners}L`
+                : ""
+            }
+          </div>
         </div>
       </div>
 

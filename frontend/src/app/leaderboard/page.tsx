@@ -5,32 +5,10 @@ import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { api, type PortfolioLeaderboardEntry } from "@/lib/api";
-import { Trophy, Medal, TrendingUp, Loader2 } from "lucide-react";
+import { api, type LeaderboardEntry, type UnifiedLeaderboard } from "@/lib/api";
+import { Trophy, TrendingUp, Users } from "lucide-react";
 
-interface LeaderboardData {
-  leaderboards: Record<string, {
-    year: number;
-    top_10: {
-      rank: number;
-      politician: string;
-      party: string;
-      state: string;
-      total_trades: number;
-      avg_return_pct: number | null;
-      win_rate_pct: number | null;
-    }[];
-  }>;
-  consistent_winners: {
-    politician: string;
-    avg_return_all_years: number;
-    years_active: number;
-    avg_rank: number;
-  }[];
-}
-
-type SortMode = "equal_weight" | "conviction_weighted";
-type SortColumn = "cagr" | "total" | "conv";
+type SortColumn = "cagr" | "total" | "conv_cagr" | "avg_return" | "win_rate";
 
 function partyBadgeClass(party: string | null) {
   if (party === "R") return "bg-red-500/10 text-red-400 border-red-500/20";
@@ -39,46 +17,41 @@ function partyBadgeClass(party: string | null) {
 }
 
 export default function LeaderboardPage() {
-  const [data, setData] = useState<LeaderboardData | null>(null);
-  const [portfolioData, setPortfolioData] = useState<PortfolioLeaderboardEntry[] | null>(null);
+  const [data, setData] = useState<UnifiedLeaderboard | null>(null);
   const [loading, setLoading] = useState(true);
-  const [portfolioLoading, setPortfolioLoading] = useState(true);
-  const [sortMode, setSortMode] = useState<SortMode>("equal_weight");
   const [sortCol, setSortCol] = useState<SortColumn>("cagr");
-  const [activeTab, setActiveTab] = useState<"portfolio" | "yearly">("portfolio");
+  const [chamberFilter, setChamberFilter] = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
       try {
         const result = await api.getLeaderboard();
-        setData(result as unknown as LeaderboardData);
-      } catch {}
+        setData(result);
+      } catch {
+        // API error
+      }
       setLoading(false);
     }
-    async function loadPortfolio() {
-      try {
-        const result = await api.getPortfolioReturns({ sort_by: sortMode });
-        setPortfolioData(result);
-      } catch {}
-      setPortfolioLoading(false);
-    }
     load();
-    loadPortfolio();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Re-sort portfolio data when sort mode or column changes (client-side)
-  const sortedPortfolio = portfolioData
-    ? [...portfolioData].sort((a, b) => {
-        if (sortCol === "cagr") {
-          return (b[sortMode]?.annual_return ?? 0) - (a[sortMode]?.annual_return ?? 0);
-        } else if (sortCol === "total") {
-          return (b[sortMode]?.total_return ?? 0) - (a[sortMode]?.total_return ?? 0);
-        } else {
-          // "conv" — sort by conviction-weighted CAGR regardless of active strategy
-          return (b.conviction_weighted?.annual_return ?? 0) - (a.conviction_weighted?.annual_return ?? 0);
-        }
-      })
+  // Client-side sort (data comes pre-sorted by CAGR from backend)
+  const sortedEntries = data?.leaderboard
+    ? [...data.leaderboard]
+        .filter((e) => !chamberFilter || e.chamber === chamberFilter)
+        .sort((a, b) => {
+          const getVal = (e: LeaderboardEntry) => {
+            switch (sortCol) {
+              case "cagr": return e.portfolio_cagr_pct ?? -999;
+              case "total": return e.portfolio_return_pct ?? -999;
+              case "conv_cagr": return e.conviction_cagr_pct ?? -999;
+              case "avg_return": return e.avg_return_pct ?? -999;
+              case "win_rate": return e.win_rate_pct ?? -999;
+            }
+          };
+          return getVal(b) - getVal(a);
+        })
+        .map((e, i) => ({ ...e, rank: i + 1 }))
     : null;
 
   return (
@@ -90,284 +63,200 @@ export default function LeaderboardPage() {
         </p>
       </div>
 
-      {/* Tab Switcher */}
-      <div className="flex gap-1 border-b border-border pb-0">
-        {([
-          { key: "portfolio" as const, label: "Portfolio Returns", icon: TrendingUp },
-          { key: "yearly" as const, label: "Yearly Activity", icon: Trophy },
-        ]).map(({ key, label, icon: Icon }) => (
-          <button
-            key={key}
-            onClick={() => setActiveTab(key)}
-            className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px ${
-              activeTab === key
-                ? "border-primary text-foreground"
-                : "border-transparent text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            <Icon className="w-4 h-4" />
-            {label}
-          </button>
-        ))}
+      {/* Filters + Sort */}
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-muted-foreground">Chamber:</span>
+          <div className="flex gap-1">
+            {([
+              { key: null, label: "All" },
+              { key: "house", label: "House" },
+              { key: "senate", label: "Senate" },
+            ] as const).map(({ key, label }) => (
+              <button
+                key={label}
+                onClick={() => setChamberFilter(key)}
+                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                  chamberFilter === key
+                    ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted border border-transparent"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-muted-foreground">Rank by:</span>
+          <div className="flex gap-1">
+            {([
+              { key: "cagr" as const, label: "CAGR" },
+              { key: "total" as const, label: "Total Return" },
+              { key: "conv_cagr" as const, label: "Conviction" },
+              { key: "avg_return" as const, label: "Avg/Trade" },
+              { key: "win_rate" as const, label: "Win Rate" },
+            ]).map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => setSortCol(key)}
+                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                  sortCol === key
+                    ? "bg-amber-500/20 text-amber-400 border border-amber-500/30"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted border border-transparent"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
-      {activeTab === "portfolio" ? (
-        /* ─── Portfolio Returns Tab ─── */
+      {loading ? (
+        <div className="space-y-4">
+          {[...Array(5)].map((_, i) => <Skeleton key={i} className="h-16 w-full" />)}
+        </div>
+      ) : !sortedEntries || sortedEntries.length === 0 ? (
+        <Card>
+          <CardContent className="py-12 text-center text-muted-foreground text-sm">
+            No leaderboard data available yet. Ensure trades have price data.
+          </CardContent>
+        </Card>
+      ) : (
         <>
-          {/* Strategy Toggle + Sort Column */}
-          <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
-            <div className="flex items-center gap-3">
-              <span className="text-xs text-muted-foreground">Strategy:</span>
-              <div className="flex gap-1">
-                <button
-                  onClick={() => setSortMode("equal_weight")}
-                  className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                    sortMode === "equal_weight"
-                      ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
-                      : "text-muted-foreground hover:text-foreground hover:bg-muted border border-transparent"
-                  }`}
-                >
-                  Copy Trading (Equal Weight)
-                </button>
-                <button
-                  onClick={() => setSortMode("conviction_weighted")}
-                  className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                    sortMode === "conviction_weighted"
-                      ? "bg-blue-500/20 text-blue-400 border border-blue-500/30"
-                      : "text-muted-foreground hover:text-foreground hover:bg-muted border border-transparent"
-                  }`}
-                >
-                  Conviction Weighted
-                </button>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="text-xs text-muted-foreground">Rank by:</span>
-              <div className="flex gap-1">
-                {([
-                  { key: "cagr" as const, label: "CAGR" },
-                  { key: "total" as const, label: "Total Return" },
-                  { key: "conv" as const, label: "Conv. Weighted" },
-                ]).map(({ key, label }) => (
-                  <button
-                    key={key}
-                    onClick={() => setSortCol(key)}
-                    className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                      sortCol === key
-                        ? "bg-amber-500/20 text-amber-400 border border-amber-500/30"
-                        : "text-muted-foreground hover:text-foreground hover:bg-muted border border-transparent"
-                    }`}
-                  >
-                    {label}
-                  </button>
+          {/* Party Comparison */}
+          {data?.party_comparison && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {Object.entries(data.party_comparison)
+                .filter(([party]) => party === "D" || party === "R")
+                .map(([party, stats]) => (
+                  <div key={party} className="rounded-xl border border-border bg-card p-4">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Users className="w-4 h-4 text-muted-foreground" />
+                      <Badge variant="outline" className={`text-[10px] px-1.5 ${partyBadgeClass(party)}`}>
+                        {party === "D" ? "Democrats" : "Republicans"}
+                      </Badge>
+                    </div>
+                    <div className={`text-xl font-bold font-mono ${(stats.avg_cagr_pct ?? 0) >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                      {(stats.avg_cagr_pct ?? 0) > 0 ? "+" : ""}{stats.avg_cagr_pct?.toFixed(1) ?? "—"}%
+                    </div>
+                    <div className="text-[10px] text-muted-foreground mt-0.5">
+                      avg CAGR ({stats.total_politicians} politicians)
+                    </div>
+                  </div>
                 ))}
+              <div className="rounded-xl border border-border bg-card p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <Trophy className="w-4 h-4 text-amber-400" />
+                  <span className="text-xs text-muted-foreground">Ranked</span>
+                </div>
+                <div className="text-xl font-bold font-mono">{data.total_ranked}</div>
+                <div className="text-[10px] text-muted-foreground mt-0.5">
+                  politicians with 3+ priced trades
+                </div>
               </div>
             </div>
-          </div>
+          )}
 
-          {portfolioLoading ? (
-            <div className="space-y-4">
-              <div className="flex items-center gap-3 text-muted-foreground">
-                <Loader2 className="w-5 h-5 animate-spin" />
-                <span className="text-sm">Computing portfolio returns for all politicians...</span>
-              </div>
-              {[...Array(5)].map((_, i) => <Skeleton key={i} className="h-16 w-full" />)}
-            </div>
-          ) : !sortedPortfolio || sortedPortfolio.length === 0 ? (
-            <Card>
-              <CardContent className="py-12 text-center text-muted-foreground text-sm">
-                No portfolio return data available yet. Ensure trades have price data.
-              </CardContent>
-            </Card>
-          ) : (
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base flex items-center gap-2">
-                  <TrendingUp className="w-4 h-4 text-emerald-400" />
-                  Best Traders by {sortMode === "equal_weight" ? "Copy Trading" : "Conviction-Weighted"} Returns
-                </CardTitle>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {sortMode === "equal_weight"
-                    ? "Equal $10K per trade — what you'd make copy-trading each politician"
-                    : "Position-sized by STOCK Act range (1x–5x) — captures conviction signal"}
-                </p>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-0">
-                  {sortedPortfolio.slice(0, 50).map((entry, idx) => {
-                    const stats = entry[sortMode];
-                    const altStats = entry[sortMode === "equal_weight" ? "conviction_weighted" : "equal_weight"];
-                    const isPos = (stats?.annual_return ?? 0) >= 0;
-                    return (
-                      <div key={entry.politician} className="flex items-center gap-3 py-3 border-b border-border/30 last:border-0">
-                        {/* Rank */}
-                        <div className={`w-8 text-center font-mono text-sm font-bold ${
-                          idx === 0 ? "text-yellow-400" :
-                          idx === 1 ? "text-gray-400" :
-                          idx === 2 ? "text-orange-400" : "text-muted-foreground"
-                        }`}>
-                          {idx + 1}
+          {/* Leaderboard Table */}
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base flex items-center gap-2">
+                <TrendingUp className="w-4 h-4 text-emerald-400" />
+                Politician Trading Leaderboard
+              </CardTitle>
+              <p className="text-xs text-muted-foreground mt-1">
+                Portfolio returns simulated from actual trade disclosures. Equal $10K per trade.
+              </p>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-0">
+                {sortedEntries.slice(0, 50).map((entry) => {
+                  const mainVal = sortCol === "cagr" ? entry.portfolio_cagr_pct
+                    : sortCol === "total" ? entry.portfolio_return_pct
+                    : sortCol === "conv_cagr" ? entry.conviction_cagr_pct
+                    : sortCol === "avg_return" ? entry.avg_return_pct
+                    : entry.win_rate_pct;
+                  const isPos = (mainVal ?? 0) >= 0;
+
+                  return (
+                    <div key={entry.politician} className="flex items-center gap-3 py-3 border-b border-border/30 last:border-0">
+                      {/* Rank */}
+                      <div className={`w-8 text-center font-mono text-sm font-bold ${
+                        entry.rank === 1 ? "text-yellow-400" :
+                        entry.rank === 2 ? "text-gray-400" :
+                        entry.rank === 3 ? "text-orange-400" : "text-muted-foreground"
+                      }`}>
+                        {entry.rank}
+                      </div>
+
+                      {/* Name + metadata */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <Link
+                            href={`/politician/${encodeURIComponent(entry.politician)}`}
+                            className="font-medium text-sm truncate hover:underline hover:text-primary transition-colors"
+                          >
+                            {entry.politician}
+                          </Link>
+                          {entry.party && (
+                            <Badge variant="outline" className={`text-[10px] px-1.5 ${partyBadgeClass(entry.party)}`}>
+                              {entry.party}
+                            </Badge>
+                          )}
+                          {entry.state && (
+                            <span className="text-[10px] text-muted-foreground">{entry.state}</span>
+                          )}
+                          {entry.chamber && (
+                            <span className="text-[10px] text-muted-foreground capitalize">{entry.chamber}</span>
+                          )}
                         </div>
-
-                        {/* Name + party */}
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <Link
-                              href={`/politician/${encodeURIComponent(entry.politician)}`}
-                              className="font-medium text-sm truncate hover:underline hover:text-primary transition-colors"
-                            >
-                              {entry.politician}
-                            </Link>
-                            {entry.party && (
-                              <Badge variant="outline" className={`text-[10px] px-1.5 ${partyBadgeClass(entry.party)}`}>
-                                {entry.party}
-                              </Badge>
-                            )}
-                            {entry.state && (
-                              <span className="text-[10px] text-muted-foreground">{entry.state}</span>
-                            )}
-                            {entry.chamber && (
-                              <span className="text-[10px] text-muted-foreground capitalize">{entry.chamber}</span>
-                            )}
-                          </div>
-                          <div className="text-[10px] text-muted-foreground mt-0.5">
-                            {entry.total_trades} buy trades · {stats?.years ?? 0}yr track record
-                          </div>
-                        </div>
-
-                        {/* Annual Return (CAGR) */}
-                        <div className={`text-right w-20 ${sortCol === "cagr" ? "ring-1 ring-amber-500/30 rounded-md px-1.5 py-0.5 -mx-1.5 -my-0.5 bg-amber-500/5" : ""}`}>
-                          <div className={`font-mono text-sm font-bold ${isPos ? "text-emerald-400" : "text-red-400"}`}>
-                            {(stats?.annual_return ?? 0) > 0 ? "+" : ""}{stats?.annual_return?.toFixed(1) ?? "0"}%
-                          </div>
-                          <div className="text-[10px] text-muted-foreground">CAGR</div>
-                        </div>
-
-                        {/* Total Return */}
-                        <div className={`text-right w-20 ${sortCol === "total" ? "ring-1 ring-amber-500/30 rounded-md px-1.5 py-0.5 -mx-1.5 -my-0.5 bg-amber-500/5" : ""}`}>
-                          <div className={`font-mono text-sm font-medium ${(stats?.total_return ?? 0) >= 0 ? "text-emerald-400/80" : "text-red-400/80"}`}>
-                            {(stats?.total_return ?? 0) > 0 ? "+" : ""}{stats?.total_return?.toFixed(0) ?? "0"}%
-                          </div>
-                          <div className="text-[10px] text-muted-foreground">total</div>
-                        </div>
-
-                        {/* Alt strategy comparison */}
-                        <div className={`text-right w-16 hidden md:block ${sortCol === "conv" ? "ring-1 ring-amber-500/30 rounded-md px-1.5 py-0.5 -mx-1.5 -my-0.5 bg-amber-500/5" : ""}`}>
-                          <div className={`font-mono text-xs ${(altStats?.annual_return ?? 0) >= 0 ? "text-blue-400/60" : "text-red-400/60"}`}>
-                            {(altStats?.annual_return ?? 0) > 0 ? "+" : ""}{altStats?.annual_return?.toFixed(1) ?? "0"}%
-                          </div>
-                          <div className="text-[9px] text-muted-foreground/60">
-                            {sortMode === "equal_weight" ? "conv." : "eq.wt."}
-                          </div>
+                        <div className="text-[10px] text-muted-foreground mt-0.5">
+                          {entry.priced_buy_count} priced buys · {entry.years_active ?? 0}yr track record · {entry.win_rate_pct?.toFixed(0) ?? "—"}% win rate
                         </div>
                       </div>
-                    );
-                  })}
-                </div>
-                {sortedPortfolio.length > 50 && (
-                  <div className="text-xs text-muted-foreground text-center pt-3 border-t border-border/50">
-                    Showing top 50 of {sortedPortfolio.length} politicians
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          )}
-        </>
-      ) : (
-        /* ─── Yearly Activity Tab (original leaderboard) ─── */
-        <>
-          {loading ? (
-            <div className="space-y-4">
-              {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-24 w-full" />)}
-            </div>
-          ) : !data ? (
-            <Card>
-              <CardContent className="py-12 text-center text-muted-foreground text-sm">
-                No leaderboard data available yet.
-              </CardContent>
-            </Card>
-          ) : (
-            <>
-              {/* Consistent Winners */}
-              {data.consistent_winners && data.consistent_winners.length > 0 && (
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-base flex items-center gap-2">
-                      <Medal className="w-4 h-4 text-yellow-400" />
-                      Most Consistent Traders
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                      {data.consistent_winners.slice(0, 6).map((winner, i) => (
-                        <div key={i} className="p-4 rounded-lg bg-muted/30 border border-border/50">
-                          <Link href={`/politician/${encodeURIComponent(winner.politician)}`} className="font-medium text-sm hover:underline hover:text-primary transition-colors">{winner.politician}</Link>
-                          <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
-                            <span>{winner.years_active} years active</span>
-                            <span>Avg rank #{(winner.avg_rank ?? 0).toFixed(0)}</span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
 
-              {/* Yearly Leaderboards */}
-              {Object.entries(data.leaderboards)
-                .sort(([a], [b]) => Number(b) - Number(a))
-                .map(([year, yearData]) => (
-                <Card key={year}>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-base flex items-center gap-2">
-                      <Trophy className="w-4 h-4" />
-                      {year} — Most Active Traders
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-1">
-                      {yearData.top_10.map((entry) => (
-                        <div key={entry.rank} className="flex items-center gap-3 py-2.5 border-b border-border/30 last:border-0">
-                          <div className={`w-7 text-center font-mono text-sm font-bold ${
-                            entry.rank === 1 ? "text-yellow-400" :
-                            entry.rank === 2 ? "text-gray-400" :
-                            entry.rank === 3 ? "text-orange-400" : "text-muted-foreground"
-                          }`}>
-                            {entry.rank}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2">
-                              <Link href={`/politician/${encodeURIComponent(entry.politician)}`} className="font-medium text-sm truncate hover:underline hover:text-primary transition-colors">{entry.politician}</Link>
-                              {entry.party && (
-                                <Badge variant="outline" className={`text-[10px] px-1.5 ${partyBadgeClass(entry.party)}`}>{entry.party}</Badge>
-                              )}
-                              {entry.state && (
-                                <span className="text-[10px] text-muted-foreground">{entry.state}</span>
-                              )}
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-4 shrink-0">
-                            <div className="text-right">
-                              <div className="font-mono text-sm font-medium">{entry.total_trades}</div>
-                              <div className="text-[10px] text-muted-foreground">trades</div>
-                            </div>
-                            {entry.avg_return_pct != null && (
-                              <div className="text-right w-16">
-                                <div className={`font-mono text-sm font-medium ${entry.avg_return_pct >= 0 ? "text-green-400" : "text-red-400"}`}>
-                                  {entry.avg_return_pct >= 0 ? "+" : ""}{entry.avg_return_pct.toFixed(1)}%
-                                </div>
-                                <div className="text-[10px] text-muted-foreground">avg return</div>
-                              </div>
-                            )}
-                          </div>
+                      {/* Main Value (what we're sorting by) */}
+                      <div className="text-right w-20">
+                        <div className={`font-mono text-sm font-bold ${isPos ? "text-emerald-400" : "text-red-400"}`}>
+                          {(mainVal ?? 0) > 0 ? "+" : ""}{mainVal?.toFixed(1) ?? "—"}{sortCol === "win_rate" ? "" : "%"}
                         </div>
-                      ))}
+                        <div className="text-[10px] text-muted-foreground">
+                          {sortCol === "cagr" ? "CAGR" : sortCol === "total" ? "total" : sortCol === "conv_cagr" ? "conv. CAGR" : sortCol === "avg_return" ? "avg/trade" : "win rate"}
+                        </div>
+                      </div>
+
+                      {/* Secondary: CAGR (if not already showing) */}
+                      {sortCol !== "cagr" && (
+                        <div className="text-right w-16 hidden md:block">
+                          <div className={`font-mono text-xs ${(entry.portfolio_cagr_pct ?? 0) >= 0 ? "text-emerald-400/60" : "text-red-400/60"}`}>
+                            {(entry.portfolio_cagr_pct ?? 0) > 0 ? "+" : ""}{entry.portfolio_cagr_pct?.toFixed(1) ?? "—"}%
+                          </div>
+                          <div className="text-[9px] text-muted-foreground/60">CAGR</div>
+                        </div>
+                      )}
+
+                      {/* Secondary: Total Return (if not already showing) */}
+                      {sortCol !== "total" && (
+                        <div className="text-right w-16 hidden md:block">
+                          <div className={`font-mono text-xs ${(entry.portfolio_return_pct ?? 0) >= 0 ? "text-blue-400/60" : "text-red-400/60"}`}>
+                            {(entry.portfolio_return_pct ?? 0) > 0 ? "+" : ""}{entry.portfolio_return_pct?.toFixed(0) ?? "—"}%
+                          </div>
+                          <div className="text-[9px] text-muted-foreground/60">total</div>
+                        </div>
+                      )}
                     </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </>
-          )}
+                  );
+                })}
+              </div>
+              {sortedEntries.length > 50 && (
+                <div className="text-xs text-muted-foreground text-center pt-3 border-t border-border/50">
+                  Showing top 50 of {sortedEntries.length} politicians
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </>
       )}
     </div>

@@ -1,13 +1,17 @@
-"""API routes for conviction score backtesting and politician leaderboard."""
+"""API routes for the unified leaderboard.
+
+All data comes from the pre-computed Politician table — no live queries
+against the Trade table, no Yahoo API calls. Sub-100ms response times.
+"""
 
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.database import get_db
+from app.models.database import Politician, get_db
 from app.services.backtester import (
     backtest_conviction_scores,
     get_most_profitable_trades,
-    get_politician_leaderboard,
 )
 
 router = APIRouter(prefix="/leaderboard", tags=["Leaderboard & Backtest"])
@@ -15,21 +19,82 @@ router = APIRouter(prefix="/leaderboard", tags=["Leaderboard & Backtest"])
 
 @router.get("/")
 async def get_leaderboard(
-    year: int | None = Query(default=None, description="Filter by year (e.g. 2025). Omit for all years."),
-    min_trades: int = Query(default=3, ge=1, description="Minimum trades to be ranked"),
+    min_trades: int = Query(default=3, ge=1, description="Minimum priced buy trades to be ranked"),
     chamber: str | None = Query(default=None, description="Filter: house or senate"),
+    sort_by: str = Query(default="portfolio_cagr", description="Sort by: portfolio_cagr, conviction_cagr, avg_return, win_rate"),
+    db: AsyncSession = Depends(get_db),
 ):
     """
-    Politician trading leaderboard - who makes the best trades?
-
-    Returns rankings by average return, win rate, consistency across years.
-    Also shows party comparison (are Democrats or Republicans better traders?).
+    Unified politician trading leaderboard — reads from pre-computed Politician table.
+    Instant response (<100ms). Data refreshed every 15 min by background job.
     """
-    return await get_politician_leaderboard(
-        year=year,
-        min_trades=min_trades,
-        chamber=chamber,
+    stmt = select(Politician).where(
+        Politician.priced_buy_count >= min_trades,
+        Politician.portfolio_cagr.isnot(None),
     )
+    if chamber:
+        stmt = stmt.where(Politician.chamber == chamber.lower())
+
+    result = await db.execute(stmt)
+    politicians = result.scalars().all()
+
+    # Sort
+    sort_key_map = {
+        "portfolio_cagr": lambda p: p.portfolio_cagr or -999,
+        "conviction_cagr": lambda p: p.conviction_cagr or -999,
+        "avg_return": lambda p: p.avg_return or -999,
+        "win_rate": lambda p: p.win_rate or -999,
+    }
+    sort_fn = sort_key_map.get(sort_by, sort_key_map["portfolio_cagr"])
+    politicians.sort(key=sort_fn, reverse=True)
+
+    entries = []
+    for i, p in enumerate(politicians):
+        entries.append({
+            "rank": i + 1,
+            "politician": p.name,
+            "party": p.party,
+            "state": p.state,
+            "chamber": p.chamber,
+            "total_trades": p.total_trades or 0,
+            "total_buys": p.total_buys or 0,
+            "total_sells": p.total_sells or 0,
+            "avg_return_pct": p.avg_return,
+            "win_rate_pct": p.win_rate,
+            "portfolio_return_pct": p.portfolio_return,
+            "portfolio_cagr_pct": p.portfolio_cagr,
+            "conviction_return_pct": p.conviction_return,
+            "conviction_cagr_pct": p.conviction_cagr,
+            "priced_buy_count": p.priced_buy_count or 0,
+            "years_active": p.years_active,
+            "last_trade_date": p.last_trade_date.isoformat() if p.last_trade_date else None,
+        })
+
+    # Party comparison
+    party_stats: dict[str, dict] = {}
+    for e in entries:
+        party = e["party"] or "Unknown"
+        if party not in party_stats:
+            party_stats[party] = {"cagrs": [], "count": 0, "total_trades": 0}
+        if e["portfolio_cagr_pct"] is not None:
+            party_stats[party]["cagrs"].append(e["portfolio_cagr_pct"])
+        party_stats[party]["count"] += 1
+        party_stats[party]["total_trades"] += e["total_trades"]
+
+    party_comparison = {
+        party: {
+            "avg_cagr_pct": round(sum(d["cagrs"]) / len(d["cagrs"]), 2) if d["cagrs"] else None,
+            "total_politicians": d["count"],
+            "total_trades": d["total_trades"],
+        }
+        for party, d in party_stats.items()
+    }
+
+    return {
+        "leaderboard": entries,
+        "total_ranked": len(entries),
+        "party_comparison": party_comparison,
+    }
 
 
 @router.get("/portfolio-returns")
@@ -39,17 +104,44 @@ async def get_portfolio_returns(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Portfolio-simulated returns for all politicians (both equal-weight and conviction-weighted).
-
-    Uses stored prices from the DB — no Yahoo API calls, fast enough for a leaderboard.
-    Returns annual CAGR and total return for each politician under both strategies.
+    Portfolio-simulated returns — reads from pre-computed Politician table.
+    Backwards-compatible with the old endpoint format.
     """
-    from app.services.portfolio import compute_leaderboard_returns
+    stmt = select(Politician).where(
+        Politician.priced_buy_count >= min_trades,
+        Politician.portfolio_cagr.isnot(None),
+    )
+    result = await db.execute(stmt)
+    politicians = result.scalars().all()
 
-    results = await compute_leaderboard_returns(db, min_priced_trades=min_trades)
+    results = []
+    for p in politicians:
+        results.append({
+            "politician": p.name,
+            "party": p.party,
+            "state": p.state,
+            "chamber": p.chamber,
+            "total_trades": p.priced_buy_count or 0,
+            "equal_weight": {
+                "total_return": p.portfolio_return,
+                "annual_return": p.portfolio_cagr,
+                "total_invested": (p.priced_buy_count or 0) * 10_000,
+                "positions_open": 0,  # Not tracked in pre-computed stats
+                "years": p.years_active or 0,
+            },
+            "conviction_weighted": {
+                "total_return": p.conviction_return,
+                "annual_return": p.conviction_cagr,
+                "total_invested": 0,
+                "positions_open": 0,
+                "years": p.years_active or 0,
+            },
+        })
 
     if sort_by == "conviction_weighted":
         results.sort(key=lambda x: x["conviction_weighted"]["annual_return"] or 0, reverse=True)
+    else:
+        results.sort(key=lambda x: x["equal_weight"]["annual_return"] or 0, reverse=True)
 
     return results
 
@@ -59,10 +151,7 @@ async def best_trades(
     days: int = Query(default=365, ge=30, le=3650),
     limit: int = Query(default=50, ge=1, le=200),
 ):
-    """
-    The most profitable individual congressional trades.
-    Ranked by return since disclosure.
-    """
+    """The most profitable individual congressional trades."""
     return await get_most_profitable_trades(days=days, limit=limit)
 
 
@@ -81,28 +170,7 @@ async def run_backtest(
         ),
     ),
 ):
-    """
-    Backtest the conviction scoring system against real trade outcomes.
-
-    Three return modes:
-    - **forward**: What did the stock do N days after the politician bought?
-    - **exit**: What was the actual P&L when the politician SOLD? (matches
-      buy→sell pairs per politician per ticker). Shows holding period,
-      entry/exit prices, and realized return.
-    - **both**: Shows both + a forward_vs_exit comparison that reveals
-      whether politicians time their exits well (do they sell at the right time
-      or leave money on the table?)
-
-    NOTE: SLOW (5-60 seconds) - calls yfinance for price data per trade.
-
-    Returns:
-    - Score bucket analysis (avg return per bucket)
-    - Score validation (do high scores beat low scores?)
-    - Committee analysis (do committee overlap trades outperform?)
-    - Forward vs exit comparison (do politicians time exits well?)
-    - Small cap vs large cap hypothesis test
-    - Top scored trades with entry, exit, holding period, and all returns
-    """
+    """Backtest the conviction scoring system against real trade outcomes."""
     return await backtest_conviction_scores(
         days=days,
         forward_days=forward_days,

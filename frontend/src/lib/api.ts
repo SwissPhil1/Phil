@@ -46,6 +46,12 @@ export interface Politician {
   avg_return: number | null;
   win_rate: number | null;
   last_trade_date: string;
+  portfolio_return: number | null;
+  portfolio_cagr: number | null;
+  conviction_return: number | null;
+  conviction_cagr: number | null;
+  priced_buy_count: number | null;
+  years_active: number | null;
 }
 
 export interface Signal {
@@ -92,9 +98,27 @@ export interface LeaderboardEntry {
   state: string;
   chamber: string;
   total_trades: number;
+  total_buys: number;
+  total_sells: number;
   avg_return_pct: number | null;
   win_rate_pct: number | null;
-  best_trade_return_pct: number | null;
+  portfolio_return_pct: number | null;
+  portfolio_cagr_pct: number | null;
+  conviction_return_pct: number | null;
+  conviction_cagr_pct: number | null;
+  priced_buy_count: number;
+  years_active: number | null;
+  last_trade_date: string | null;
+}
+
+export interface UnifiedLeaderboard {
+  leaderboard: LeaderboardEntry[];
+  total_ranked: number;
+  party_comparison: Record<string, {
+    avg_cagr_pct: number | null;
+    total_politicians: number;
+    total_trades: number;
+  }>;
 }
 
 export interface HedgeFund {
@@ -264,10 +288,7 @@ export const api = {
   // Leaderboard
   getLeaderboard: (params?: Record<string, string>) => {
     const qs = params ? "?" + new URLSearchParams(params).toString() : "";
-    return fetchApi<{
-      leaderboards: Record<string, { top_10: LeaderboardEntry[]; bottom_10: LeaderboardEntry[] }>;
-      consistent_winners: LeaderboardEntry[];
-    }>(`/api/v1/leaderboard${qs}`);
+    return fetchApi<UnifiedLeaderboard>(`/api/v1/leaderboard${qs}`);
   },
   getBestTrades: () => fetchApi<Trade[]>("/api/v1/leaderboard/best-trades"),
   getPortfolioReturns: (params?: Record<string, string>) => {

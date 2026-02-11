@@ -635,14 +635,19 @@ async def rebuild_politician_stats(session: AsyncSession):
             lambda t: _conviction_amount(t.amount_low, t.amount_high),
         )
 
-        if eq and conv:
+        # Store results — use whichever simulation(s) succeeded.
+        # Previously required BOTH to succeed, which silently dropped
+        # politicians like Pelosi whose conviction sim had too few
+        # priced buys while their equal-weight sim worked fine.
+        primary = eq or conv
+        if primary:
             portfolio_stats[canonical] = {
-                "portfolio_return": eq["total_return"],
-                "portfolio_cagr": eq["annual_return"],
-                "conviction_return": conv["total_return"],
-                "conviction_cagr": conv["annual_return"],
-                "priced_buy_count": eq["priced_buys"],
-                "years_active": eq["years"],
+                "portfolio_return": eq["total_return"] if eq else conv["total_return"],
+                "portfolio_cagr": eq["annual_return"] if eq else conv["annual_return"],
+                "conviction_return": conv["total_return"] if conv else None,
+                "conviction_cagr": conv["annual_return"] if conv else None,
+                "priced_buy_count": primary["priced_buys"],
+                "years_active": primary["years"],
             }
 
     # --- Phase 3: Write everything to Politician table ---

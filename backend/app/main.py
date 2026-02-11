@@ -78,8 +78,7 @@ async def _run_initial_ingestions():
         ("Kalshi markets", run_kalshi_ingestion, False),
         ("13F hedge fund holdings", run_13f_ingestion, False),
         ("Senate historical trades (2012+)", run_historical_ingestion, True),  # skip if has data
-        ("House trades (CapitolTrades full)", lambda: run_capitoltrades_ingestion(chamber="house"), True),  # skip if has data
-        ("House trades (CapitolTrades refresh)", lambda: run_capitoltrades_ingestion(chamber="house", max_pages=100), False),  # always refresh recent pages
+        ("House trades (CapitolTrades)", lambda: run_capitoltrades_ingestion(chamber="house"), True),  # skip if has data
         ("Politician stats + prices", lambda: run_performance_update(price_limit=50000), False),
         ("Refresh current prices", run_price_refresh, False),
     ]

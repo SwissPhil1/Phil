@@ -337,10 +337,10 @@ def score_trade_conviction(
     recent_sells_count: int = 0,
 ) -> dict:
     """
-    Score a single trade on conviction (0-100).
+    Score a single trade on conviction (0-115).
     Higher score = stronger signal that this trade has insider information edge.
 
-    v2 scoring with 8 factors:
+    v3 scoring with 9 factors:
     1. Position Size (0-25 pts)
     2. Committee Overlap (0-30 pts)
     3. Disclosure Speed (0-15 pts) - includes late-disclosure penalty detection
@@ -349,6 +349,7 @@ def score_trade_conviction(
     6. Historical Accuracy (0-15 pts) - politician's track record
     7. Contrarian Signal (0-10 pts) - buying when market/others selling
     8. Size Anomaly (0-10 pts) - trade size vs politician's usual
+    9. Small-Cap Committee (0-15 pts) - small/mid-cap + committee overlap bonus
     """
     score = 0
     factors = []
@@ -388,24 +389,34 @@ def score_trade_conviction(
             if overlap["flag"] == "HIGH":
                 # Direct sector match - strongest signal
                 pts = 30
-                # Bonus: small/mid cap + committee = even more suspicious
-                if ticker not in MEGA_CAP and ticker not in LARGE_CAP:
-                    pts = 30  # Already max, but flag it
-                    factors.append({
-                        "factor": "committee_smallcap_bonus", "points": 0,
-                        "detail": f"Small/mid-cap + committee overlap (very suspicious)"
-                    })
                 score += pts
                 factors.append({
                     "factor": "committee_overlap", "points": pts,
                     "detail": f"DIRECT: {overlap['committee']} → {overlap['stock_sector']}"
                 })
+                # Small/mid-cap + direct committee overlap = very suspicious
+                # Less analyst coverage, more information asymmetry, bigger edge
+                if ticker not in MEGA_CAP and ticker not in LARGE_CAP:
+                    bonus = 15
+                    score += bonus
+                    factors.append({
+                        "factor": "small_cap_committee", "points": bonus,
+                        "detail": f"Small/mid-cap + committee overlap (very suspicious — low coverage, high info edge)"
+                    })
             else:
                 score += 15
                 factors.append({
                     "factor": "committee_overlap", "points": 15,
                     "detail": f"Broad oversight: {overlap['committee']}"
                 })
+                # Broad oversight on small cap still worth a smaller bonus
+                if ticker not in MEGA_CAP and ticker not in LARGE_CAP:
+                    bonus = 8
+                    score += bonus
+                    factors.append({
+                        "factor": "small_cap_committee", "points": bonus,
+                        "detail": f"Small/mid-cap + broad committee oversight"
+                    })
 
     # ─── Factor 3: Disclosure Speed (0-15 pts) ───
     delay = trade.get("disclosure_delay_days")
@@ -521,17 +532,17 @@ def score_trade_conviction(
             "detail": f"Buying while {recent_sells_count} others selling (contrarian conviction)"
         })
 
-    # Cap at 100
-    score = min(max(score, 0), 100)
+    # Cap at 115 (raised for small-cap committee factor)
+    score = min(max(score, 0), 115)
 
-    # Rating
-    if score >= 80:
+    # Rating (thresholds scaled for new cap)
+    if score >= 85:
         rating = "VERY_HIGH"
-    elif score >= 60:
+    elif score >= 65:
         rating = "HIGH"
-    elif score >= 40:
+    elif score >= 45:
         rating = "MEDIUM"
-    elif score >= 20:
+    elif score >= 25:
         rating = "LOW"
     else:
         rating = "VERY_LOW"

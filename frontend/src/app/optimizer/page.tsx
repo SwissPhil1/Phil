@@ -118,7 +118,7 @@ export default function OptimizerPage() {
               </div>
             </div>
             <p className="text-xs">
-              Factors optimized: position size, committee overlap, disclosure speed, political cluster, cross-source confirmation, track record, contrarian signal, mega-cap discount
+              Factors optimized: position size, committee overlap, disclosure speed, political cluster, cross-source confirmation, track record, contrarian signal, small-cap committee bonus, mega-cap discount
             </p>
           </CardContent>
         </Card>

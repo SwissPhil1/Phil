@@ -52,6 +52,7 @@ async def test_custom_weights(
     cross_source_fund_max: float = Query(10.0),
     track_record_max: float = Query(15.0),
     contrarian_max: float = Query(10.0),
+    small_cap_committee_max: float = Query(15.0),
     lookback_days: int = Query(365),
     max_trades: int = Query(300),
 ):
@@ -69,6 +70,7 @@ async def test_custom_weights(
             cross_source_fund_max=cross_source_fund_max,
             track_record_max=track_record_max,
             contrarian_max=contrarian_max,
+            small_cap_committee_max=small_cap_committee_max,
         )
 
         trades = await extract_trade_features(days=lookback_days, max_trades=max_trades)

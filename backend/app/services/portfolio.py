@@ -495,8 +495,6 @@ async def compute_leaderboard_returns(
         .order_by(Trade.tx_date.desc().nullslast())
     )
     global_current_prices: dict[str, float] = {}
-    # Also build a historical price cache: (ticker, date_str) → price
-    global_historical_prices: dict[tuple[str, str], float] = {}
     for row in all_price_result:
         ticker = row.ticker
         if ticker not in global_current_prices:
@@ -552,30 +550,31 @@ async def compute_leaderboard_returns(
                 missing_tickers.add(ticker)
 
     # Self-healing: fetch missing historical prices from Yahoo
-    # This ensures politicians aren't excluded just because the pricing job missed them
+    # Cap at 30 tickers to keep response time reasonable (~3-5s)
+    MAX_HEAL_TICKERS = 30
     if unpriced_ticker_dates:
+        heal_tickers = dict(list(unpriced_ticker_dates.items())[:MAX_HEAL_TICKERS])
+        heal_trades = [(t, d) for t, d in unpriced_trades if t.ticker in heal_tickers]
         logger.info(
-            f"Leaderboard self-heal: {len(unpriced_trades)} unpriced trades "
-            f"across {len(unpriced_ticker_dates)} tickers — fetching from Yahoo"
+            f"Leaderboard self-heal: {len(heal_trades)} trades across "
+            f"{len(heal_tickers)}/{len(unpriced_ticker_dates)} tickers"
         )
-        yahoo_historical = await _batch_fetch_historical_prices(unpriced_ticker_dates)
+        yahoo_historical = await _batch_fetch_historical_prices(heal_tickers)
 
         # Apply fetched prices to trade objects and persist to DB
         from sqlalchemy import update as sql_update
         patched = 0
-        for t, date_str in unpriced_trades:
+        for t, date_str in heal_trades:
             price = yahoo_historical.get((t.ticker, date_str))
             if price and price > 0:
                 t.price_at_disclosure = price
-                # Also get current price for return calculation
                 curr = global_current_prices.get(t.ticker)
                 if curr:
                     t.price_current = curr
                     t.return_since_disclosure = round(((curr - price) / price) * 100, 2)
                 patched += 1
-        # Persist patched prices to DB so they're cached for next time
         if patched > 0:
-            for t, date_str in unpriced_trades:
+            for t, date_str in heal_trades:
                 if t.price_at_disclosure:
                     await session.execute(
                         sql_update(Trade)
@@ -587,7 +586,7 @@ async def compute_leaderboard_returns(
                         )
                     )
             await session.commit()
-            logger.info(f"Leaderboard self-heal: patched {patched} trades with Yahoo prices")
+            logger.info(f"Leaderboard self-heal: patched {patched} trades")
 
     # Also add unpriced tickers to the current-price missing set
     for ticker in unpriced_ticker_dates:

@@ -78,6 +78,14 @@ class Politician(Base):
     win_rate = Column(Float)
     last_trade_date = Column(DateTime)
 
+    # Portfolio-simulated returns (single source of truth for leaderboard)
+    portfolio_return = Column(Float)       # Total return % (equal-weight copy trading)
+    portfolio_cagr = Column(Float)         # Annual CAGR % (equal-weight)
+    conviction_return = Column(Float)      # Total return % (conviction-weighted)
+    conviction_cagr = Column(Float)        # Annual CAGR % (conviction-weighted)
+    priced_buy_count = Column(Integer, default=0)  # Buys with price data
+    years_active = Column(Float)           # Trading span in years
+
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
@@ -332,6 +340,34 @@ class TrumpDonor(Base):
     entity = Column(String(300))  # PAC name
     interests = Column(Text)  # semicolon-separated
 
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# --- Ticker Price Cache ---
+
+
+class TickerPrice(Base):
+    """Cached price data per ticker. One Yahoo call per ticker, shared across all trades."""
+    __tablename__ = "ticker_prices"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ticker = Column(String(20), nullable=False, index=True)
+    date = Column(String(10), nullable=False, index=True)  # "2025-01-15"
+    close_price = Column(Float, nullable=False)
+    fetched_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("ticker", "date", name="uq_ticker_price"),
+    )
+
+
+class TickerCurrentPrice(Base):
+    """Latest price per ticker, refreshed every 15 min."""
+    __tablename__ = "ticker_current_prices"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ticker = Column(String(20), nullable=False, unique=True, index=True)
+    price = Column(Float, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 

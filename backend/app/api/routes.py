@@ -289,6 +289,12 @@ async def get_politician_detail(
         avg_return=politician.avg_return,
         win_rate=politician.win_rate,
         last_trade_date=politician.last_trade_date,
+        portfolio_return=politician.portfolio_return,
+        portfolio_cagr=politician.portfolio_cagr,
+        conviction_return=politician.conviction_return,
+        conviction_cagr=politician.conviction_cagr,
+        priced_buy_count=politician.priced_buy_count,
+        years_active=politician.years_active,
         recent_trades=[_trade_to_response(t) for t in trades],
     )
 

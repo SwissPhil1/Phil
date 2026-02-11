@@ -37,6 +37,12 @@ class PoliticianResponse(BaseModel):
     avg_return: float | None
     win_rate: float | None
     last_trade_date: datetime | None
+    portfolio_return: float | None = None
+    portfolio_cagr: float | None = None
+    conviction_return: float | None = None
+    conviction_cagr: float | None = None
+    priced_buy_count: int | None = None
+    years_active: float | None = None
 
     class Config:
         from_attributes = True

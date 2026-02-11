@@ -517,6 +517,15 @@ async def compute_leaderboard_returns(
                             del positions[t.ticker]
 
             if total_bought <= 0 or priced_buys < min_priced_trades:
+                if mode == "equal_weight":
+                    total_buys = sum(1 for t in trades if t.tx_type == "purchase")
+                    unpriced = sum(1 for t in trades if t.tx_type == "purchase" and (not t.price_at_disclosure or t.price_at_disclosure <= 0))
+                    if total_buys >= min_priced_trades:
+                        logger.warning(
+                            f"Leaderboard EXCLUDED {pol_name}: {total_buys} buys but only "
+                            f"{priced_buys} priced (need {min_priced_trades}). "
+                            f"{unpriced} buys missing price_at_disclosure."
+                        )
                 continue
 
             # Value open positions at current prices (global lookup)

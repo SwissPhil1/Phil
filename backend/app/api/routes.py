@@ -766,6 +766,57 @@ async def politician_pricing_status(
         "priced_buys": len(priced_buys),
         "trades_with_current_price": len(has_current),
         "leaderboard_eligible": len(priced_buys) >= 3,
+        "unpriced_buys": [
+            {"ticker": t.ticker, "tx_date": str(t.tx_date)[:10] if t.tx_date else None}
+            for t in buys if not t.price_at_disclosure
+        ],
         "ticker_prices": ticker_prices,
         "sample_trades": samples,
     }
+
+
+@router.post("/admin/force-price/{politician}")
+async def force_price_politician(
+    politician: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Force-price all unpriced trades for a specific politician using Yahoo API."""
+    import httpx
+    from app.services.performance import get_price_on_date, get_current_price
+
+    stmt = (
+        select(Trade)
+        .where(Trade.politician.ilike(f"%{politician}%"))
+        .where(Trade.ticker.isnot(None))
+        .where(Trade.price_at_disclosure.is_(None))
+        .order_by(Trade.tx_date.desc().nullslast())
+    )
+    result = await db.execute(stmt)
+    trades = result.scalars().all()
+
+    if not trades:
+        return {"message": f"No unpriced trades for '{politician}'", "updated": 0}
+
+    updated = 0
+    errors = []
+    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+        for t in trades:
+            trade_date = t.tx_date or t.disclosure_date
+            if not trade_date or not t.ticker:
+                continue
+            try:
+                hist_price = await get_price_on_date(client, t.ticker, trade_date)
+                curr_price = await get_current_price(client, t.ticker)
+                if hist_price and curr_price:
+                    ret = ((curr_price - hist_price) / hist_price) * 100
+                    t.price_at_disclosure = hist_price
+                    t.price_current = curr_price
+                    t.return_since_disclosure = round(ret, 2)
+                    updated += 1
+                else:
+                    errors.append(f"{t.ticker} {str(trade_date)[:10]}: hist={hist_price} curr={curr_price}")
+            except Exception as e:
+                errors.append(f"{t.ticker}: {e}")
+
+    await db.commit()
+    return {"politician": politician, "updated": updated, "attempted": len(trades), "errors": errors[:10]}

@@ -387,10 +387,15 @@ async def compute_leaderboard_returns(
             continue
 
         # Build current-price lookup (latest price_current per ticker)
+        # Fallback: compute from price_at_disclosure + return_since_disclosure
         current_prices: dict[str, float] = {}
         for t in reversed(trades):
-            if t.ticker and t.price_current and t.ticker not in current_prices:
+            if not t.ticker or t.ticker in current_prices:
+                continue
+            if t.price_current:
                 current_prices[t.ticker] = t.price_current
+            elif t.price_at_disclosure and t.return_since_disclosure is not None:
+                current_prices[t.ticker] = t.price_at_disclosure * (1 + t.return_since_disclosure / 100)
 
         eq_result = None
         conv_result = None

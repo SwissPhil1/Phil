@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select, update
+from sqlalchemy import distinct, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import Politician, Trade, get_db
@@ -528,6 +528,27 @@ async def trigger_price_update(
     return result
 
 
+@router.post("/admin/refresh-prices")
+async def trigger_price_refresh():
+    """Manually trigger current price refresh for all priced tickers.
+
+    This backfills price_current for trades where it's missing and
+    updates returns. Runs in background.
+    """
+    import asyncio
+    from app.services.performance import run_price_refresh
+
+    async def _run():
+        try:
+            result = await run_price_refresh()
+            logger.info(f"Price refresh finished: {result}")
+        except Exception as e:
+            logger.error(f"Price refresh failed: {e}")
+
+    asyncio.create_task(_run())
+    return {"status": "started", "message": "Refreshing current prices for all priced tickers"}
+
+
 @router.post("/admin/ingest-historical")
 async def trigger_historical_ingestion(
     start_year: int = Query(default=2012, ge=2012, le=2026),
@@ -672,4 +693,90 @@ async def test_prices(ticker: str = Query(default="AAPL")):
         "current_price": current,
         "price_30d_ago": historical,
         "working": current is not None,
+    }
+
+
+@router.get("/admin/pricing-status")
+async def pricing_status(db: AsyncSession = Depends(get_db)):
+    """Diagnostic: show pricing coverage across all trades."""
+    from sqlalchemy import distinct
+
+    # Total trades with tickers
+    total = (await db.execute(
+        select(func.count()).select_from(Trade).where(Trade.ticker.isnot(None))
+    )).scalar() or 0
+
+    # Trades with price_at_disclosure
+    priced = (await db.execute(
+        select(func.count()).select_from(Trade).where(
+            Trade.ticker.isnot(None),
+            Trade.price_at_disclosure.isnot(None),
+        )
+    )).scalar() or 0
+
+    # Buy trades with prices
+    priced_buys = (await db.execute(
+        select(func.count()).select_from(Trade).where(
+            Trade.ticker.isnot(None),
+            Trade.price_at_disclosure.isnot(None),
+            Trade.tx_type == "purchase",
+        )
+    )).scalar() or 0
+
+    # Total buy trades
+    total_buys = (await db.execute(
+        select(func.count()).select_from(Trade).where(
+            Trade.ticker.isnot(None),
+            Trade.tx_type == "purchase",
+        )
+    )).scalar() or 0
+
+    # Trades eligible for pricing (have disclosure_date)
+    eligible = (await db.execute(
+        select(func.count()).select_from(Trade).where(
+            Trade.ticker.isnot(None),
+            Trade.disclosure_date.isnot(None),
+            Trade.tx_type.in_(["purchase", "sale", "sale_partial", "sale_full"]),
+            Trade.price_at_disclosure.is_(None),
+        )
+    )).scalar() or 0
+
+    # Unique tickers
+    total_tickers = (await db.execute(
+        select(func.count(distinct(Trade.ticker))).where(Trade.ticker.isnot(None))
+    )).scalar() or 0
+
+    priced_tickers = (await db.execute(
+        select(func.count(distinct(Trade.ticker))).where(
+            Trade.ticker.isnot(None),
+            Trade.price_at_disclosure.isnot(None),
+        )
+    )).scalar() or 0
+
+    # Politicians with 3+ priced buys (leaderboard eligible)
+    lb_eligible = (await db.execute(
+        select(func.count()).select_from(
+            select(Trade.politician)
+            .where(
+                Trade.ticker.isnot(None),
+                Trade.price_at_disclosure.isnot(None),
+                Trade.tx_type == "purchase",
+            )
+            .group_by(Trade.politician)
+            .having(func.count() >= 3)
+            .subquery()
+        )
+    )).scalar() or 0
+
+    return {
+        "total_trades_with_ticker": total,
+        "priced_trades": priced,
+        "unpriced_eligible": eligible,
+        "pricing_coverage": f"{round(priced / total * 100, 1)}%" if total else "0%",
+        "total_buys": total_buys,
+        "priced_buys": priced_buys,
+        "buy_coverage": f"{round(priced_buys / total_buys * 100, 1)}%" if total_buys else "0%",
+        "unique_tickers": total_tickers,
+        "priced_tickers": priced_tickers,
+        "leaderboard_eligible_politicians": lb_eligible,
     }

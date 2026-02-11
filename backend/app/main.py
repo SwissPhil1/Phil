@@ -78,7 +78,8 @@ async def _run_initial_ingestions():
         ("Kalshi markets", run_kalshi_ingestion, False),
         ("13F hedge fund holdings", run_13f_ingestion, False),
         ("Senate historical trades (2012+)", run_historical_ingestion, True),  # skip if has data
-        ("House trades (CapitolTrades)", lambda: run_capitoltrades_ingestion(chamber="house"), True),  # skip if has data
+        ("House trades (CapitolTrades full)", lambda: run_capitoltrades_ingestion(chamber="house"), True),  # skip if has data
+        ("House trades (CapitolTrades refresh)", lambda: run_capitoltrades_ingestion(chamber="house", max_pages=100), False),  # always refresh recent pages
         ("Politician stats + prices", lambda: run_performance_update(price_limit=50000), False),
         ("Refresh current prices", run_price_refresh, False),
     ]
@@ -143,10 +144,10 @@ async def lifespan(app: FastAPI):
             id="committees", name="Committee assignment ingestion",
         )
         scheduler.add_job(
-            lambda: run_capitoltrades_ingestion(chamber="house", max_pages=20),
+            lambda: run_capitoltrades_ingestion(chamber="house", max_pages=100),
             "interval",
             hours=6,
-            id="capitoltrades", name="CapitolTrades House trade refresh",
+            id="capitoltrades", name="CapitolTrades House trade refresh (100 pages)",
         )
         scheduler.add_job(
             lambda: run_performance_update(price_limit=20000), "interval",

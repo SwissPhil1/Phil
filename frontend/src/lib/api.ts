@@ -271,7 +271,7 @@ export const api = {
   getPolitician: (name: string) =>
     fetchApi<Politician & { recent_trades: Trade[]; total_buys?: number; total_sells?: number }>(`/api/v1/politicians/${encodeURIComponent(name)}`),
   getPoliticianCommittees: (name: string) =>
-    fetchApi<{ committee: string; subcommittee?: string }[]>(`/api/v1/signals/committees/politician/${encodeURIComponent(name)}`),
+    fetchApi<{ committee_id?: string; committee_name?: string; committee?: string; role?: string; rank?: number }[]>(`/api/v1/signals/committees/politician/${encodeURIComponent(name)}`),
   getPoliticianPortfolio: (name: string) =>
     fetchApi<PortfolioSimulation>(`/api/v1/politicians/${encodeURIComponent(name)}/portfolio`),
 

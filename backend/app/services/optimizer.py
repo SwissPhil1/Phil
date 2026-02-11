@@ -77,6 +77,7 @@ class WeightConfig:
     triple_confirmation_bonus: float = 5.0
     track_record_max: float = 15.0
     contrarian_max: float = 10.0
+    leadership_role_max: float = 20.0  # CEPR study: strongest predictor of informed trading
 
     # Thresholds
     cluster_mega_cap_discount: float = 0.4  # Multiplier for mega-cap cluster score
@@ -178,7 +179,20 @@ def score_trade_with_weights(
     if trade_features.get("is_contrarian"):
         score += weights.contrarian_max
 
-    return min(max(score, 0), 150)  # Allow higher cap during optimization
+    # Factor 8: Leadership Role (CEPR study: strongest predictor — 45pp alpha post-ascension)
+    leadership = trade_features.get("leadership_role")
+    if leadership:
+        role_lower = leadership.lower()
+        if "chair" in role_lower and "vice" not in role_lower:
+            score += weights.leadership_role_max  # Committee Chair = full points
+        elif "ranking" in role_lower:
+            score += weights.leadership_role_max * 0.85  # Ranking Member
+        elif "vice" in role_lower:
+            score += weights.leadership_role_max * 0.65  # Vice Chair
+        else:
+            score += weights.leadership_role_max * 0.40  # Other leadership roles
+
+    return min(max(score, 0), 170)  # Raised cap for new factor
 
 
 # ─── Trade Feature Extraction ───
@@ -187,23 +201,30 @@ def score_trade_with_weights(
 async def extract_trade_features(days: int = 730, max_trades: int = 500) -> list[dict]:
     """
     Extract features for all historical purchase trades, along with their
-    actual returns (forward 30/90/180d and exit-based).
-    This is the dataset we optimize against.
+    actual returns. Uses stored DB prices (price_at_disclosure + return_since_disclosure)
+    instead of yfinance, so it's fast and always works.
     """
+    from sqlalchemy import or_
+
     since = datetime.utcnow() - timedelta(days=days)
     cutoff_30 = datetime.utcnow() - timedelta(days=30)
 
     async with async_session() as session:
-        # Get purchase trades
+        # Get purchase trades — use tx_date OR disclosure_date (many trades lack tx_date)
         stmt = (
             select(Trade)
             .where(Trade.tx_type == "purchase")
             .where(Trade.ticker.isnot(None))
-            .where(Trade.tx_date >= since)
-            .where(Trade.tx_date <= cutoff_30)
-            .where(Trade.ticker != "--")
-            .where(Trade.ticker != "N/A")
-            .order_by(Trade.tx_date.desc())
+            .where(Trade.ticker.notin_(["--", "N/A", ""]))
+            .where(Trade.price_at_disclosure.isnot(None))  # Must have entry price
+            .where(Trade.return_since_disclosure.isnot(None))  # Must have return data
+            .where(
+                or_(
+                    Trade.tx_date.between(since, cutoff_30),
+                    (Trade.tx_date.is_(None)) & (Trade.disclosure_date.between(since, cutoff_30)),
+                )
+            )
+            .order_by(Trade.tx_date.desc().nullslast())
             .limit(max_trades)
         )
         result = await session.execute(stmt)
@@ -215,16 +236,15 @@ async def extract_trade_features(days: int = 730, max_trades: int = 500) -> list
         # Batch lookups
         politician_names = list(set(t.politician for t in trades))
 
-        # Committees
-        committee_map: dict[str, list[str]] = {}
-        for name in politician_names:
-            comm_result = await session.execute(
-                select(PoliticianCommittee.committee_name)
-                .where(PoliticianCommittee.politician_name.ilike(f"%{name}%"))
-            )
-            committee_map[name] = [r[0] for r in comm_result.all()]
+        # Committees (batch fetch all at once)
+        committee_map: dict[str, list[str]] = defaultdict(list)
+        comm_result = await session.execute(
+            select(PoliticianCommittee.politician_name, PoliticianCommittee.committee_name)
+        )
+        for r in comm_result.all():
+            committee_map[r.politician_name].append(r.committee_name)
 
-        # Track records
+        # Track records (single query)
         track_records: dict[str, dict] = {}
         for name in politician_names:
             tr_result = await session.execute(
@@ -235,7 +255,7 @@ async def extract_trade_features(days: int = 730, max_trades: int = 500) -> list
                         case((Trade.return_since_disclosure > 0, 1), else_=0)
                     ).label("wins"),
                 )
-                .where(Trade.politician.ilike(f"%{name}%"))
+                .where(Trade.politician == name)
                 .where(Trade.tx_type == "purchase")
                 .where(Trade.return_since_disclosure.isnot(None))
             )
@@ -256,7 +276,7 @@ async def extract_trade_features(days: int = 730, max_trades: int = 500) -> list
                 Trade.ticker,
                 func.count(func.distinct(Trade.politician)).label("pol_count"),
             )
-            .where(Trade.tx_date >= since)
+            .where(or_(Trade.tx_date >= since, Trade.disclosure_date >= since))
             .where(Trade.tx_type == "purchase")
             .where(Trade.ticker.isnot(None))
             .group_by(Trade.ticker)
@@ -271,7 +291,7 @@ async def extract_trade_features(days: int = 730, max_trades: int = 500) -> list
                 Trade.ticker,
                 func.count(func.distinct(Trade.politician)).label("pol_count"),
             )
-            .where(Trade.tx_date >= since)
+            .where(or_(Trade.tx_date >= since, Trade.disclosure_date >= since))
             .where(Trade.tx_type.in_(["sale", "sale_full", "sale_partial"]))
             .where(Trade.ticker.isnot(None))
             .group_by(Trade.ticker)
@@ -302,30 +322,56 @@ async def extract_trade_features(days: int = 730, max_trades: int = 500) -> list
         for row in fund_result.all():
             fund_new.add(row[0])
 
-        # Build exit index
+        # Build exit index (sales by politician+ticker)
         sales_stmt = (
             select(Trade)
             .where(Trade.tx_type.in_(["sale", "sale_full", "sale_partial"]))
             .where(Trade.ticker.isnot(None))
-            .where(Trade.tx_date >= since)
-            .order_by(Trade.tx_date.asc())
+            .where(Trade.price_at_disclosure.isnot(None))
+            .where(or_(Trade.tx_date >= since, Trade.disclosure_date >= since))
+            .order_by(Trade.tx_date.asc().nullslast())
         )
         sales_result = await session.execute(sales_stmt)
         all_sales = sales_result.scalars().all()
         sales_index: dict[tuple[str, str], list] = defaultdict(list)
         for s in all_sales:
-            if s.ticker and s.tx_date:
-                sales_index[(s.politician.lower(), s.ticker.upper())].append(s)
+            if s.ticker:
+                s_date = s.tx_date or s.disclosure_date
+                if s_date:
+                    sales_index[(s.politician.lower(), s.ticker.upper())].append(s)
 
-    # Now build feature vectors with returns
+        # Leadership roles for the new leadership factor
+        leadership_map: dict[str, str] = {}
+        lead_result = await session.execute(
+            select(PoliticianCommittee.politician_name, PoliticianCommittee.role)
+            .where(PoliticianCommittee.role.isnot(None))
+            .where(PoliticianCommittee.role != "Member")
+        )
+        for r in lead_result.all():
+            existing = leadership_map.get(r.politician_name, "")
+            # Keep highest role: Chair > Ranking Member > Vice Chair
+            if "Chair" in (r.role or "") and "Chair" not in existing:
+                leadership_map[r.politician_name] = r.role
+            elif "Ranking" in (r.role or "") and not existing:
+                leadership_map[r.politician_name] = r.role
+
+    # Build feature vectors with returns from stored DB data
     features_list = []
 
     for trade in trades:
         ticker = trade.ticker
-        if not ticker or ticker in ("--", "N/A", ""):
+        trade_date = trade.tx_date or trade.disclosure_date
+        if not ticker or not trade_date:
             continue
 
+        # Match committee data (try exact match, then fuzzy)
         committees = committee_map.get(trade.politician, [])
+        if not committees:
+            for pol_name, comms in committee_map.items():
+                if trade.politician.lower() in pol_name.lower() or pol_name.lower() in trade.politician.lower():
+                    committees = comms
+                    break
+
         overlap = check_committee_overlap(committees, ticker) if committees else None
 
         tr = track_records.get(trade.politician, {})
@@ -336,11 +382,19 @@ async def extract_trade_features(days: int = 730, max_trades: int = 500) -> list
         if trade.disclosure_date and trade.tx_date:
             delay = (trade.disclosure_date - trade.tx_date).days
 
+        # Leadership role
+        leadership = leadership_map.get(trade.politician)
+        if not leadership:
+            for pol_name, role in leadership_map.items():
+                if trade.politician.lower() in pol_name.lower() or pol_name.lower() in trade.politician.lower():
+                    leadership = role
+                    break
+
         features = {
             # Identifiers
             "politician": trade.politician,
             "ticker": ticker,
-            "tx_date": trade.tx_date,
+            "tx_date": trade_date,
             "party": trade.party,
             # Scoring features
             "amount_low": trade.amount_low or 0,
@@ -356,34 +410,40 @@ async def extract_trade_features(days: int = 730, max_trades: int = 500) -> list
             "avg_return": tr.get("avg_return", 0),
             "total_past_trades": tr.get("total", 0),
             "is_contrarian": (trade.tx_type == "purchase" and recent_sells >= 3),
+            "leadership_role": leadership,
         }
 
-        # Look up actual returns
-        if trade.tx_date:
-            price_at_trade = _get_price(ticker, trade.tx_date)
-            if price_at_trade and price_at_trade > 0:
-                features["price_at_trade"] = price_at_trade
+        # Use stored returns from DB (no yfinance needed!)
+        entry_price = trade.price_at_disclosure
+        current_price = trade.price_current
+        ret = trade.return_since_disclosure
 
-                # Forward returns at multiple windows
-                for window in [30, 90, 180, 365]:
-                    fwd_date = trade.tx_date + timedelta(days=window)
-                    if fwd_date <= datetime.utcnow():
-                        p = _get_price(ticker, fwd_date)
-                        if p:
-                            features[f"return_{window}d"] = ((p - price_at_trade) / price_at_trade) * 100
+        if entry_price and entry_price > 0 and ret is not None:
+            features["price_at_trade"] = entry_price
 
-                # Exit return
-                key = (trade.politician.lower(), ticker.upper())
-                sales = sales_index.get(key, [])
-                for sale in sales:
-                    if sale.tx_date and sale.tx_date > trade.tx_date:
-                        exit_price = _get_price(ticker, sale.tx_date)
-                        if exit_price:
-                            features["exit_return"] = ((exit_price - price_at_trade) / price_at_trade) * 100
-                            features["holding_days"] = (sale.tx_date - trade.tx_date).days
-                        break
+            # return_since_disclosure serves as our "current" return
+            # Estimate forward returns based on holding period
+            days_held = (datetime.utcnow() - trade_date).days
+            if days_held >= 30:
+                features["return_30d"] = ret * min(30 / days_held, 1.0)  # Proportional estimate
+            if days_held >= 90:
+                features["return_90d"] = ret * min(90 / days_held, 1.0)
+            if days_held >= 180:
+                features["return_180d"] = ret * min(180 / days_held, 1.0)
+            # Full holding period return
+            features["return_current"] = ret
 
-        # Only include trades where we have at least one return metric
+            # Exit return from matching sales
+            key = (trade.politician.lower(), ticker.upper())
+            sales = sales_index.get(key, [])
+            for sale in sales:
+                sale_date = sale.tx_date or sale.disclosure_date
+                if sale_date and sale_date > trade_date and sale.price_at_disclosure:
+                    features["exit_return"] = ((sale.price_at_disclosure - entry_price) / entry_price) * 100
+                    features["holding_days"] = (sale_date - trade_date).days
+                    break
+
+        # Include trades with at least one return metric
         if any(k.startswith("return_") or k == "exit_return" for k in features):
             features_list.append(features)
 
@@ -555,6 +615,7 @@ def _generate_weight_grid(n_steps: int = 5) -> list[WeightConfig]:
         "cross_source_fund_max": [5, 10, 15],
         "track_record_max": [5, 10, 15, 20],
         "contrarian_max": [5, 10, 15],
+        "leadership_role_max": [10, 15, 20, 25, 30],
     }
 
     # Full grid would be too large, so sample strategically
@@ -580,6 +641,7 @@ def _generate_weight_grid(n_steps: int = 5) -> list[WeightConfig]:
             cross_source_fund_max=random.choice(ranges["cross_source_fund_max"]),
             track_record_max=random.choice(ranges["track_record_max"]),
             contrarian_max=random.choice(ranges["contrarian_max"]),
+            leadership_role_max=random.choice(ranges["leadership_role_max"]),
             cluster_mega_cap_discount=random.choice([0.2, 0.3, 0.4, 0.5, 0.6]),
             late_disclosure_days=random.choice([30, 45, 60]),
             min_cluster_size=random.choice([2, 3, 4]),
@@ -603,7 +665,7 @@ def _evolve_weights(
     fields = [
         "position_size_max", "committee_overlap_max", "disclosure_speed_max",
         "cluster_max", "cross_source_insider_max", "cross_source_fund_max",
-        "track_record_max", "contrarian_max", "triple_confirmation_bonus",
+        "track_record_max", "contrarian_max", "leadership_role_max", "triple_confirmation_bonus",
         "cluster_mega_cap_discount", "late_disclosure_days", "min_cluster_size",
     ]
 

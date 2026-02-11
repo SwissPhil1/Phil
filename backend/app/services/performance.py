@@ -1,9 +1,11 @@
 """Performance tracking service - calculates returns for politician trades.
 
-Architecture (v2 — single source of truth):
+Architecture (v3 — unified simulation engine):
 - TickerPrice / TickerCurrentPrice tables cache ALL price data
 - Trades get returns via JOIN with cached prices (bulk UPDATE per ticker)
 - Politician table stores pre-computed portfolio stats (leaderboard reads this)
+- Portfolio simulation uses the SAME _run_simulation engine from portfolio.py
+  for both leaderboard (stored prices) and profile pages (live Yahoo prices)
 - Yahoo API calls are per unique ticker (~1000), NOT per trade (~80K)
 """
 
@@ -24,13 +26,18 @@ from app.models.database import (
     async_session,
     dialect_insert,
 )
+from app.services.portfolio import (
+    _run_simulation,
+    _conviction_amount,
+    _cagr,
+    POSITION_SIZE,
+)
 
 logger = logging.getLogger(__name__)
 
 YAHOO_HEADERS = {"User-Agent": "Mozilla/5.0"}
 CONCURRENT_FETCHES = 15
 YAHOO_TIMEOUT = 12
-POSITION_SIZE = 10_000  # $10K per trade for equal-weight portfolio
 
 
 # ─── Yahoo API helpers ───
@@ -382,105 +389,10 @@ async def refresh_current_prices(session: AsyncSession):
     return updated
 
 
-# ─── Portfolio simulation (inline, no extra queries at request time) ───
-
-
-def _cagr(final_nav: float, invested: float, years: float) -> float:
-    """Compound Annual Growth Rate."""
-    if years <= 0.1 or invested <= 0 or final_nav <= 0:
-        return 0.0
-    ratio = final_nav / invested
-    return round((ratio ** (1 / years) - 1) * 100, 1)
-
-
-def _conviction_amount(amount_low: float | None, amount_high: float | None) -> float:
-    """Position size based on STOCK Act range."""
-    if not amount_low or not amount_high:
-        return POSITION_SIZE
-    mid = (amount_low + amount_high) / 2
-    if mid <= 15_001:
-        return POSITION_SIZE * 0.5
-    if mid <= 50_000:
-        return POSITION_SIZE
-    if mid <= 100_000:
-        return POSITION_SIZE * 1.5
-    if mid <= 250_000:
-        return POSITION_SIZE * 2
-    if mid <= 500_000:
-        return POSITION_SIZE * 3
-    if mid <= 1_000_000:
-        return POSITION_SIZE * 4
-    return POSITION_SIZE * 5
-
-
-def _simulate_portfolio(
-    trades: list,
-    current_prices: dict[str, float],
-    get_amount,
-) -> dict | None:
-    """Run portfolio simulation on a list of trades. Returns stats dict or None."""
-    positions: dict[str, dict] = {}
-    cash = 0.0
-    total_bought = 0.0
-    priced_buys = 0
-
-    for t in trades:
-        price = t.price_at_disclosure
-        if not price or price <= 0 or not t.ticker:
-            continue
-
-        if t.tx_type == "purchase":
-            amount = get_amount(t)
-            shares = amount / price
-            total_bought += amount
-            priced_buys += 1
-            if cash >= amount:
-                cash -= amount
-            else:
-                cash = 0.0
-            if t.ticker in positions:
-                positions[t.ticker]["shares"] += shares
-                positions[t.ticker]["cost"] += amount
-            else:
-                positions[t.ticker] = {"shares": shares, "cost": amount}
-
-        elif t.tx_type in ("sale", "sale_full", "sale_partial"):
-            if t.ticker in positions:
-                pos = positions[t.ticker]
-                val = pos["shares"] * price
-                if t.tx_type == "sale_partial":
-                    cash += val * 0.5
-                    pos["shares"] *= 0.5
-                    pos["cost"] *= 0.5
-                    if pos["shares"] <= 0.001:
-                        del positions[t.ticker]
-                else:
-                    cash += val
-                    del positions[t.ticker]
-
-    if total_bought <= 0 or priced_buys < 3:
-        return None
-
-    # Value open positions at current prices
-    holdings = 0.0
-    for ticker, pos in positions.items():
-        cp = current_prices.get(ticker)
-        holdings += pos["shares"] * cp if cp else pos["cost"]
-
-    nav = holdings + cash
-    total_return = round(((nav / total_bought) - 1) * 100, 1)
-
-    dates = [t.tx_date or t.disclosure_date for t in trades if t.tx_date or t.disclosure_date]
-    years = (datetime.utcnow() - min(dates)).days / 365.25 if dates else 0
-    annual = _cagr(nav, total_bought, years)
-
-    return {
-        "total_return": total_return,
-        "annual_return": annual,
-        "priced_buys": priced_buys,
-        "positions_open": len(positions),
-        "years": round(years, 1),
-    }
+# ─── Portfolio simulation ───
+# Uses the shared _run_simulation engine from portfolio.py so that
+# leaderboard stats and individual profile pages produce identical results.
+# Only the price source differs: stored DB prices here vs live Yahoo on profile pages.
 
 
 # ─── Unified stats rebuild ───
@@ -607,11 +519,28 @@ async def rebuild_politician_stats(session: AsyncSession):
         if pol_name not in canonical_map:
             canonical_map[pol_name] = pol_name
 
-    # Compute portfolio stats per politician
+    # Build global (ticker, date) → historical price lookup from trade data
+    # This lets _run_simulation look up entry prices without Yahoo API calls
+    historical_prices: dict[tuple[str, str], float] = {}
+    for t in all_trades:
+        if t.price_at_disclosure and t.price_at_disclosure > 0 and t.ticker:
+            d = t.tx_date or t.disclosure_date
+            if d:
+                historical_prices[(t.ticker, d.isoformat()[:10])] = t.price_at_disclosure
+
+    def stored_price(ticker: str, date: datetime) -> float | None:
+        """Price lookup using stored DB data (same logic as Yahoo but cached)."""
+        date_str = date.isoformat()[:10]
+        hist = historical_prices.get((ticker, date_str))
+        if hist:
+            return hist
+        # For current-date valuation of open positions
+        return current_prices.get(ticker)
+
+    # Compute portfolio stats per politician using the SAME engine as profile pages
     portfolio_stats: dict[str, dict] = {}
     for pol_name, trades in politician_trades.items():
         canonical = canonical_map.get(pol_name, pol_name)
-        # Merge trades from all name variants
         if canonical in portfolio_stats:
             continue  # Already computed
 
@@ -624,21 +553,47 @@ async def rebuild_politician_stats(session: AsyncSession):
         # Sort by date
         all_pol_trades.sort(key=lambda t: (t.tx_date or t.disclosure_date or datetime.min))
 
-        # Equal-weight simulation
-        eq = _simulate_portfolio(
-            all_pol_trades, current_prices,
-            lambda t: POSITION_SIZE,
-        )
-        # Conviction-weighted simulation
-        conv = _simulate_portfolio(
-            all_pol_trades, current_prices,
-            lambda t: _conviction_amount(t.amount_low, t.amount_high),
+        # Count priced buys for minimum threshold
+        priced_buys = sum(
+            1 for t in all_pol_trades
+            if t.tx_type == "purchase"
+            and t.ticker
+            and (t.tx_date or t.disclosure_date)
+            and t.price_at_disclosure
+            and t.price_at_disclosure > 0
         )
 
-        # Store results — use whichever simulation(s) succeeded.
-        # Previously required BOTH to succeed, which silently dropped
-        # politicians like Pelosi whose conviction sim had too few
-        # priced buys while their equal-weight sim worked fine.
+        # Compute years active
+        dates = [t.tx_date or t.disclosure_date for t in all_pol_trades if t.tx_date or t.disclosure_date]
+        years = (datetime.utcnow() - min(dates)).days / 365.25 if dates else 0
+
+        def _extract_stats(nav_series, positions_open):
+            """Convert _run_simulation output to leaderboard stats dict."""
+            if not nav_series or priced_buys < 3:
+                return None
+            final = nav_series[-1]
+            return {
+                "total_return": final["return_pct"],
+                "annual_return": _cagr(final["nav"], 1.0, years),
+                "priced_buys": priced_buys,
+                "positions_open": positions_open,
+                "years": round(years, 1),
+            }
+
+        # Equal-weight simulation (same engine as profile page)
+        eq_series, _, eq_open = _run_simulation(
+            all_pol_trades, stored_price, lambda t: POSITION_SIZE,
+        )
+        eq = _extract_stats(eq_series, eq_open)
+
+        # Conviction-weighted simulation (same engine + same tiers as profile page)
+        conv_series, _, conv_open = _run_simulation(
+            all_pol_trades, stored_price,
+            lambda t: _conviction_amount(t.amount_low, t.amount_high),
+        )
+        conv = _extract_stats(conv_series, conv_open)
+
+        # Include if at least one simulation succeeded
         primary = eq or conv
         if primary:
             portfolio_stats[canonical] = {

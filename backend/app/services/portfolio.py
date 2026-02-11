@@ -131,11 +131,12 @@ def _run_simulation(
         weeks: weekly date grid for NAV snapshots (None = final-only mode)
 
     Returns:
-        (nav_series, total_injected, positions_open)
+        (nav_series, total_bought, positions_open)
+        total_bought = sum of ALL buy allocations (used as return denominator)
     """
     positions: dict[str, dict] = {}
     cash = 0.0
-    total_injected = 0.0
+    total_bought = 0.0   # Total $ allocated to buys (incl. recycled cash)
     trade_idx = 0
     nav_series = []
 
@@ -163,11 +164,11 @@ def _run_simulation(
             if t.tx_type == "purchase":
                 amount = get_amount(t)
                 shares = amount / price
+                total_bought += amount  # Every buy counts in denominator
 
                 if cash >= amount:
                     cash -= amount
                 else:
-                    total_injected += amount - cash
                     cash = 0.0
 
                 if ticker in positions:
@@ -203,17 +204,17 @@ def _run_simulation(
                 holdings += pos["cost"]
 
         nav = holdings + cash
-        return_pct = ((nav / total_injected) - 1) * 100 if total_injected > 0 else 0.0
+        return_pct = ((nav / total_bought) - 1) * 100 if total_bought > 0 else 0.0
 
         nav_series.append({
             "date": week_date.strftime("%Y-%m-%d"),
             "nav": round(nav, 0),
             "return_pct": round(return_pct, 1),
             "positions": len(positions),
-            "invested": round(total_injected, 0),
+            "invested": round(total_bought, 0),
         })
 
-    return nav_series, total_injected, len(positions)
+    return nav_series, total_bought, len(positions)
 
 
 # ─── Individual politician page: Yahoo-powered dual simulation ───
@@ -377,7 +378,7 @@ async def compute_leaderboard_returns(
         ]:
             positions: dict[str, dict] = {}
             cash = 0.0
-            injected = 0.0
+            total_bought = 0.0  # Sum of ALL buy allocations (return denominator)
 
             for t in trades:
                 price = t.price_at_disclosure
@@ -387,10 +388,10 @@ async def compute_leaderboard_returns(
                 if t.tx_type == "purchase":
                     amount = get_amount(t)
                     shares = amount / price
+                    total_bought += amount  # Every buy counts
                     if cash >= amount:
                         cash -= amount
                     else:
-                        injected += amount - cash
                         cash = 0.0
                     if t.ticker in positions:
                         positions[t.ticker]["shares"] += shares
@@ -412,7 +413,7 @@ async def compute_leaderboard_returns(
                             cash += val
                             del positions[t.ticker]
 
-            if injected <= 0:
+            if total_bought <= 0:
                 continue
 
             # Value open positions at current prices
@@ -422,16 +423,16 @@ async def compute_leaderboard_returns(
                 holdings += pos["shares"] * cp if cp else pos["cost"]
 
             nav = holdings + cash
-            total_return = round(((nav / injected) - 1) * 100, 1)
+            total_return = round(((nav / total_bought) - 1) * 100, 1)
 
             dates = [t.tx_date or t.disclosure_date for t in trades if t.tx_date or t.disclosure_date]
             years = (datetime.utcnow() - min(dates)).days / 365.25
-            annual = _cagr(nav, injected, years)
+            annual = _cagr(nav, total_bought, years)
 
             result_entry = {
                 "total_return": total_return,
                 "annual_return": annual,
-                "total_invested": round(injected, 0),
+                "total_invested": round(total_bought, 0),
                 "positions_open": len(positions),
                 "years": round(years, 1),
             }

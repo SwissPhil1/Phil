@@ -35,8 +35,9 @@ export default function OptimizerPage() {
         generations: "3",
         top_n: "10",
       });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       if (!data?.data_summary || !data?.top_formulas) {
-        throw new Error(data?.error || "Optimizer returned incomplete data — not enough trades with price data yet. Try again after more prices have been fetched.");
+        throw new Error((data as any)?.error || "Optimizer returned incomplete data — not enough trades with price data yet. Try again after more prices have been fetched.");
       }
       setResult(data);
     } catch (e) {

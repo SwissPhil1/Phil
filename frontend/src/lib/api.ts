@@ -190,6 +190,32 @@ export interface OptimizerResult {
   };
 }
 
+export interface TestWeightsResult {
+  weights: Record<string, number>;
+  result: {
+    fitness: number;
+    correlation_30d: number;
+    correlation_90d: number;
+    hit_rate_30d: number;
+    hit_rate_90d: number;
+    high_score_avg_return_30d: number;
+    high_score_avg_return_90d: number;
+    low_score_avg_return_30d: number;
+    low_score_avg_return_90d: number;
+    edge_30d: number;
+    edge_90d: number;
+    n_trades: number;
+    n_high_score: number;
+    n_low_score: number;
+  };
+  cross_validation: {
+    is_robust: boolean;
+    avg_test_fitness: number;
+    avg_overfit_ratio: number;
+  };
+  trades_analyzed: number;
+}
+
 export interface TrumpOverview {
   total_insiders: number;
   total_companies: number;
@@ -333,7 +359,7 @@ export const api = {
   getOptimizerStatus: () => fetchApi<{ status: string; sample_trades: number }>("/api/v1/optimizer/status"),
   testCustomWeights: (params: Record<string, string>) => {
     const qs = new URLSearchParams(params).toString();
-    return fetchApi<unknown>(`/api/v1/optimizer/test-weights?${qs}`);
+    return fetchApi<TestWeightsResult>(`/api/v1/optimizer/test-weights?${qs}`);
   },
 
   // Most traded tickers

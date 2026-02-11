@@ -411,6 +411,45 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+    # Ensure all expected columns exist (create_all doesn't ALTER existing tables)
+    if "postgresql" in DATABASE_URL or "postgres" in DATABASE_URL:
+        await _migrate_missing_columns()
+
+
+async def _migrate_missing_columns():
+    """Add any columns that were added to the models after the table was first created."""
+    import logging
+    logger = logging.getLogger(__name__)
+
+    # Map of table -> list of (column_name, column_type_sql, default)
+    migrations = {
+        "politicians": [
+            ("portfolio_return", "DOUBLE PRECISION", None),
+            ("portfolio_cagr", "DOUBLE PRECISION", None),
+            ("conviction_return", "DOUBLE PRECISION", None),
+            ("conviction_cagr", "DOUBLE PRECISION", None),
+            ("priced_buy_count", "INTEGER", "0"),
+            ("years_active", "DOUBLE PRECISION", None),
+            ("total_buys", "INTEGER", "0"),
+            ("total_sells", "INTEGER", "0"),
+            ("district", "VARCHAR(10)", None),
+        ],
+    }
+
+    async with engine.begin() as conn:
+        for table, columns in migrations.items():
+            for col_name, col_type, default in columns:
+                try:
+                    default_clause = f" DEFAULT {default}" if default else ""
+                    await conn.execute(
+                        __import__("sqlalchemy").text(
+                            f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS "
+                            f"{col_name} {col_type}{default_clause}"
+                        )
+                    )
+                except Exception as e:
+                    logger.debug(f"Column {table}.{col_name} migration: {e}")
+
 
 async def get_db():
     async with async_session() as session:

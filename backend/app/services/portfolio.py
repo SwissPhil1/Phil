@@ -487,6 +487,8 @@ async def compute_leaderboard_returns(
                 "total_trades": buy_count,
                 "equal_weight": eq_result,
                 "conviction_weighted": conv_result,
+                "_debug_current_prices": len(current_prices),
+                "_debug_version": 2,
             })
 
     results.sort(key=lambda x: x["equal_weight"]["annual_return"] or 0, reverse=True)

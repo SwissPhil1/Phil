@@ -32,10 +32,14 @@ async def run_optimizer(
             generations=generations,
             top_n=top_n,
         )
+        if "error" in result:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=422, content=result)
         return result
     except Exception as e:
         logger.error(f"Optimizer run failed: {e}")
-        return {"error": str(e), "status": "failed"}
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=500, content={"error": str(e), "status": "failed"})
 
 
 @router.get("/test-weights")

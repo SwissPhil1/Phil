@@ -35,6 +35,9 @@ export default function OptimizerPage() {
         generations: "3",
         top_n: "10",
       });
+      if (!data?.data_summary || !data?.top_formulas) {
+        throw new Error(data?.error || "Optimizer returned incomplete data — not enough trades with price data yet. Try again after more prices have been fetched.");
+      }
       setResult(data);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Optimizer failed";

@@ -97,6 +97,35 @@ async def fetch_latest_form4_filings(client: httpx.AsyncClient) -> list[dict]:
     return filings
 
 
+async def fetch_latest_form4_global(client: httpx.AsyncClient) -> list[dict]:
+    """Fetch ALL recent Form 4 filings from the global RSS feed and parse each one.
+
+    This provides broad coverage across all publicly traded companies,
+    not just the hardcoded TRACKED_COMPANIES list.
+    """
+    rss_entries = await fetch_latest_form4_filings(client)
+    all_trades = []
+
+    for entry in rss_entries:
+        link = entry.get("link", "")
+        accession = entry.get("accession", "")
+        if not link:
+            continue
+
+        try:
+            trades = await parse_form4_xml(client, link)
+            for trade in trades:
+                if not trade.get("insider_cik"):
+                    continue
+                trade["accession_number"] = accession
+                all_trades.append(trade)
+        except Exception as e:
+            logger.debug(f"Failed to parse global Form 4 filing {accession}: {e}")
+
+    logger.info(f"Parsed {len(all_trades)} trades from {len(rss_entries)} global Form 4 filings")
+    return all_trades
+
+
 async def fetch_company_form4s(client: httpx.AsyncClient, cik: str, ticker: str) -> list[dict]:
     """Fetch Form 4 filings for a specific company via RSS."""
     url = (
@@ -297,13 +326,49 @@ async def parse_form4_xml(client: httpx.AsyncClient, filing_url: str) -> list[di
 
 
 async def run_insider_ingestion() -> dict:
-    """Ingest latest Form 4 insider trades for tracked companies."""
+    """Ingest latest Form 4 insider trades from global feed AND tracked companies.
+
+    1. Fetches the latest 100 Form 4 filings from the SEC global RSS feed
+       to capture insider trades across ALL publicly traded companies.
+    2. Then fetches filings for each tracked (priority) company for deeper
+       historical coverage (up to 10 filings per company).
+    """
     total_new = 0
+    global_new = 0
     company_results = {}
     errors = []
 
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
         async with async_session() as session:
+            # ── Phase 1: Global Form 4 RSS feed (all companies) ──
+            try:
+                global_trades = await fetch_latest_form4_global(client)
+                for trade in global_trades:
+                    try:
+                        stmt = (
+                            dialect_insert(InsiderTrade)
+                            .values(**trade)
+                            .on_conflict_do_nothing(
+                                index_elements=[
+                                    "insider_cik", "ticker", "tx_date", "tx_code", "shares"
+                                ]
+                            )
+                        )
+                        result = await session.execute(stmt)
+                        if result.rowcount > 0:
+                            global_new += 1
+                    except Exception as e:
+                        logger.debug(f"Error inserting global trade: {e}")
+
+                await session.commit()
+                total_new += global_new
+                logger.info(f"Global Form 4 feed: inserted {global_new} new trades")
+
+            except Exception as e:
+                logger.error(f"Error during global Form 4 ingestion: {e}")
+                errors.append(f"global_feed: {e}")
+
+            # ── Phase 2: Tracked companies (priority list, deeper history) ──
             for company in TRACKED_COMPANIES:
                 try:
                     filings = await fetch_company_form4s(
@@ -312,7 +377,7 @@ async def run_insider_ingestion() -> dict:
                     logger.info(f"Found {len(filings)} Form 4 filings for {company['ticker']}")
 
                     count = 0
-                    for filing in filings[:5]:  # Process last 5 filings per company
+                    for filing in filings[:10]:  # Process last 10 filings per company
                         if not filing.get("href"):
                             continue
 
@@ -347,6 +412,7 @@ async def run_insider_ingestion() -> dict:
     return {
         "timestamp": datetime.utcnow().isoformat(),
         "total_new_trades": total_new,
-        "companies": company_results,
+        "global_new_trades": global_new,
+        "tracked_companies": company_results,
         "errors": errors,
     }

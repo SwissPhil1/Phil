@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, type Trade, type StatsResponse, type HedgeFund } from "@/lib/api";
+import { useMultiApiData } from "@/lib/hooks";
+import { ErrorState, RefreshIndicator } from "@/components/error-state";
 import {
   Landmark,
   TrendingUp,
@@ -41,28 +42,25 @@ function formatAmount(low: number, high: number) {
 }
 
 export default function Dashboard() {
-  const [stats, setStats] = useState<StatsResponse | null>(null);
-  const [trades, setTrades] = useState<Trade[]>([]);
-  const [funds, setFunds] = useState<HedgeFund[]>([]);
-  const [trumpInsiders, setTrumpInsiders] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { data, loading, errors, hasError, retry, refreshIn } = useMultiApiData<{
+    stats: StatsResponse;
+    trades: Trade[];
+    funds: HedgeFund[];
+    trumpInsiders: unknown[];
+  }>(
+    {
+      stats: () => api.getStats(),
+      trades: () => api.getRecentTrades(),
+      funds: () => api.getHedgeFunds().then((f) => (Array.isArray(f) ? f : [])),
+      trumpInsiders: () => api.getTrumpInsiders().then((t) => (Array.isArray(t) ? t : [])),
+    },
+    { refreshInterval: 60 }
+  );
 
-  useEffect(() => {
-    async function load() {
-      const [s, t, f, tr] = await Promise.allSettled([
-        api.getStats(),
-        api.getRecentTrades(),
-        api.getHedgeFunds(),
-        api.getTrumpInsiders(),
-      ]);
-      if (s.status === "fulfilled") setStats(s.value);
-      if (t.status === "fulfilled") setTrades(t.value);
-      if (f.status === "fulfilled") setFunds(Array.isArray(f.value) ? f.value : []);
-      if (tr.status === "fulfilled") setTrumpInsiders(Array.isArray(tr.value) ? tr.value : []);
-      setLoading(false);
-    }
-    load();
-  }, []);
+  const stats = data.stats;
+  const trades = data.trades ?? [];
+  const funds = data.funds ?? [];
+  const trumpInsiders = (data.trumpInsiders ?? []) as any[];
 
   if (loading) {
     return (
@@ -83,17 +81,46 @@ export default function Dashboard() {
     );
   }
 
+  if (hasError && !stats && trades.length === 0) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold">SmartFlow</h1>
+          <p className="text-muted-foreground text-sm mt-1">
+            Copy the smartest money — Congress, hedge funds, and Trump&apos;s inner circle
+          </p>
+        </div>
+        <ErrorState
+          error={Object.values(errors).filter(Boolean).join("; ") || "Failed to load data"}
+          onRetry={retry}
+        />
+      </div>
+    );
+  }
+
   const totalFundValue = funds.reduce((sum, f) => sum + (f.total_value || 0), 0);
 
   return (
     <div className="space-y-8">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold">SmartFlow</h1>
-        <p className="text-muted-foreground text-sm mt-1">
-          Copy the smartest money — Congress, hedge funds, and Trump&apos;s inner circle
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold">SmartFlow</h1>
+          <p className="text-muted-foreground text-sm mt-1">
+            Copy the smartest money — Congress, hedge funds, and Trump&apos;s inner circle
+          </p>
+        </div>
+        <RefreshIndicator refreshIn={refreshIn} />
       </div>
+
+      {/* Partial errors banner */}
+      {hasError && (
+        <ErrorState
+          error={Object.values(errors).filter(Boolean).join("; ") || "Some data failed to load"}
+          onRetry={retry}
+          compact
+        />
+      )}
 
       {/* Hero Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

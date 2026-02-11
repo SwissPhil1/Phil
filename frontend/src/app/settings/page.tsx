@@ -74,7 +74,7 @@ export default function SettingsPage() {
               { name: "Trump & Inner Circle", source: "SEC EDGAR + FEC", status: "active" },
               { name: "Polymarket", source: "Polymarket API", status: "active" },
               { name: "Committee Assignments", source: "Congress API", status: "active" },
-              { name: "Corporate Insiders (Form 4)", source: "SEC RSS", status: "pending" },
+              { name: "Corporate Insiders (Form 4)", source: "SEC EDGAR global RSS + tracked companies", status: "active" },
             ].map((source) => (
               <div key={source.name} className="flex items-center justify-between py-2.5 border-b border-border/30 last:border-0">
                 <div>
@@ -107,7 +107,7 @@ export default function SettingsPage() {
             Data includes congressional STOCK Act filings, SEC 13F hedge fund filings, Trump administration financial disclosures, and prediction market performance data.
           </p>
           <p className="text-xs">
-            Built with Next.js, FastAPI, and SQLite. Deployed on Vercel + Railway.
+            Built with Next.js, FastAPI, and PostgreSQL. Deployed on Railway.
           </p>
         </CardContent>
       </Card>

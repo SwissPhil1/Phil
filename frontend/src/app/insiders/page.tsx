@@ -1,35 +1,34 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
 import { ArrowUpRight } from "lucide-react";
+import { useApiData } from "@/lib/hooks";
+import { ErrorState, RefreshIndicator } from "@/components/error-state";
 
 export default function InsidersPage() {
-  const [buys, setBuys] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    async function load() {
-      try {
-        const data = await api.getInsiderBuys();
-        setBuys(Array.isArray(data) ? data : []);
-      } catch {}
-      setLoading(false);
-    }
-    load();
-  }, []);
+  const { data: rawBuys, loading, error, retry, refreshIn } = useApiData<any[]>(
+    () => api.getInsiderBuys().then((data) => (Array.isArray(data) ? data : [])),
+    { refreshInterval: 120 }
+  );
+  const buys = rawBuys ?? [];
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Corporate Insider Trades</h1>
-        <p className="text-muted-foreground text-sm mt-1">
-          Form 4 filings - CEOs, directors, and 10%+ owners buying and selling their own stock
-        </p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold">Corporate Insider Trades</h1>
+          <p className="text-muted-foreground text-sm mt-1">
+            Form 4 filings - CEOs, directors, and 10%+ owners buying and selling their own stock
+          </p>
+        </div>
+        <RefreshIndicator refreshIn={refreshIn} />
       </div>
 
+      {error && !rawBuys ? (
+        <ErrorState error={error} onRetry={retry} />
+      ) : (
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-base flex items-center gap-2">
@@ -80,6 +79,7 @@ export default function InsidersPage() {
           )}
         </CardContent>
       </Card>
+      )}
     </div>
   );
 }

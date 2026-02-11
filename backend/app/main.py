@@ -80,6 +80,7 @@ async def _run_initial_ingestions():
         ("Senate historical trades (2012+)", run_historical_ingestion, True),  # skip if has data
         ("House trades (CapitolTrades)", lambda: run_capitoltrades_ingestion(chamber="house"), True),  # skip if has data
         ("Politician stats + prices", lambda: run_performance_update(price_limit=50000), False),
+        ("Refresh current prices", run_price_refresh, False),
     ]
 
     for name, fn, skip_if_has_data in jobs:

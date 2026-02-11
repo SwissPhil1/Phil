@@ -122,7 +122,13 @@ def _run_simulation(
     get_amount: callable,  # (trade) -> float
     weeks: list[datetime] | None = None,
 ) -> tuple[list[dict], float, int]:
-    """Run a single portfolio simulation.
+    """Run a portfolio simulation using Time-Weighted Return (TWR).
+
+    Uses a unit/share approach (like a mutual fund NAV):
+    - When fresh capital is needed, issue new "units" at current NAV/unit
+    - When sells generate cash, cash stays in the fund (no unit redemption)
+    - NAV per unit tracks pure investment performance, independent of
+      capital flows — so period rebasing on the frontend works correctly
 
     Args:
         trades: sorted list of Trade objects
@@ -131,18 +137,25 @@ def _run_simulation(
         weeks: weekly date grid for NAV snapshots (None = final-only mode)
 
     Returns:
-        (nav_series, total_bought, positions_open)
-        total_bought = sum of ALL buy allocations (used as return denominator)
+        (nav_series, units_outstanding, positions_open)
     """
     positions: dict[str, dict] = {}
     cash = 0.0
-    total_bought = 0.0   # Total $ allocated to buys (incl. recycled cash)
+    units = 0.0  # Total fund units outstanding
     trade_idx = 0
     nav_series = []
 
     if weeks is None:
         # Final-only mode: process all trades, then compute final NAV
         weeks = [datetime.utcnow()]
+
+    def _holdings_value(as_of: datetime) -> float:
+        """Mark-to-market value of all open positions."""
+        v = 0.0
+        for tk, pos in positions.items():
+            p = get_price(tk, as_of)
+            v += pos["shares"] * p if p else pos["cost"]
+        return v
 
     for week_date in weeks:
         while trade_idx < len(trades):
@@ -164,11 +177,24 @@ def _run_simulation(
             if t.tx_type == "purchase":
                 amount = get_amount(t)
                 shares = amount / price
-                total_bought += amount  # Every buy counts in denominator
 
                 if cash >= amount:
+                    # Fully funded from existing cash — no new units needed
                     cash -= amount
                 else:
+                    # Need fresh capital injection → issue new units
+                    fresh = amount - cash
+                    if units > 0:
+                        # Price new units at current NAV/unit
+                        current_nav = _holdings_value(t_date) + cash
+                        nav_per_unit = current_nav / units
+                        if nav_per_unit > 0:
+                            units += fresh / nav_per_unit
+                        else:
+                            units += fresh
+                    else:
+                        # Very first investment: 1 unit = $1
+                        units += fresh
                     cash = 0.0
 
                 if ticker in positions:
@@ -194,27 +220,21 @@ def _run_simulation(
 
             trade_idx += 1
 
-        # Compute NAV
-        holdings = 0.0
-        for ticker, pos in positions.items():
-            p = get_price(ticker, week_date)
-            if p:
-                holdings += pos["shares"] * p
-            else:
-                holdings += pos["cost"]
-
+        # Weekly NAV snapshot — output NAV per unit (not raw NAV)
+        holdings = _holdings_value(week_date)
         nav = holdings + cash
-        return_pct = ((nav / total_bought) - 1) * 100 if total_bought > 0 else 0.0
+        nav_per_unit = nav / units if units > 0 else 1.0
+        return_pct = (nav_per_unit - 1.0) * 100
 
         nav_series.append({
             "date": week_date.strftime("%Y-%m-%d"),
-            "nav": round(nav, 0),
+            "nav": round(nav_per_unit, 4),  # NAV per unit (starts ~1.0)
             "return_pct": round(return_pct, 1),
             "positions": len(positions),
-            "invested": round(total_bought, 0),
+            "invested": round(units, 0),
         })
 
-    return nav_series, total_bought, len(positions)
+    return nav_series, units, len(positions)
 
 
 # ─── Individual politician page: Yahoo-powered dual simulation ───
@@ -300,22 +320,22 @@ async def compute_portfolio_simulation(
             "positions": eq["positions"],
         })
 
-    # 6. Compute annual returns (CAGR)
+    # 6. Compute annual returns (CAGR on NAV per unit, starting at 1.0)
     years = (end_date - first_date).days / 365.25
-    eq_final = eq_series[-1] if eq_series else {"return_pct": 0, "nav": 0}
-    conv_final = conv_series[-1] if conv_series else {"return_pct": 0, "nav": 0}
+    eq_final = eq_series[-1] if eq_series else {"return_pct": 0, "nav": 1.0}
+    conv_final = conv_series[-1] if conv_series else {"return_pct": 0, "nav": 1.0}
 
     return {
         "nav_series": combined,
         "equal_weight": {
             "total_return": eq_final["return_pct"],
-            "annual_return": _cagr(eq_final["nav"], eq_invested, years),
+            "annual_return": _cagr(eq_final["nav"], 1.0, years),
             "total_invested": round(eq_invested, 0),
             "positions_open": eq_open,
         },
         "conviction_weighted": {
             "total_return": conv_final["return_pct"],
-            "annual_return": _cagr(conv_final["nav"], conv_invested, years),
+            "annual_return": _cagr(conv_final["nav"], 1.0, years),
             "total_invested": round(conv_invested, 0),
             "positions_open": conv_open,
         },

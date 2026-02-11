@@ -34,7 +34,7 @@ async def get_leaderboard(
 
 @router.get("/portfolio-returns")
 async def get_portfolio_returns(
-    min_trades: int = Query(default=5, ge=1, description="Minimum priced buy trades to be included"),
+    min_trades: int = Query(default=3, ge=1, description="Minimum priced buy trades to be included"),
     sort_by: str = Query(default="equal_weight", description="Sort by: equal_weight or conviction_weighted"),
     db: AsyncSession = Depends(get_db),
 ):

@@ -351,18 +351,21 @@ async def compute_portfolio_simulation(
 
 async def compute_leaderboard_returns(
     session: AsyncSession,
-    min_priced_trades: int = 5,
+    min_priced_trades: int = 3,
 ) -> list[dict]:
     """Compute portfolio returns for all politicians using stored DB prices.
 
     Uses price_at_disclosure for entry/exit and price_current for open
     positions. No Yahoo API calls — fast enough for a leaderboard endpoint.
+
+    Includes politicians even if not all their trades have prices — the
+    simulation just skips unpriced trades and requires at least
+    min_priced_trades executed buys to be included.
     """
-    # Get politicians with enough priced buy trades
+    # Get ALL politicians with enough buy trades (regardless of price data)
     pol_counts = await session.execute(
         select(Trade.politician, func.count().label("cnt"))
         .where(Trade.ticker.isnot(None))
-        .where(Trade.price_at_disclosure.isnot(None))
         .where(Trade.tx_type == "purchase")
         .group_by(Trade.politician)
         .having(func.count() >= min_priced_trades)
@@ -398,7 +401,8 @@ async def compute_leaderboard_returns(
         ]:
             positions: dict[str, dict] = {}
             cash = 0.0
-            total_bought = 0.0  # Sum of ALL buy allocations (return denominator)
+            total_bought = 0.0
+            priced_buys = 0
 
             for t in trades:
                 price = t.price_at_disclosure
@@ -408,7 +412,8 @@ async def compute_leaderboard_returns(
                 if t.tx_type == "purchase":
                     amount = get_amount(t)
                     shares = amount / price
-                    total_bought += amount  # Every buy counts
+                    total_bought += amount
+                    priced_buys += 1
                     if cash >= amount:
                         cash -= amount
                     else:
@@ -433,7 +438,7 @@ async def compute_leaderboard_returns(
                             cash += val
                             del positions[t.ticker]
 
-            if total_bought <= 0:
+            if total_bought <= 0 or priced_buys < min_priced_trades:
                 continue
 
             # Value open positions at current prices

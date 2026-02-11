@@ -259,7 +259,7 @@ async def rebuild_politician_stats(session: AsyncSession):
     logger.info(f"Rebuilt stats for {len(politicians)} politicians")
 
 
-async def run_performance_update(price_limit: int = 100, force: bool = False):
+async def run_performance_update(price_limit: int = 1000, force: bool = False):
     """Run full performance update cycle."""
     async with async_session() as session:
         updated = await update_trade_prices(session, limit=price_limit, force=force)

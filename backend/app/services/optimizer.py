@@ -78,6 +78,7 @@ class WeightConfig:
     track_record_max: float = 15.0
     contrarian_max: float = 10.0
     leadership_role_max: float = 20.0  # CEPR study: strongest predictor of informed trading
+    small_cap_committee_max: float = 15.0  # Bonus: small/mid-cap + committee overlap = very suspicious
 
     # Thresholds
     cluster_mega_cap_discount: float = 0.4  # Multiplier for mega-cap cluster score
@@ -192,7 +193,17 @@ def score_trade_with_weights(
         else:
             score += weights.leadership_role_max * 0.40  # Other leadership roles
 
-    return min(max(score, 0), 170)  # Raised cap for new factor
+    # Factor 9: Small-Cap Committee Bonus
+    # A politician buying a small/mid-cap stock in the sector their committee oversees
+    # is far more suspicious than the same trade in a mega-cap (less coverage, more info asymmetry)
+    is_small_cap = not trade_features.get("is_mega_cap", False) and not trade_features.get("is_large_cap", False)
+    if is_small_cap and trade_features.get("has_committee_overlap"):
+        if trade_features.get("committee_flag") == "HIGH":
+            score += weights.small_cap_committee_max  # Direct sector match on small cap
+        else:
+            score += weights.small_cap_committee_max * 0.5  # Broad oversight on small cap
+
+    return min(max(score, 0), 185)  # Raised cap for new factor
 
 
 # ─── Trade Feature Extraction ───
@@ -616,6 +627,7 @@ def _generate_weight_grid(n_steps: int = 5) -> list[WeightConfig]:
         "track_record_max": [5, 10, 15, 20],
         "contrarian_max": [5, 10, 15],
         "leadership_role_max": [10, 15, 20, 25, 30],
+        "small_cap_committee_max": [0, 5, 10, 15, 20, 25],
     }
 
     # Full grid would be too large, so sample strategically
@@ -642,6 +654,7 @@ def _generate_weight_grid(n_steps: int = 5) -> list[WeightConfig]:
             track_record_max=random.choice(ranges["track_record_max"]),
             contrarian_max=random.choice(ranges["contrarian_max"]),
             leadership_role_max=random.choice(ranges["leadership_role_max"]),
+            small_cap_committee_max=random.choice(ranges["small_cap_committee_max"]),
             cluster_mega_cap_discount=random.choice([0.2, 0.3, 0.4, 0.5, 0.6]),
             late_disclosure_days=random.choice([30, 45, 60]),
             min_cluster_size=random.choice([2, 3, 4]),
@@ -665,8 +678,8 @@ def _evolve_weights(
     fields = [
         "position_size_max", "committee_overlap_max", "disclosure_speed_max",
         "cluster_max", "cross_source_insider_max", "cross_source_fund_max",
-        "track_record_max", "contrarian_max", "leadership_role_max", "triple_confirmation_bonus",
-        "cluster_mega_cap_discount", "late_disclosure_days", "min_cluster_size",
+        "track_record_max", "contrarian_max", "leadership_role_max", "small_cap_committee_max",
+        "triple_confirmation_bonus", "cluster_mega_cap_discount", "late_disclosure_days", "min_cluster_size",
     ]
 
     for _ in range(n_children):

@@ -4,14 +4,65 @@ import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { api, type OptimizerResult } from "@/lib/api";
-import { Brain, Play, CheckCircle, XCircle, TrendingUp, Clock, Zap, BarChart3, Info } from "lucide-react";
+import { api, type OptimizerResult, type TestWeightsResult } from "@/lib/api";
+import { Brain, Play, CheckCircle, XCircle, TrendingUp, Clock, Zap, BarChart3, Info, Sliders, RotateCcw, FlaskConical } from "lucide-react";
 
 export default function OptimizerPage() {
   const [result, setResult] = useState<OptimizerResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [available, setAvailable] = useState<boolean | null>(null);
+
+  // Custom formula builder
+  const WEIGHT_FACTORS = [
+    { key: "position_size_max", label: "Position Size", default: 25, max: 40, desc: "Bigger trade = more conviction" },
+    { key: "committee_overlap_max", label: "Committee Overlap", default: 30, max: 50, desc: "Politician's committee oversees stock's sector" },
+    { key: "disclosure_speed_max", label: "Disclosure Speed", default: 15, max: 30, desc: "Late disclosure = trying to hide the trade" },
+    { key: "cluster_max", label: "Political Cluster", default: 20, max: 35, desc: "Multiple politicians buying the same stock" },
+    { key: "cross_source_insider_max", label: "Insider Confirmation", default: 15, max: 30, desc: "Corporate insiders also buying" },
+    { key: "cross_source_fund_max", label: "Hedge Fund Confirmation", default: 10, max: 25, desc: "Top hedge funds also hold position" },
+    { key: "track_record_max", label: "Track Record", default: 15, max: 30, desc: "Politician's historical win rate & avg return" },
+    { key: "contrarian_max", label: "Contrarian Signal", default: 10, max: 25, desc: "Buying while others are selling" },
+    { key: "small_cap_committee_max", label: "Small-Cap Committee", default: 15, max: 30, desc: "Small/mid-cap + committee overlap (very suspicious)" },
+  ] as const;
+
+  const defaultWeights = Object.fromEntries(WEIGHT_FACTORS.map(f => [f.key, f.default]));
+  const [customWeights, setCustomWeights] = useState<Record<string, number>>(defaultWeights);
+  const [testResult, setTestResult] = useState<TestWeightsResult | null>(null);
+  const [testLoading, setTestLoading] = useState(false);
+  const [testError, setTestError] = useState<string | null>(null);
+
+  const totalPoints = Object.values(customWeights).reduce((a, b) => a + b, 0);
+  const defaultTotal = WEIGHT_FACTORS.reduce((a, f) => a + f.default, 0);
+
+  function resetWeights() {
+    setCustomWeights({ ...defaultWeights });
+    setTestResult(null);
+    setTestError(null);
+  }
+
+  async function testFormula() {
+    setTestLoading(true);
+    setTestError(null);
+    try {
+      const params: Record<string, string> = {};
+      for (const [k, v] of Object.entries(customWeights)) {
+        params[k] = String(v);
+      }
+      const data = await api.testCustomWeights(params);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if ((data as any)?.error) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        throw new Error((data as any).error as string);
+      }
+      setTestResult(data);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Test failed";
+      setTestError(msg);
+    } finally {
+      setTestLoading(false);
+    }
+  }
 
   useEffect(() => {
     async function checkStatus() {
@@ -118,11 +169,153 @@ export default function OptimizerPage() {
               </div>
             </div>
             <p className="text-xs">
-              Factors optimized: position size, committee overlap, disclosure speed, political cluster, cross-source confirmation, track record, contrarian signal, mega-cap discount
+              Factors optimized: position size, committee overlap, disclosure speed, political cluster, cross-source confirmation, track record, contrarian signal, small-cap committee bonus, mega-cap discount
             </p>
           </CardContent>
         </Card>
       )}
+
+      {/* Custom Formula Builder */}
+      <Card>
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Sliders className="w-4 h-4" />
+              Custom Formula Builder
+            </CardTitle>
+            <div className="flex items-center gap-3">
+              <div className="text-sm font-mono-data">
+                <span className="text-muted-foreground">Points: </span>
+                <span className={totalPoints > defaultTotal * 1.3 ? "text-yellow-400" : totalPoints < defaultTotal * 0.7 ? "text-red-400" : "text-foreground"}>
+                  {totalPoints}
+                </span>
+                <span className="text-muted-foreground"> / {defaultTotal} default</span>
+              </div>
+              <Button variant="ghost" size="sm" onClick={resetWeights} className="gap-1 h-7 text-xs">
+                <RotateCcw className="w-3 h-3" />
+                Reset
+              </Button>
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground mt-1">
+            Distribute points across factors, then test your formula against historical trades. Higher points = that factor matters more in the conviction score.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3">
+            {WEIGHT_FACTORS.map((factor) => (
+              <div key={factor.key} className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <label className="text-sm font-medium">{factor.label}</label>
+                  <span className="font-mono-data text-sm w-8 text-right">{customWeights[factor.key]}</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={factor.max}
+                  step={1}
+                  value={customWeights[factor.key]}
+                  onChange={(e) => setCustomWeights(prev => ({ ...prev, [factor.key]: Number(e.target.value) }))}
+                  className="w-full h-1.5 bg-muted rounded-full appearance-none cursor-pointer accent-primary"
+                />
+                <div className="flex justify-between text-[10px] text-muted-foreground">
+                  <span>{factor.desc}</span>
+                  <span>0–{factor.max}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-3 pt-2">
+            <Button onClick={testFormula} disabled={testLoading} className="gap-2">
+              {testLoading ? (
+                <>
+                  <Clock className="w-4 h-4 animate-spin" />
+                  Testing...
+                </>
+              ) : (
+                <>
+                  <FlaskConical className="w-4 h-4" />
+                  Test My Formula
+                </>
+              )}
+            </Button>
+            <span className="text-xs text-muted-foreground">Tests against ~300 historical trades with actual returns</span>
+          </div>
+
+          {testError && (
+            <div className="flex items-center gap-2 text-destructive text-sm">
+              <XCircle className="w-4 h-4" />
+              {testError}
+            </div>
+          )}
+
+          {testResult && (
+            <div className="border border-border rounded-lg p-4 space-y-4 mt-2">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-medium">Your Formula Results</h3>
+                <span className="text-xs text-muted-foreground">{testResult.trades_analyzed} trades analyzed</span>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div>
+                  <div className="text-xs text-muted-foreground">Fitness</div>
+                  <div className="text-lg font-bold font-mono-data">{testResult.result.fitness.toFixed(4)}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground">Correlation (90d)</div>
+                  <div className="text-lg font-bold font-mono-data">{testResult.result.correlation_90d.toFixed(4)}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground">Hit Rate (90d)</div>
+                  <div className="text-lg font-bold font-mono-data">{testResult.result.hit_rate_90d.toFixed(1)}%</div>
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground">Edge (90d)</div>
+                  <div className={`text-lg font-bold font-mono-data ${testResult.result.edge_90d >= 0 ? "text-green-400" : "text-red-400"}`}>
+                    {testResult.result.edge_90d >= 0 ? "+" : ""}{testResult.result.edge_90d.toFixed(2)}%
+                  </div>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                <div>
+                  <div className="text-xs text-muted-foreground">Hit Rate (30d)</div>
+                  <div className="font-mono-data">{testResult.result.hit_rate_30d.toFixed(1)}%</div>
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground">Edge (30d)</div>
+                  <div className={`font-mono-data ${testResult.result.edge_30d >= 0 ? "text-green-400" : "text-red-400"}`}>
+                    {testResult.result.edge_30d >= 0 ? "+" : ""}{testResult.result.edge_30d.toFixed(2)}%
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground">High Score Avg (90d)</div>
+                  <div className={`font-mono-data ${testResult.result.high_score_avg_return_90d >= 0 ? "text-green-400" : "text-red-400"}`}>
+                    {testResult.result.high_score_avg_return_90d >= 0 ? "+" : ""}{testResult.result.high_score_avg_return_90d.toFixed(2)}%
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground">Low Score Avg (90d)</div>
+                  <div className={`font-mono-data ${testResult.result.low_score_avg_return_90d >= 0 ? "text-green-400" : "text-red-400"}`}>
+                    {testResult.result.low_score_avg_return_90d >= 0 ? "+" : ""}{testResult.result.low_score_avg_return_90d.toFixed(2)}%
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-4 pt-1 border-t border-border/50 text-sm">
+                <div className="flex items-center gap-2">
+                  {testResult.cross_validation.is_robust ? (
+                    <CheckCircle className="w-4 h-4 text-green-400" />
+                  ) : (
+                    <XCircle className="w-4 h-4 text-yellow-400" />
+                  )}
+                  <span>{testResult.cross_validation.is_robust ? "Cross-validation: Robust" : "Cross-validation: Not robust (may overfit)"}</span>
+                </div>
+                <span className="text-muted-foreground">Overfit ratio: {testResult.cross_validation.avg_overfit_ratio.toFixed(2)}</span>
+                <span className="text-muted-foreground">Trades: {testResult.result.n_high_score} high / {testResult.result.n_low_score} low</span>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Loading state */}
       {loading && (

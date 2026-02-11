@@ -29,7 +29,7 @@ from app.services.ingestion import run_ingestion
 from app.services.insiders import run_insider_ingestion
 from app.services.historical_ingestion import run_historical_ingestion
 from app.services.capitoltrades import run_capitoltrades_ingestion
-from app.services.performance import run_performance_update
+from app.services.performance import run_performance_update, run_price_refresh
 from app.services.prediction_markets import run_kalshi_ingestion, run_polymarket_ingestion
 from app.services.trump_tracker import run_trump_data_ingestion
 
@@ -149,11 +149,16 @@ async def lifespan(app: FastAPI):
         )
         scheduler.add_job(
             lambda: run_performance_update(price_limit=3000), "interval",
-            minutes=30,
-            id="performance", name="Price and performance update",
+            minutes=60,
+            id="performance", name="Price new trades",
+        )
+        scheduler.add_job(
+            run_price_refresh, "interval",
+            minutes=15,
+            id="price_refresh", name="Refresh current prices + leaderboard",
         )
         scheduler.start()
-        logger.info("All 8 schedulers started")
+        logger.info("All 9 schedulers started")
     except Exception as e:
         logger.error(f"Scheduler setup failed (app will still run): {e}")
 

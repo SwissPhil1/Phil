@@ -346,7 +346,84 @@ async def compute_portfolio_simulation(
     }
 
 
-# ─── Leaderboard: fast returns using stored prices (no Yahoo calls) ───
+# ─── Leaderboard: fast returns with self-healing Yahoo fallback ───
+
+
+async def _batch_fetch_historical_prices(
+    ticker_dates: dict[str, set[str]],
+) -> dict[tuple[str, str], float]:
+    """Fetch historical prices for multiple tickers/dates from Yahoo v8 API.
+
+    Args:
+        ticker_dates: {ticker: {date_str, ...}} mapping
+
+    Returns:
+        {(ticker, date_str): price} mapping
+    """
+    results: dict[tuple[str, str], float] = {}
+    if not ticker_dates:
+        return results
+
+    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+        tickers = list(ticker_dates.keys())
+        for i in range(0, len(tickers), 10):
+            batch = tickers[i : i + 10]
+            coros = []
+            for ticker in batch:
+                dates = ticker_dates[ticker]
+
+                async def _fetch(t=ticker, ds=dates):
+                    try:
+                        # Find date range to cover all needed dates
+                        parsed = [datetime.fromisoformat(d) for d in ds]
+                        min_d = min(parsed) - timedelta(days=15)
+                        max_d = max(parsed) + timedelta(days=15)
+                        url = (
+                            f"https://query1.finance.yahoo.com/v8/finance/chart/{t}"
+                            f"?period1={int(min_d.timestamp())}"
+                            f"&period2={int(max_d.timestamp())}&interval=1d"
+                        )
+                        resp = await client.get(url, headers=YAHOO_HEADERS)
+                        if resp.status_code != 200:
+                            return []
+                        data = resp.json()
+                        chart = data.get("chart", {}).get("result", [])
+                        if not chart:
+                            return []
+                        timestamps = chart[0].get("timestamp", [])
+                        closes = chart[0].get("indicators", {}).get("quote", [{}])[0].get("close", [])
+                        if not timestamps or not closes:
+                            return []
+
+                        # For each target date, find closest trading day price
+                        out = []
+                        for target in parsed:
+                            target_ts = target.timestamp()
+                            best_idx = None
+                            best_diff = float("inf")
+                            for j, ts in enumerate(timestamps):
+                                diff = abs(ts - target_ts)
+                                if diff < best_diff and closes[j] is not None:
+                                    best_diff = diff
+                                    best_idx = j
+                            if best_idx is not None:
+                                out.append((t, target.isoformat()[:10], float(closes[best_idx])))
+                        return out
+                    except Exception:
+                        return []
+
+                coros.append(_fetch())
+
+            batch_results = await asyncio.gather(*coros, return_exceptions=True)
+            for res in batch_results:
+                if isinstance(res, list):
+                    for ticker, date_str, price in res:
+                        results[(ticker, date_str)] = price
+            if i + 10 < len(tickers):
+                await asyncio.sleep(0.3)
+
+    logger.info(f"Yahoo historical fallback: fetched {len(results)} prices for {len(ticker_dates)} tickers")
+    return results
 
 
 async def _batch_fetch_current_prices(tickers: list[str]) -> dict[str, float]:
@@ -397,11 +474,8 @@ async def compute_leaderboard_returns(
     """Compute portfolio returns for all politicians using stored DB prices.
 
     Uses price_at_disclosure for entry/exit and price_current for open
-    positions. Falls back to Yahoo API for tickers missing current prices.
-
-    Includes politicians even if not all their trades have prices — the
-    simulation just skips unpriced trades and requires at least
-    min_priced_trades executed buys to be included.
+    positions. Self-healing: auto-fetches missing prices from Yahoo so
+    politicians are never silently excluded from the leaderboard.
     """
     # Get ALL politicians with enough buy trades (regardless of price data)
     pol_counts = await session.execute(
@@ -421,21 +495,26 @@ async def compute_leaderboard_returns(
         .order_by(Trade.tx_date.desc().nullslast())
     )
     global_current_prices: dict[str, float] = {}
+    # Also build a historical price cache: (ticker, date_str) → price
+    global_historical_prices: dict[tuple[str, str], float] = {}
     for row in all_price_result:
         ticker = row.ticker
-        if ticker in global_current_prices:
-            continue
-        if row.price_current:
-            global_current_prices[ticker] = row.price_current
-        elif row.price_at_disclosure and row.return_since_disclosure is not None:
-            global_current_prices[ticker] = row.price_at_disclosure * (1 + row.return_since_disclosure / 100)
+        if ticker not in global_current_prices:
+            if row.price_current:
+                global_current_prices[ticker] = row.price_current
+            elif row.price_at_disclosure and row.return_since_disclosure is not None:
+                global_current_prices[ticker] = row.price_at_disclosure * (1 + row.return_since_disclosure / 100)
 
     results = []
     # Track tickers that need Yahoo fallback (open positions without current price)
     missing_tickers: set[str] = set()
 
-    # First pass: simulate all politicians and identify missing prices
+    # First pass: gather all politicians and their trades
     politician_data: list[tuple] = []
+    # Track unpriced trades that need Yahoo fetch: list of (trade, date_str)
+    unpriced_trades: list[tuple] = []
+    unpriced_ticker_dates: dict[str, set[str]] = {}
+
     for pol_name, _ in pol_counts:
         # Get all trades for this politician (sorted by date)
         trade_result = await session.execute(
@@ -450,20 +529,72 @@ async def compute_leaderboard_returns(
             continue
         politician_data.append((pol_name, trades))
 
-        # Check for open positions missing current prices
+        # Identify unpriced trades and open positions missing current prices
         open_tickers: set[str] = set()
         for t in trades:
-            if not t.ticker or not t.price_at_disclosure:
+            if not t.ticker:
                 continue
-            if t.tx_type == "purchase":
-                open_tickers.add(t.ticker)
-            elif t.tx_type in ("sale", "sale_full"):
-                open_tickers.discard(t.ticker)
+            trade_date = t.tx_date or t.disclosure_date
+            if not t.price_at_disclosure and trade_date:
+                date_str = trade_date.isoformat()[:10]
+                unpriced_trades.append((t, date_str))
+                if t.ticker not in unpriced_ticker_dates:
+                    unpriced_ticker_dates[t.ticker] = set()
+                unpriced_ticker_dates[t.ticker].add(date_str)
+
+            if t.price_at_disclosure:
+                if t.tx_type == "purchase":
+                    open_tickers.add(t.ticker)
+                elif t.tx_type in ("sale", "sale_full"):
+                    open_tickers.discard(t.ticker)
         for ticker in open_tickers:
             if ticker not in global_current_prices:
                 missing_tickers.add(ticker)
 
-    # Fetch missing prices from Yahoo (lightweight — only for tickers without DB prices)
+    # Self-healing: fetch missing historical prices from Yahoo
+    # This ensures politicians aren't excluded just because the pricing job missed them
+    if unpriced_ticker_dates:
+        logger.info(
+            f"Leaderboard self-heal: {len(unpriced_trades)} unpriced trades "
+            f"across {len(unpriced_ticker_dates)} tickers — fetching from Yahoo"
+        )
+        yahoo_historical = await _batch_fetch_historical_prices(unpriced_ticker_dates)
+
+        # Apply fetched prices to trade objects and persist to DB
+        from sqlalchemy import update as sql_update
+        patched = 0
+        for t, date_str in unpriced_trades:
+            price = yahoo_historical.get((t.ticker, date_str))
+            if price and price > 0:
+                t.price_at_disclosure = price
+                # Also get current price for return calculation
+                curr = global_current_prices.get(t.ticker)
+                if curr:
+                    t.price_current = curr
+                    t.return_since_disclosure = round(((curr - price) / price) * 100, 2)
+                patched += 1
+        # Persist patched prices to DB so they're cached for next time
+        if patched > 0:
+            for t, date_str in unpriced_trades:
+                if t.price_at_disclosure:
+                    await session.execute(
+                        sql_update(Trade)
+                        .where(Trade.id == t.id)
+                        .values(
+                            price_at_disclosure=t.price_at_disclosure,
+                            price_current=t.price_current,
+                            return_since_disclosure=t.return_since_disclosure,
+                        )
+                    )
+            await session.commit()
+            logger.info(f"Leaderboard self-heal: patched {patched} trades with Yahoo prices")
+
+    # Also add unpriced tickers to the current-price missing set
+    for ticker in unpriced_ticker_dates:
+        if ticker not in global_current_prices:
+            missing_tickers.add(ticker)
+
+    # Fetch missing current prices from Yahoo
     if missing_tickers:
         yahoo_prices = await _batch_fetch_current_prices(list(missing_tickers))
         global_current_prices.update(yahoo_prices)
@@ -517,15 +648,6 @@ async def compute_leaderboard_returns(
                             del positions[t.ticker]
 
             if total_bought <= 0 or priced_buys < min_priced_trades:
-                if mode == "equal_weight":
-                    total_buys = sum(1 for t in trades if t.tx_type == "purchase")
-                    unpriced = sum(1 for t in trades if t.tx_type == "purchase" and (not t.price_at_disclosure or t.price_at_disclosure <= 0))
-                    if total_buys >= min_priced_trades:
-                        logger.warning(
-                            f"Leaderboard EXCLUDED {pol_name}: {total_buys} buys but only "
-                            f"{priced_buys} priced (need {min_priced_trades}). "
-                            f"{unpriced} buys missing price_at_disclosure."
-                        )
                 continue
 
             # Value open positions at current prices (global lookup)

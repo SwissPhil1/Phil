@@ -30,6 +30,7 @@ interface LeaderboardData {
 }
 
 type SortMode = "equal_weight" | "conviction_weighted";
+type SortColumn = "cagr" | "total" | "conv";
 
 function partyBadgeClass(party: string | null) {
   if (party === "R") return "bg-red-500/10 text-red-400 border-red-500/20";
@@ -43,6 +44,7 @@ export default function LeaderboardPage() {
   const [loading, setLoading] = useState(true);
   const [portfolioLoading, setPortfolioLoading] = useState(true);
   const [sortMode, setSortMode] = useState<SortMode>("equal_weight");
+  const [sortCol, setSortCol] = useState<SortColumn>("cagr");
   const [activeTab, setActiveTab] = useState<"portfolio" | "yearly">("portfolio");
 
   useEffect(() => {
@@ -65,12 +67,17 @@ export default function LeaderboardPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Re-sort portfolio data when sort mode changes (client-side)
+  // Re-sort portfolio data when sort mode or column changes (client-side)
   const sortedPortfolio = portfolioData
     ? [...portfolioData].sort((a, b) => {
-        const aRet = a[sortMode]?.annual_return ?? 0;
-        const bRet = b[sortMode]?.annual_return ?? 0;
-        return bRet - aRet;
+        if (sortCol === "cagr") {
+          return (b[sortMode]?.annual_return ?? 0) - (a[sortMode]?.annual_return ?? 0);
+        } else if (sortCol === "total") {
+          return (b[sortMode]?.total_return ?? 0) - (a[sortMode]?.total_return ?? 0);
+        } else {
+          // "conv" — sort by conviction-weighted CAGR regardless of active strategy
+          return (b.conviction_weighted?.annual_return ?? 0) - (a.conviction_weighted?.annual_return ?? 0);
+        }
       })
     : null;
 
@@ -107,30 +114,54 @@ export default function LeaderboardPage() {
       {activeTab === "portfolio" ? (
         /* ─── Portfolio Returns Tab ─── */
         <>
-          {/* Strategy Toggle */}
-          <div className="flex items-center gap-3">
-            <span className="text-xs text-muted-foreground">Sort by:</span>
-            <div className="flex gap-1">
-              <button
-                onClick={() => setSortMode("equal_weight")}
-                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                  sortMode === "equal_weight"
-                    ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
-                    : "text-muted-foreground hover:text-foreground hover:bg-muted border border-transparent"
-                }`}
-              >
-                Copy Trading (Equal Weight)
-              </button>
-              <button
-                onClick={() => setSortMode("conviction_weighted")}
-                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                  sortMode === "conviction_weighted"
-                    ? "bg-blue-500/20 text-blue-400 border border-blue-500/30"
-                    : "text-muted-foreground hover:text-foreground hover:bg-muted border border-transparent"
-                }`}
-              >
-                Conviction Weighted
-              </button>
+          {/* Strategy Toggle + Sort Column */}
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-muted-foreground">Strategy:</span>
+              <div className="flex gap-1">
+                <button
+                  onClick={() => setSortMode("equal_weight")}
+                  className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                    sortMode === "equal_weight"
+                      ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+                      : "text-muted-foreground hover:text-foreground hover:bg-muted border border-transparent"
+                  }`}
+                >
+                  Copy Trading (Equal Weight)
+                </button>
+                <button
+                  onClick={() => setSortMode("conviction_weighted")}
+                  className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                    sortMode === "conviction_weighted"
+                      ? "bg-blue-500/20 text-blue-400 border border-blue-500/30"
+                      : "text-muted-foreground hover:text-foreground hover:bg-muted border border-transparent"
+                  }`}
+                >
+                  Conviction Weighted
+                </button>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-muted-foreground">Rank by:</span>
+              <div className="flex gap-1">
+                {([
+                  { key: "cagr" as const, label: "CAGR" },
+                  { key: "total" as const, label: "Total Return" },
+                  { key: "conv" as const, label: "Conv. Weighted" },
+                ]).map(({ key, label }) => (
+                  <button
+                    key={key}
+                    onClick={() => setSortCol(key)}
+                    className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                      sortCol === key
+                        ? "bg-amber-500/20 text-amber-400 border border-amber-500/30"
+                        : "text-muted-foreground hover:text-foreground hover:bg-muted border border-transparent"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 
@@ -205,7 +236,7 @@ export default function LeaderboardPage() {
                         </div>
 
                         {/* Annual Return (CAGR) */}
-                        <div className="text-right w-20">
+                        <div className={`text-right w-20 ${sortCol === "cagr" ? "ring-1 ring-amber-500/30 rounded-md px-1.5 py-0.5 -mx-1.5 -my-0.5 bg-amber-500/5" : ""}`}>
                           <div className={`font-mono text-sm font-bold ${isPos ? "text-emerald-400" : "text-red-400"}`}>
                             {(stats?.annual_return ?? 0) > 0 ? "+" : ""}{stats?.annual_return?.toFixed(1) ?? "0"}%
                           </div>
@@ -213,7 +244,7 @@ export default function LeaderboardPage() {
                         </div>
 
                         {/* Total Return */}
-                        <div className="text-right w-20">
+                        <div className={`text-right w-20 ${sortCol === "total" ? "ring-1 ring-amber-500/30 rounded-md px-1.5 py-0.5 -mx-1.5 -my-0.5 bg-amber-500/5" : ""}`}>
                           <div className={`font-mono text-sm font-medium ${(stats?.total_return ?? 0) >= 0 ? "text-emerald-400/80" : "text-red-400/80"}`}>
                             {(stats?.total_return ?? 0) > 0 ? "+" : ""}{stats?.total_return?.toFixed(0) ?? "0"}%
                           </div>
@@ -221,7 +252,7 @@ export default function LeaderboardPage() {
                         </div>
 
                         {/* Alt strategy comparison */}
-                        <div className="text-right w-16 hidden md:block">
+                        <div className={`text-right w-16 hidden md:block ${sortCol === "conv" ? "ring-1 ring-amber-500/30 rounded-md px-1.5 py-0.5 -mx-1.5 -my-0.5 bg-amber-500/5" : ""}`}>
                           <div className={`font-mono text-xs ${(altStats?.annual_return ?? 0) >= 0 ? "text-blue-400/60" : "text-red-400/60"}`}>
                             {(altStats?.annual_return ?? 0) > 0 ? "+" : ""}{altStats?.annual_return?.toFixed(1) ?? "0"}%
                           </div>

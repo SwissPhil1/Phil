@@ -190,23 +190,41 @@ export interface BacktestResult {
   top_scored_trades?: any[];
 }
 
-export interface PortfolioPoint {
+export interface PortfolioNavPoint {
   date: string;
-  nav: number;
-  return_pct: number;
+  eq_return: number;
+  conv_return: number;
+  eq_nav: number;
+  conv_nav: number;
   positions: number;
-  invested: number;
+}
+
+export interface PortfolioStrategyStats {
+  total_return: number;
+  annual_return: number;
+  total_invested: number;
+  positions_open: number;
 }
 
 export interface PortfolioSimulation {
-  nav_series: PortfolioPoint[];
-  total_return: number;
-  total_invested: number;
-  positions_open: number;
+  nav_series: PortfolioNavPoint[];
+  equal_weight: PortfolioStrategyStats;
+  conviction_weighted: PortfolioStrategyStats;
   tickers_traded: number;
   tickers_priced: number;
   total_trades: number;
+  years: number;
   error?: string;
+}
+
+export interface PortfolioLeaderboardEntry {
+  politician: string;
+  party: string | null;
+  state: string | null;
+  chamber: string | null;
+  total_trades: number;
+  equal_weight: PortfolioStrategyStats & { years: number };
+  conviction_weighted: PortfolioStrategyStats & { years: number };
 }
 
 // ─── API Functions ───
@@ -252,6 +270,10 @@ export const api = {
     }>(`/api/v1/leaderboard${qs}`);
   },
   getBestTrades: () => fetchApi<Trade[]>("/api/v1/leaderboard/best-trades"),
+  getPortfolioReturns: (params?: Record<string, string>) => {
+    const qs = params ? "?" + new URLSearchParams(params).toString() : "";
+    return fetchApi<PortfolioLeaderboardEntry[]>(`/api/v1/leaderboard/portfolio-returns${qs}`);
+  },
 
   // Hedge Funds
   getHedgeFunds: () => fetchApi<HedgeFund[]>("/api/v1/hedge-funds"),

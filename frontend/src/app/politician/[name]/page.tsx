@@ -6,7 +6,7 @@ import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { api, type Trade, type Politician, type PortfolioSimulation } from "@/lib/api";
+import { api, type Trade, type Politician, type PortfolioSimulation, type PortfolioNavPoint } from "@/lib/api";
 import {
   ArrowLeft,
   ArrowUpRight,
@@ -24,8 +24,8 @@ import {
 } from "lucide-react";
 import {
   ResponsiveContainer,
-  AreaChart,
-  Area,
+  LineChart,
+  Line,
   BarChart,
   Bar,
   XAxis,
@@ -245,6 +245,7 @@ export default function PoliticianPage() {
   const [portfolioLoading, setPortfolioLoading] = useState(true);
   const [loading, setLoading] = useState(true);
   const [selectedPeriod, setSelectedPeriod] = useState(6); // default ALL
+  const [chartMode, setChartMode] = useState<"eq" | "conv" | "both">("eq"); // Copy Trading / Conviction / Both
 
   useEffect(() => {
     async function load() {
@@ -285,27 +286,27 @@ export default function PoliticianPage() {
     [allStockTrades, selectedPeriod]
   );
 
-  // Portfolio chart data: filter nav_series by period and rebase returns
+  // Portfolio chart data: filter nav_series by period and rebase returns for both strategies
   const portfolioChartData = useMemo(() => {
     if (!portfolio?.nav_series?.length) return [];
     const cutoff = getFilterCutoff(PERIOD_FILTERS[selectedPeriod].days);
-    let series = portfolio.nav_series;
+    let series: PortfolioNavPoint[] = portfolio.nav_series;
     if (cutoff) {
       series = series.filter((p) => new Date(p.date) >= cutoff);
     }
     if (series.length === 0) return [];
 
-    // Rebase returns from the start of the selected period
-    const baseNav = series[0].nav;
+    // Rebase both NAV series from start of selected period
+    const baseEqNav = series[0].eq_nav;
+    const baseConvNav = series[0].conv_nav;
     return series.map((p) => {
       const d = new Date(p.date);
       return {
         date: p.date,
         label: `${MONTH_NAMES[d.getMonth()]} '${String(d.getFullYear()).slice(2)}`,
-        cumReturn: baseNav > 0 ? Math.round(((p.nav / baseNav) - 1) * 1000) / 10 : 0,
-        nav: p.nav,
+        eqReturn: baseEqNav > 0 ? Math.round(((p.eq_nav / baseEqNav) - 1) * 1000) / 10 : 0,
+        convReturn: baseConvNav > 0 ? Math.round(((p.conv_nav / baseConvNav) - 1) * 1000) / 10 : 0,
         positions: p.positions,
-        invested: p.invested,
       };
     });
   }, [portfolio, selectedPeriod]);
@@ -318,13 +319,15 @@ export default function PoliticianPage() {
 
   const holdings = useMemo(() => buildHoldings(filteredTrades), [filteredTrades]);
 
-  // Portfolio return for hero number (rebased to selected period)
+  // Portfolio return for hero number (rebased to selected period, using selected strategy)
   const portfolioReturn = useMemo(() => {
     if (portfolioChartData.length > 0) {
-      return portfolioChartData[portfolioChartData.length - 1].cumReturn;
+      const last = portfolioChartData[portfolioChartData.length - 1];
+      if (chartMode === "conv") return last.convReturn;
+      return last.eqReturn; // default to equal-weight for "eq" and "both"
     }
     return null;
-  }, [portfolioChartData]);
+  }, [portfolioChartData, chartMode]);
 
   const stats = useMemo(() => {
     const trades = filteredTrades;
@@ -395,7 +398,6 @@ export default function PoliticianPage() {
   // Use portfolio simulation return if available, otherwise fall back to trade-level data
   const hasPortfolioData = portfolioChartData.length > 0;
   const displayReturn = portfolioReturn;
-  const hasReturnData = displayReturn != null || stats.tradesWithReturn > 0;
   const heroReturn = displayReturn ?? null;
   const isPositiveReturn = (heroReturn ?? 0) >= 0;
 
@@ -518,8 +520,16 @@ export default function PoliticianPage() {
                   {Math.abs(heroReturn).toFixed(1)}%
                 </div>
                 <div className="text-xs text-muted-foreground mt-1">
-                  {periodLabel} portfolio return
+                  {periodLabel} {chartMode === "conv" ? "conviction" : "copy trading"} return
                 </div>
+                {portfolio && selectedPeriod === 6 && (
+                  <div className="text-[10px] text-muted-foreground/60 mt-0.5">
+                    {chartMode === "conv"
+                      ? `${portfolio.conviction_weighted.annual_return}% CAGR`
+                      : `${portfolio.equal_weight.annual_return}% CAGR`
+                    } over {portfolio.years}yr
+                  </div>
+                )}
               </>
             ) : (
               <>
@@ -582,6 +592,32 @@ export default function PoliticianPage() {
               ))}
             </div>
           </div>
+          {/* Strategy Toggle (only when portfolio data is available) */}
+          {hasPortfolioData && (
+            <div className="flex gap-1 mt-2">
+              {([
+                { key: "eq" as const, label: "Copy Trading" },
+                { key: "conv" as const, label: "Conviction" },
+                { key: "both" as const, label: "Both" },
+              ]).map((mode) => (
+                <button
+                  key={mode.key}
+                  onClick={() => setChartMode(mode.key)}
+                  className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+                    chartMode === mode.key
+                      ? mode.key === "eq"
+                        ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+                        : mode.key === "conv"
+                          ? "bg-blue-500/20 text-blue-400 border border-blue-500/30"
+                          : "bg-purple-500/20 text-purple-400 border border-purple-500/30"
+                      : "text-muted-foreground hover:text-foreground hover:bg-muted border border-transparent"
+                  }`}
+                >
+                  {mode.label}
+                </button>
+              ))}
+            </div>
+          )}
         </CardHeader>
         <CardContent className="pt-0 pb-4">
           {portfolioLoading ? (
@@ -591,27 +627,13 @@ export default function PoliticianPage() {
               <span className="text-sm">Computing portfolio simulation with historical prices...</span>
             </div>
           ) : hasPortfolioData ? (
-            /* ─── Portfolio Equity Curve (from backend simulation) ─── */
+            /* ─── Portfolio Equity Curve (dual-line from backend simulation) ─── */
             <div className="h-56">
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart
+                <LineChart
                   data={portfolioChartData}
                   margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
                 >
-                  <defs>
-                    <linearGradient id="perfGradient" x1="0" y1="0" x2="0" y2="1">
-                      <stop
-                        offset="5%"
-                        stopColor={isPositiveReturn ? "#10b981" : "#ef4444"}
-                        stopOpacity={0.3}
-                      />
-                      <stop
-                        offset="95%"
-                        stopColor={isPositiveReturn ? "#10b981" : "#ef4444"}
-                        stopOpacity={0}
-                      />
-                    </linearGradient>
-                  </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#333" vertical={false} />
                   <XAxis
                     dataKey="label"
@@ -635,25 +657,36 @@ export default function PoliticianPage() {
                       fontSize: "12px",
                       boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
                     }}
-                    formatter={(value) => [
-                      `${Number(value) > 0 ? "+" : ""}${value}%`,
-                      "Portfolio Return",
-                    ]}
+                    formatter={(value, dataKey) => {
+                      const v = Number(value);
+                      const label = dataKey === "eqReturn" ? "Copy Trading" : "Conviction";
+                      return [`${v > 0 ? "+" : ""}${v.toFixed(1)}%`, label];
+                    }}
                     labelFormatter={(label) => `${label}`}
                   />
-                  <Area
-                    type="monotone"
-                    dataKey="cumReturn"
-                    stroke={isPositiveReturn ? "#10b981" : "#ef4444"}
-                    fill="url(#perfGradient)"
-                    strokeWidth={2.5}
-                    dot={false}
-                    activeDot={{
-                      r: 4,
-                      fill: isPositiveReturn ? "#10b981" : "#ef4444",
-                    }}
-                  />
-                </AreaChart>
+                  {(chartMode === "eq" || chartMode === "both") && (
+                    <Line
+                      type="monotone"
+                      dataKey="eqReturn"
+                      stroke="#10b981"
+                      strokeWidth={2.5}
+                      dot={false}
+                      activeDot={{ r: 4, fill: "#10b981" }}
+                      name="Copy Trading"
+                    />
+                  )}
+                  {(chartMode === "conv" || chartMode === "both") && (
+                    <Line
+                      type="monotone"
+                      dataKey="convReturn"
+                      stroke="#6366f1"
+                      strokeWidth={2.5}
+                      dot={false}
+                      activeDot={{ r: 4, fill: "#6366f1" }}
+                      name="Conviction"
+                    />
+                  )}
+                </LineChart>
               </ResponsiveContainer>
             </div>
           ) : activityChartData.length > 0 ? (
@@ -745,7 +778,7 @@ export default function PoliticianPage() {
             </span>
             {hasPortfolioData ? (
               <span>
-                Simulated portfolio return:{" "}
+                {chartMode === "both" ? "EW" : chartMode === "eq" ? "Copy Trading" : "Conviction"} return:{" "}
                 <span
                   className={
                     (portfolioReturn ?? 0) >= 0
@@ -757,7 +790,7 @@ export default function PoliticianPage() {
                 </span>
                 {portfolio && (
                   <span className="ml-2 text-muted-foreground/60">
-                    ({portfolio.tickers_priced}/{portfolio.tickers_traded} tickers priced)
+                    ({portfolio.tickers_priced}/{portfolio.tickers_traded} tickers · {portfolio.years}yr)
                   </span>
                 )}
               </span>

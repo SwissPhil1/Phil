@@ -230,7 +230,7 @@ export default function LeaderboardPage() {
             </CardHeader>
             <CardContent>
               <div className="space-y-0">
-                {sortedEntries.slice(0, 50).map((entry) => {
+                {sortedEntries.map((entry) => {
                   const main = getMainValue(entry);
                   const secondary = getSecondaryStats(entry);
                   const isPos = (main.val ?? 0) >= 0;
@@ -312,11 +312,9 @@ export default function LeaderboardPage() {
                   );
                 })}
               </div>
-              {sortedEntries.length > 50 && (
-                <div className="text-xs text-muted-foreground text-center pt-3 border-t border-border/50">
-                  Showing top 50 of {sortedEntries.length} politicians
-                </div>
-              )}
+              <div className="text-xs text-muted-foreground text-center pt-3 border-t border-border/50">
+                {sortedEntries.length} politicians ranked
+              </div>
             </CardContent>
           </Card>
         </>

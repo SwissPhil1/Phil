@@ -681,16 +681,19 @@ async def compute_leaderboard_returns(
 
         buy_count = sum(1 for t in trades if t.tx_type == "purchase")
 
-        if eq_result and conv_result:
+        # Include if at least one simulation succeeded
+        primary = eq_result or conv_result
+        if primary:
+            empty_result = {"total_return": 0, "annual_return": 0, "total_invested": 0, "positions_open": 0, "years": 0}
             results.append({
                 "politician": pol_name,
                 "party": party,
                 "state": state,
                 "chamber": chamber,
                 "total_trades": buy_count,
-                "equal_weight": eq_result,
-                "conviction_weighted": conv_result,
+                "equal_weight": eq_result or empty_result,
+                "conviction_weighted": conv_result or empty_result,
             })
 
-    results.sort(key=lambda x: x["equal_weight"]["annual_return"] or 0, reverse=True)
+    results.sort(key=lambda x: (x["equal_weight"]["annual_return"] or 0), reverse=True)
     return results

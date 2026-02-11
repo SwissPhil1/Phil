@@ -355,9 +355,93 @@ async def rebuild_politician_stats(session: AsyncSession):
     logger.info(f"Rebuilt stats for {count} politicians (aggregated SQL)")
 
 
+async def refresh_current_prices(session: AsyncSession):
+    """Fast refresh: update only current prices for already-priced tickers.
+
+    This is cheap — one Yahoo call per unique ticker (no historical lookups).
+    Then recalculates returns and rebuilds leaderboard stats.
+    """
+    # Get all unique tickers that already have historical prices
+    stmt = (
+        select(Trade.ticker)
+        .where(
+            Trade.ticker.isnot(None),
+            Trade.price_at_disclosure.isnot(None),
+            Trade.tx_type.in_(["purchase", "sale", "sale_partial", "sale_full"]),
+        )
+        .distinct()
+    )
+    result = await session.execute(stmt)
+    tickers = [r[0] for r in result.all() if r[0] and r[0] not in ("--", "N/A")]
+
+    if not tickers:
+        logger.info("No priced tickers to refresh")
+        return 0
+
+    logger.info(f"Refreshing current prices for {len(tickers)} tickers")
+
+    # Fetch current prices in parallel
+    semaphore = asyncio.Semaphore(CONCURRENT_FETCHES)
+    price_map: dict[str, float] = {}
+
+    async def fetch_one(client: httpx.AsyncClient, ticker: str):
+        async with semaphore:
+            price = await get_current_price(client, ticker)
+            if price:
+                price_map[ticker] = price
+
+    async with httpx.AsyncClient(
+        timeout=YAHOO_TIMEOUT, follow_redirects=True
+    ) as client:
+        chunk_size = 50
+        for chunk_start in range(0, len(tickers), chunk_size):
+            chunk = tickers[chunk_start : chunk_start + chunk_size]
+            await asyncio.gather(
+                *[fetch_one(client, t) for t in chunk],
+                return_exceptions=True,
+            )
+            if chunk_start + chunk_size < len(tickers):
+                await asyncio.sleep(0.3)
+
+    # Batch update all trades per ticker
+    updated = 0
+    for ticker, current_price in price_map.items():
+        # Update price_current and recalculate return in one SQL statement
+        await session.execute(
+            update(Trade)
+            .where(
+                Trade.ticker == ticker,
+                Trade.price_at_disclosure.isnot(None),
+                Trade.price_at_disclosure > 0,
+            )
+            .values(
+                price_current=current_price,
+                return_since_disclosure=func.round(
+                    ((current_price - Trade.price_at_disclosure) / Trade.price_at_disclosure) * 100,
+                    2,
+                ),
+            )
+        )
+        updated += 1
+
+    await session.commit()
+    logger.info(
+        f"Refreshed current prices: {len(price_map)}/{len(tickers)} tickers updated"
+    )
+    return updated
+
+
 async def run_performance_update(price_limit: int = 2000, force: bool = False):
-    """Run full performance update cycle."""
+    """Run full performance update cycle: price new trades + rebuild stats."""
     async with async_session() as session:
         updated = await update_trade_prices(session, limit=price_limit, force=force)
         await rebuild_politician_stats(session)
         return {"prices_updated": updated}
+
+
+async def run_price_refresh():
+    """Fast cycle: refresh current prices for already-priced tickers + rebuild stats."""
+    async with async_session() as session:
+        updated = await refresh_current_prices(session)
+        await rebuild_politician_stats(session)
+        return {"tickers_refreshed": updated}

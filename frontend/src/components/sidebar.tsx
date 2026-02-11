@@ -12,16 +12,22 @@ import {
   Brain,
   Settings,
   Zap,
+  Eye,
+  FlaskConical,
+  UserCheck,
 } from "lucide-react";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/congress", label: "Congress Trades", icon: Landmark },
+  { href: "/insiders", label: "Insider Trades", icon: UserCheck },
   { href: "/hedge-funds", label: "Hedge Funds", icon: TrendingUp },
   { href: "/trump", label: "Trump Circle", icon: Target },
   { href: "/prediction-markets", label: "Markets", icon: BarChart3 },
   { href: "/leaderboard", label: "Leaderboard", icon: Trophy },
   { href: "/signals", label: "Signals", icon: Zap },
+  { href: "/backtester", label: "Backtester", icon: FlaskConical },
+  { href: "/watchlist", label: "Watchlist", icon: Eye },
   { href: "/optimizer", label: "Optimizer", icon: Brain },
   { href: "/settings", label: "Settings", icon: Settings },
 ];

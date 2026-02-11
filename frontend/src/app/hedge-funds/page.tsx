@@ -1,40 +1,36 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, type HedgeFund } from "@/lib/api";
 import { Building2 } from "lucide-react";
+import { useApiData } from "@/lib/hooks";
+import { ErrorState, RefreshIndicator } from "@/components/error-state";
 
 export default function HedgeFundsPage() {
-  const [funds, setFunds] = useState<HedgeFund[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    async function load() {
-      try {
-        const data = await api.getHedgeFunds();
-        setFunds(Array.isArray(data) ? data : []);
-      } catch {}
-      setLoading(false);
-    }
-    load();
-  }, []);
+  const { data: rawFunds, loading, error, retry, refreshIn } = useApiData<HedgeFund[]>(
+    () => api.getHedgeFunds().then((data) => (Array.isArray(data) ? data : [])),
+    { refreshInterval: 120 }
+  );
+  const funds = rawFunds ?? [];
 
   const totalValue = funds.reduce((sum, f) => sum + (f.total_value || 0), 0);
   const totalHoldings = funds.reduce((sum, f) => sum + (f.num_holdings || 0), 0);
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Hedge Fund Tracker</h1>
-        <p className="text-muted-foreground text-sm mt-1">
-          13F filings from top hedge fund managers — see what the smart money is holding
-        </p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold">Hedge Fund Tracker</h1>
+          <p className="text-muted-foreground text-sm mt-1">
+            13F filings from top hedge fund managers — see what the smart money is holding
+          </p>
+        </div>
+        <RefreshIndicator refreshIn={refreshIn} />
       </div>
 
       {/* Summary stats */}
-      {!loading && funds.length > 0 && (
+      {!loading && !error && funds.length > 0 && (
         <div className="grid grid-cols-3 gap-4">
           <Card>
             <CardContent className="p-4">
@@ -61,7 +57,9 @@ export default function HedgeFundsPage() {
         </div>
       )}
 
-      {loading ? (
+      {error && !rawFunds ? (
+        <ErrorState error={error} onRetry={retry} />
+      ) : loading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {[...Array(6)].map((_, i) => (
             <Card key={i}><CardContent className="p-6"><Skeleton className="h-20 w-full" /></CardContent></Card>

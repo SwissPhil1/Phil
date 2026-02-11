@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, type LeaderboardEntry, type UnifiedLeaderboard } from "@/lib/api";
 import { Trophy, TrendingUp, Users, BarChart3 } from "lucide-react";
+import { useApiData } from "@/lib/hooks";
+import { ErrorState, RefreshIndicator } from "@/components/error-state";
 
 type SortColumn = "avg_return" | "win_rate" | "trades" | "cagr" | "total" | "conv_cagr";
 
@@ -22,27 +24,19 @@ function fmtPct(val: number | null | undefined, decimals = 1): string {
 }
 
 export default function LeaderboardPage() {
-  const [data, setData] = useState<UnifiedLeaderboard | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [sortCol, setSortCol] = useState<SortColumn>("avg_return");
+  const { data, loading, error, retry, refreshIn } = useApiData<UnifiedLeaderboard>(
+    () => api.getLeaderboard(),
+    { refreshInterval: 120 }
+  );
+  const [sortCol, setSortCol] = useState<SortColumn>(() => "avg_return");
   const [chamberFilter, setChamberFilter] = useState<string | null>(null);
+  const [sortInitialized, setSortInitialized] = useState(false);
 
-  useEffect(() => {
-    async function load() {
-      try {
-        const result = await api.getLeaderboard();
-        setData(result);
-        // Auto-select best default sort based on available data
-        if (result.has_portfolio_data) {
-          setSortCol("cagr");
-        }
-      } catch {
-        // API error
-      }
-      setLoading(false);
-    }
-    load();
-  }, []);
+  // Auto-select best default sort based on available data (once)
+  if (data?.has_portfolio_data && !sortInitialized) {
+    setSortCol("cagr");
+    setSortInitialized(true);
+  }
 
   const hasPortfolio = data?.has_portfolio_data ?? false;
 
@@ -113,13 +107,16 @@ export default function LeaderboardPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Leaderboard</h1>
-        <p className="text-muted-foreground text-sm mt-1">
-          {hasPortfolio
-            ? "Best politician traders ranked by simulated portfolio returns"
-            : "Politicians ranked by trading performance"}
-        </p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold">Leaderboard</h1>
+          <p className="text-muted-foreground text-sm mt-1">
+            {hasPortfolio
+              ? "Best politician traders ranked by simulated portfolio returns"
+              : "Politicians ranked by trading performance"}
+          </p>
+        </div>
+        <RefreshIndicator refreshIn={refreshIn} />
       </div>
 
       {/* Filters + Sort */}
@@ -166,7 +163,9 @@ export default function LeaderboardPage() {
         </div>
       </div>
 
-      {loading ? (
+      {error && !data ? (
+        <ErrorState error={error} onRetry={retry} />
+      ) : loading ? (
         <div className="space-y-4">
           {[...Array(5)].map((_, i) => <Skeleton key={i} className="h-16 w-full" />)}
         </div>

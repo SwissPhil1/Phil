@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 
-const BACKEND_URL = "https://phil-production.up.railway.app";
+const BACKEND_URL =
+  process.env.BACKEND_URL || "https://phil-production.up.railway.app";
 
 async function proxyRequest(request: NextRequest) {
   const path = request.nextUrl.pathname;

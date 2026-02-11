@@ -1,48 +1,51 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
 import { Target, Users, Building2, DollarSign, AlertTriangle } from "lucide-react";
+import { useMultiApiData } from "@/lib/hooks";
+import { ErrorState, RefreshIndicator } from "@/components/error-state";
+
+type TrumpOverview = { total_insiders: number; total_companies: number; total_donors: number; categories: Record<string, number> };
 
 export default function TrumpPage() {
-  const [overview, setOverview] = useState<{ total_insiders: number; total_companies: number; total_donors: number; categories: Record<string, number> } | null>(null);
-  const [insiders, setInsiders] = useState<any[]>([]);
-  const [conflictMap, setConflictMap] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+  const { data, loading, errors, hasError, retry, refreshIn } = useMultiApiData<{
+    overview: TrumpOverview;
+    insiders: any[];
+    conflictMap: any;
+  }>(
+    {
+      overview: () => api.getTrumpOverview(),
+      insiders: () => api.getTrumpInsiders(),
+      conflictMap: () => api.getTrumpConflictMap(),
+    },
+    { refreshInterval: 120 }
+  );
 
-  useEffect(() => {
-    async function load() {
-      try {
-        const [ov, ins, cm] = await Promise.allSettled([
-          api.getTrumpOverview(),
-          api.getTrumpInsiders(),
-          api.getTrumpConflictMap(),
-        ]);
-        if (ov.status === "fulfilled") setOverview(ov.value);
-        if (ins.status === "fulfilled") setInsiders(ins.value as any[]);
-        if (cm.status === "fulfilled") setConflictMap(cm.value);
-      } catch {}
-      setLoading(false);
-    }
-    load();
-  }, []);
+  const overview = data.overview;
+  const insiders = data.insiders ?? [];
+  const conflictMap = data.conflictMap;
 
   const categories = overview?.categories || {};
   const uniqueCompanies = new Set(insiders.flatMap((i: any) => Array.isArray(i.tickers) ? i.tickers : []).filter(Boolean)).size;
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Trump & Inner Circle</h1>
-        <p className="text-muted-foreground text-sm mt-1">
-          Financial interests, conflicts, and connections of Trump family, appointees, and associates
-        </p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold">Trump & Inner Circle</h1>
+          <p className="text-muted-foreground text-sm mt-1">
+            Financial interests, conflicts, and connections of Trump family, appointees, and associates
+          </p>
+        </div>
+        <RefreshIndicator refreshIn={refreshIn} />
       </div>
 
-      {loading ? (
+      {hasError && !overview && insiders.length === 0 && !conflictMap ? (
+        <ErrorState error={Object.values(errors).join("; ") || "Failed to load data"} onRetry={retry} />
+      ) : loading ? (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {[...Array(4)].map((_, i) => <Card key={i}><CardContent className="p-5"><Skeleton className="h-14 w-full" /></CardContent></Card>)}
         </div>

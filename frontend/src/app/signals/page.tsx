@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, type Signal, type CrossSourceSignal, type BacktestResult } from "@/lib/api";
 import { Zap, Target, BarChart3, ArrowRight, Info } from "lucide-react";
+import { useMultiApiData } from "@/lib/hooks";
+import { ErrorState, RefreshIndicator } from "@/components/error-state";
 
 function SignalBadge({ strength }: { strength: string }) {
   const colors: Record<string, string> = {
@@ -21,34 +22,47 @@ function SignalBadge({ strength }: { strength: string }) {
   );
 }
 
-export default function SignalsPage() {
-  const [signals, setSignals] = useState<{
-    clusters: Signal[];
-    cross_source_signals: CrossSourceSignal[];
-    total_high_signals: number;
-  } | null>(null);
-  const [backtest, setBacktest] = useState<BacktestResult | null>(null);
-  const [loading, setLoading] = useState(true);
+type SignalsData = {
+  clusters: Signal[];
+  cross_source_signals: CrossSourceSignal[];
+  total_high_signals: number;
+};
 
-  useEffect(() => {
-    async function load() {
-      try {
-        const [signalsData, backtestData] = await Promise.allSettled([
-          api.getSignals(),
-          api.runBacktest({ days: "365", forward_days: "90", max_trades: "100" }),
-        ]);
-        if (signalsData.status === "fulfilled") setSignals(signalsData.value);
-        if (backtestData.status === "fulfilled") setBacktest(backtestData.value);
-      } finally {
-        setLoading(false);
-      }
-    }
-    load();
-  }, []);
+export default function SignalsPage() {
+  const { data, loading, errors, hasError, retry, refreshIn } = useMultiApiData<{
+    signals: SignalsData;
+    backtest: BacktestResult;
+  }>(
+    {
+      signals: () => api.getSignals(),
+      backtest: () => api.runBacktest({ days: "365", forward_days: "90", max_trades: "100" }),
+    },
+    { refreshInterval: 120 }
+  );
+
+  const signals = data.signals;
+  const backtest = data.backtest;
 
   const hasClusters = signals?.clusters && signals.clusters.length > 0;
   const hasCrossSource = signals?.cross_source_signals && signals.cross_source_signals.length > 0;
   const hasBacktest = backtest && backtest.trades_with_returns > 0;
+
+  if (hasError && !signals && !backtest) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-start justify-between">
+          <div>
+            <h1 className="text-2xl font-bold">Smart Signals</h1>
+            <p className="text-muted-foreground text-sm mt-1">
+              AI-powered conviction scoring and cross-source signal detection
+            </p>
+          </div>
+          <RefreshIndicator refreshIn={refreshIn} />
+        </div>
+        <ErrorState error={Object.values(errors).join("; ") || "Failed to load signals"} onRetry={retry} />
+      </div>
+    );
+  }
 
   if (loading) {
     return (
@@ -68,11 +82,14 @@ export default function SignalsPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Smart Signals</h1>
-        <p className="text-muted-foreground text-sm mt-1">
-          AI-powered conviction scoring and cross-source signal detection
-        </p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold">Smart Signals</h1>
+          <p className="text-muted-foreground text-sm mt-1">
+            AI-powered conviction scoring and cross-source signal detection
+          </p>
+        </div>
+        <RefreshIndicator refreshIn={refreshIn} />
       </div>
 
       {/* Info about signal detection */}

@@ -662,9 +662,11 @@ async def trigger_capitoltrades_ingestion(
 @router.get("/admin/test-prices")
 async def test_prices(ticker: str = Query(default="AAPL")):
     """Test price fetching using Yahoo v8 API (via httpx)."""
+    import httpx
     from app.services.performance import get_current_price, get_price_on_date
-    current = await get_current_price(ticker)
-    historical = await get_price_on_date(ticker, datetime.utcnow() - timedelta(days=30))
+    async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
+        current = await get_current_price(client, ticker)
+        historical = await get_price_on_date(client, ticker, datetime.utcnow() - timedelta(days=30))
     return {
         "ticker": ticker,
         "current_price": current,

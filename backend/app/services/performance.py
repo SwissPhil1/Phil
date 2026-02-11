@@ -528,14 +528,56 @@ async def rebuild_politician_stats(session: AsyncSession):
             if d:
                 historical_prices[(t.ticker, d.isoformat()[:10])] = t.price_at_disclosure
 
+    # Build per-ticker sorted price timelines for nearest-price lookup
+    # Uses ALL politicians' trades so more data points are available
+    from bisect import bisect_left as _bisect
+    from collections import defaultdict as _ddict
+    ticker_timeline: dict[str, list[tuple[str, float]]] = _ddict(list)
+    for (tk, ds), px in historical_prices.items():
+        ticker_timeline[tk].append((ds, px))
+    for tk in ticker_timeline:
+        ticker_timeline[tk].sort()
+
+    today_str = datetime.utcnow().isoformat()[:10]
+
     def stored_price(ticker: str, date: datetime) -> float | None:
-        """Price lookup using stored DB data (same logic as Yahoo but cached)."""
+        """Price lookup using stored DB data.
+
+        For trade dates: returns exact price_at_disclosure.
+        For current (today): returns cached current price.
+        For intermediate dates: finds nearest historical price from ANY
+        politician's trades within 6 months, so TWR unit pricing is accurate.
+        Falls back to None (engine uses position cost) if nothing close.
+        """
         date_str = date.isoformat()[:10]
+        # Exact match on a trade date
         hist = historical_prices.get((ticker, date_str))
         if hist:
             return hist
-        # For current-date valuation of open positions
-        return current_prices.get(ticker)
+        # Today or future → use current market price
+        if date_str >= today_str:
+            return current_prices.get(ticker)
+        # Intermediate date: find nearest price from any politician's trades
+        timeline = ticker_timeline.get(ticker)
+        if timeline:
+            dates = [h[0] for h in timeline]
+            idx = _bisect(dates, date_str)
+            best, best_diff = None, float("inf")
+            for i in [idx - 1, idx]:
+                if 0 <= i < len(timeline):
+                    try:
+                        d_ts = datetime.fromisoformat(timeline[i][0]).timestamp()
+                        diff = abs(d_ts - date.timestamp())
+                        if diff < best_diff:
+                            best_diff = diff
+                            best = timeline[i][1]
+                    except Exception:
+                        pass
+            # Accept if within 6 months
+            if best is not None and best_diff < 180 * 86400:
+                return best
+        # No data → _run_simulation falls back to position cost
+        return None
 
     # Compute portfolio stats per politician using the SAME engine as profile pages
     portfolio_stats: dict[str, dict] = {}

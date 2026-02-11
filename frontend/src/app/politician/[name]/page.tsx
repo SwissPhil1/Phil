@@ -245,7 +245,7 @@ export default function PoliticianPage() {
   const name = decodeURIComponent(params.name as string);
   const [politician, setPolitician] = useState<PoliticianDetail | null>(null);
   const [committees, setCommittees] = useState<
-    { committee: string; subcommittee?: string }[]
+    { committee_id?: string; committee_name?: string; committee?: string; role?: string; rank?: number }[]
   >([]);
   const [portfolio, setPortfolio] = useState<PortfolioSimulation | null>(null);
   const [portfolioLoading, setPortfolioLoading] = useState(true);
@@ -589,7 +589,7 @@ export default function PoliticianPage() {
                 className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md bg-muted/50 border border-border/50 text-muted-foreground"
               >
                 <Building2 className="w-3 h-3" />
-                {c.committee}
+                {c.committee_name || c.committee}{c.role && c.role !== "Member" ? ` (${c.role})` : ""}
               </span>
             ))}
             {committees.length > 4 && (

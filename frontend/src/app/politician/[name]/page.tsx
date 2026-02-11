@@ -461,12 +461,20 @@ export default function PoliticianPage() {
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
       {/* Back Navigation */}
-      <Link
-        href="/congress"
-        className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
-      >
-        <ArrowLeft className="w-4 h-4" /> Congress Trades
-      </Link>
+      <div className="flex items-center gap-4">
+        <Link
+          href="/leaderboard"
+          className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <ArrowLeft className="w-4 h-4" /> Leaderboard
+        </Link>
+        <Link
+          href="/congress"
+          className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+        >
+          Congress Trades
+        </Link>
+      </div>
 
       {/* ─── Hero Header ─── */}
       <div className="relative overflow-hidden rounded-2xl border border-border bg-gradient-to-br from-card via-card to-muted/20 p-6">
@@ -539,14 +547,34 @@ export default function PoliticianPage() {
               </>
             ) : (
               <>
-                <div className="text-4xl font-bold tracking-tight font-mono text-blue-400">
-                  {stats.estAum > 0 ? formatLargeNumber(stats.estAum) : `${stats.totalTrades}`}
-                </div>
-                <div className="text-xs text-muted-foreground mt-1">
-                  {stats.estAum > 0
-                    ? `${periodLabel} est. volume`
-                    : `${periodLabel} trades`}
-                </div>
+                {stats.avgReturn != null ? (
+                  <>
+                    <div className={`text-4xl font-bold tracking-tight font-mono ${stats.avgReturn >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                      <span className="text-2xl">{stats.avgReturn >= 0 ? "▲" : "▼"}</span>{" "}
+                      {Math.abs(stats.avgReturn).toFixed(1)}%
+                    </div>
+                    <div className="text-xs text-muted-foreground mt-1">
+                      avg return per trade
+                    </div>
+                    <div className="text-[10px] text-muted-foreground/60 mt-0.5">
+                      {stats.winRate != null ? `${stats.winRate.toFixed(0)}% win rate` : ""} · {stats.totalTrades} trades
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="text-4xl font-bold tracking-tight font-mono text-blue-400">
+                      {stats.totalTrades}
+                    </div>
+                    <div className="text-xs text-muted-foreground mt-1">
+                      {periodLabel} trades
+                    </div>
+                    {stats.estAum > 0 && (
+                      <div className="text-[10px] text-muted-foreground/60 mt-0.5">
+                        {formatLargeNumber(stats.estAum)} est. volume
+                      </div>
+                    )}
+                  </>
+                )}
               </>
             )}
           </div>
@@ -899,6 +927,36 @@ export default function PoliticianPage() {
         </div>
       </div>
 
+      {/* ─── Top Stocks Quick View ─── */}
+      {holdings.length > 0 && (
+        <div className="grid grid-cols-3 sm:grid-cols-5 md:grid-cols-6 gap-2">
+          {holdings.slice(0, 6).map((h) => {
+            const hasReturn = h.returnPct != null;
+            const isPos = (h.returnPct ?? 0) >= 0;
+            return (
+              <div
+                key={h.ticker}
+                className="rounded-xl border border-border bg-card p-3 text-center"
+              >
+                <div className="font-mono text-sm font-bold">{h.ticker}</div>
+                {hasReturn ? (
+                  <div className={`text-xs font-mono mt-1 ${isPos ? "text-emerald-400" : "text-red-400"}`}>
+                    {formatPnl(h.returnPct)}
+                  </div>
+                ) : (
+                  <div className="text-xs text-muted-foreground mt-1">
+                    {h.allocationPct.toFixed(0)}%
+                  </div>
+                )}
+                <div className="text-[9px] text-muted-foreground mt-0.5">
+                  {h.totalBuys}B{h.totalSells > 0 ? ` ${h.totalSells}S` : ""}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {/* ─── Current Holdings (Allocation) ─── */}
       {holdings.length > 0 && (
         <Card>
@@ -906,7 +964,7 @@ export default function PoliticianPage() {
             <div className="flex items-center justify-between">
               <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
                 <BarChart3 className="w-4 h-4" />
-                Holdings
+                Holdings & Allocation
               </CardTitle>
               <span className="text-xs text-muted-foreground">
                 {holdings.length} positions · {periodLabel}

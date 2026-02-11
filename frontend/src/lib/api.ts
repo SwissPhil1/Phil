@@ -114,8 +114,10 @@ export interface LeaderboardEntry {
 export interface UnifiedLeaderboard {
   leaderboard: LeaderboardEntry[];
   total_ranked: number;
+  has_portfolio_data: boolean;
   party_comparison: Record<string, {
     avg_cagr_pct: number | null;
+    avg_return_pct: number | null;
     total_politicians: number;
     total_trades: number;
   }>;

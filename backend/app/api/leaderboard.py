@@ -94,25 +94,32 @@ async def get_leaderboard(
     for e in entries:
         party = e["party"] or "Unknown"
         if party not in party_stats:
-            party_stats[party] = {"cagrs": [], "count": 0, "total_trades": 0}
+            party_stats[party] = {"cagrs": [], "avg_returns": [], "count": 0, "total_trades": 0}
         if e["portfolio_cagr_pct"] is not None:
             party_stats[party]["cagrs"].append(e["portfolio_cagr_pct"])
+        if e["avg_return_pct"] is not None:
+            party_stats[party]["avg_returns"].append(e["avg_return_pct"])
         party_stats[party]["count"] += 1
         party_stats[party]["total_trades"] += e["total_trades"]
 
     party_comparison = {
         party: {
             "avg_cagr_pct": round(sum(d["cagrs"]) / len(d["cagrs"]), 2) if d["cagrs"] else None,
+            "avg_return_pct": round(sum(d["avg_returns"]) / len(d["avg_returns"]), 2) if d["avg_returns"] else None,
             "total_politicians": d["count"],
             "total_trades": d["total_trades"],
         }
         for party, d in party_stats.items()
     }
 
+    # Detect if portfolio data is available for any politician
+    has_portfolio_data = any(e["portfolio_cagr_pct"] is not None for e in entries)
+
     return {
         "leaderboard": entries,
         "total_ranked": len(entries),
         "party_comparison": party_comparison,
+        "has_portfolio_data": has_portfolio_data,
     }
 
 

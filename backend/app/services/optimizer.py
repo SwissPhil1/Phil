@@ -24,7 +24,7 @@ from datetime import datetime, timedelta
 from itertools import product
 
 import yfinance as yf
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import (
@@ -232,7 +232,7 @@ async def extract_trade_features(days: int = 730, max_trades: int = 500) -> list
                     func.count().label("total"),
                     func.avg(Trade.return_since_disclosure).label("avg_return"),
                     func.sum(
-                        func.case((Trade.return_since_disclosure > 0, 1), else_=0)
+                        case((Trade.return_since_disclosure > 0, 1), else_=0)
                     ).label("wins"),
                 )
                 .where(Trade.politician.ilike(f"%{name}%"))

@@ -98,30 +98,7 @@ async def get_trades(
     result = await db.execute(stmt)
     trades = result.scalars().all()
 
-    return [
-        TradeResponse(
-            id=t.id,
-            chamber=t.chamber,
-            politician=t.politician,
-            party=t.party,
-            state=t.state,
-            ticker=t.ticker,
-            asset_description=t.asset_description,
-            tx_type=t.tx_type,
-            tx_date=t.tx_date,
-            disclosure_date=t.disclosure_date,
-            amount_low=t.amount_low,
-            amount_high=t.amount_high,
-            price_at_disclosure=t.price_at_disclosure,
-            return_since_disclosure=t.return_since_disclosure,
-            disclosure_delay_days=(
-                (t.disclosure_date - t.tx_date).days
-                if t.disclosure_date and t.tx_date
-                else None
-            ),
-        )
-        for t in trades
-    ]
+    return [_trade_to_response(t) for t in trades]
 
 
 @router.get("/trades/recent", response_model=list[TradeResponse])
@@ -139,30 +116,7 @@ async def get_recent_trades(
     result = await db.execute(stmt)
     trades = result.scalars().all()
 
-    return [
-        TradeResponse(
-            id=t.id,
-            chamber=t.chamber,
-            politician=t.politician,
-            party=t.party,
-            state=t.state,
-            ticker=t.ticker,
-            asset_description=t.asset_description,
-            tx_type=t.tx_type,
-            tx_date=t.tx_date,
-            disclosure_date=t.disclosure_date,
-            amount_low=t.amount_low,
-            amount_high=t.amount_high,
-            price_at_disclosure=t.price_at_disclosure,
-            return_since_disclosure=t.return_since_disclosure,
-            disclosure_delay_days=(
-                (t.disclosure_date - t.tx_date).days
-                if t.disclosure_date and t.tx_date
-                else None
-            ),
-        )
-        for t in trades
-    ]
+    return [_trade_to_response(t) for t in trades]
 
 
 # --- Politicians ---
@@ -388,30 +342,7 @@ async def get_trades_for_ticker(
     result = await db.execute(stmt)
     trades = result.scalars().all()
 
-    return [
-        TradeResponse(
-            id=t.id,
-            chamber=t.chamber,
-            politician=t.politician,
-            party=t.party,
-            state=t.state,
-            ticker=t.ticker,
-            asset_description=t.asset_description,
-            tx_type=t.tx_type,
-            tx_date=t.tx_date,
-            disclosure_date=t.disclosure_date,
-            amount_low=t.amount_low,
-            amount_high=t.amount_high,
-            price_at_disclosure=t.price_at_disclosure,
-            return_since_disclosure=t.return_since_disclosure,
-            disclosure_delay_days=(
-                (t.disclosure_date - t.tx_date).days
-                if t.disclosure_date and t.tx_date
-                else None
-            ),
-        )
-        for t in trades
-    ]
+    return [_trade_to_response(t) for t in trades]
 
 
 # --- Stats ---
@@ -779,4 +710,62 @@ async def pricing_status(db: AsyncSession = Depends(get_db)):
         "unique_tickers": total_tickers,
         "priced_tickers": priced_tickers,
         "leaderboard_eligible_politicians": lb_eligible,
+    }
+
+
+@router.get("/admin/pricing-status/{politician}")
+async def politician_pricing_status(
+    politician: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Diagnostic: show pricing details for a specific politician's trades."""
+    from sqlalchemy import distinct
+
+    stmt = (
+        select(Trade)
+        .where(Trade.politician.ilike(f"%{politician}%"))
+        .where(Trade.ticker.isnot(None))
+        .order_by(Trade.tx_date.desc().nullslast())
+    )
+    result = await db.execute(stmt)
+    trades = result.scalars().all()
+
+    if not trades:
+        return {"error": f"No trades found for '{politician}'"}
+
+    buys = [t for t in trades if t.tx_type == "purchase"]
+    priced_buys = [t for t in buys if t.price_at_disclosure]
+    has_current = [t for t in trades if t.price_current]
+
+    # Sample trades with full pricing info
+    samples = []
+    for t in trades[:20]:
+        samples.append({
+            "ticker": t.ticker,
+            "tx_type": t.tx_type,
+            "tx_date": str(t.tx_date)[:10] if t.tx_date else None,
+            "price_at_disclosure": t.price_at_disclosure,
+            "price_current": t.price_current,
+            "return_pct": t.return_since_disclosure,
+        })
+
+    # Unique tickers with current prices
+    ticker_prices = {}
+    for t in reversed(trades):
+        if t.ticker and t.ticker not in ticker_prices:
+            ticker_prices[t.ticker] = {
+                "price_at_disclosure": t.price_at_disclosure,
+                "price_current": t.price_current,
+                "return_pct": t.return_since_disclosure,
+            }
+
+    return {
+        "politician": trades[0].politician,
+        "total_trades": len(trades),
+        "total_buys": len(buys),
+        "priced_buys": len(priced_buys),
+        "trades_with_current_price": len(has_current),
+        "leaderboard_eligible": len(priced_buys) >= 3,
+        "ticker_prices": ticker_prices,
+        "sample_trades": samples,
     }

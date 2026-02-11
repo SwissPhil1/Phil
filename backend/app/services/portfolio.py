@@ -349,6 +349,47 @@ async def compute_portfolio_simulation(
 # ─── Leaderboard: fast returns using stored prices (no Yahoo calls) ───
 
 
+async def _batch_fetch_current_prices(tickers: list[str]) -> dict[str, float]:
+    """Fetch current prices for a batch of tickers from Yahoo v8 API.
+
+    Used as a fallback when stored prices are missing from the DB.
+    """
+    prices: dict[str, float] = {}
+    if not tickers:
+        return prices
+
+    async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
+        for i in range(0, len(tickers), 10):
+            batch = tickers[i : i + 10]
+            coros = []
+            for ticker in batch:
+                async def _fetch(t=ticker):
+                    try:
+                        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{t}?range=5d&interval=1d"
+                        resp = await client.get(url, headers=YAHOO_HEADERS)
+                        if resp.status_code != 200:
+                            return t, None
+                        data = resp.json()
+                        result = data.get("chart", {}).get("result", [])
+                        if not result:
+                            return t, None
+                        closes = result[0].get("indicators", {}).get("quote", [{}])[0].get("close", [])
+                        valid = [c for c in closes if c is not None]
+                        return t, float(valid[-1]) if valid else None
+                    except Exception:
+                        return t, None
+                coros.append(_fetch())
+            results = await asyncio.gather(*coros, return_exceptions=True)
+            for res in results:
+                if isinstance(res, tuple) and res[1] is not None:
+                    prices[res[0]] = res[1]
+            if i + 10 < len(tickers):
+                await asyncio.sleep(0.3)
+
+    logger.info(f"Yahoo fallback: fetched {len(prices)}/{len(tickers)} current prices")
+    return prices
+
+
 async def compute_leaderboard_returns(
     session: AsyncSession,
     min_priced_trades: int = 3,
@@ -356,7 +397,7 @@ async def compute_leaderboard_returns(
     """Compute portfolio returns for all politicians using stored DB prices.
 
     Uses price_at_disclosure for entry/exit and price_current for open
-    positions. No Yahoo API calls — fast enough for a leaderboard endpoint.
+    positions. Falls back to Yahoo API for tickers missing current prices.
 
     Includes politicians even if not all their trades have prices — the
     simulation just skips unpriced trades and requires at least
@@ -371,8 +412,30 @@ async def compute_leaderboard_returns(
         .having(func.count() >= min_priced_trades)
     )
 
-    results = []
+    # Build a GLOBAL current-price lookup from ALL trades (not per-politician)
+    # This ensures tickers priced for one politician benefit all others too
+    all_price_result = await session.execute(
+        select(Trade.ticker, Trade.price_current, Trade.price_at_disclosure, Trade.return_since_disclosure)
+        .where(Trade.ticker.isnot(None))
+        .where(Trade.price_at_disclosure.isnot(None))
+        .order_by(Trade.tx_date.desc().nullslast())
+    )
+    global_current_prices: dict[str, float] = {}
+    for row in all_price_result:
+        ticker = row.ticker
+        if ticker in global_current_prices:
+            continue
+        if row.price_current:
+            global_current_prices[ticker] = row.price_current
+        elif row.price_at_disclosure and row.return_since_disclosure is not None:
+            global_current_prices[ticker] = row.price_at_disclosure * (1 + row.return_since_disclosure / 100)
 
+    results = []
+    # Track tickers that need Yahoo fallback (open positions without current price)
+    missing_tickers: set[str] = set()
+
+    # First pass: simulate all politicians and identify missing prices
+    politician_data: list[tuple] = []
     for pol_name, _ in pol_counts:
         # Get all trades for this politician (sorted by date)
         trade_result = await session.execute(
@@ -385,18 +448,28 @@ async def compute_leaderboard_returns(
         trades = [t for t in trades if t.tx_date or t.disclosure_date]
         if not trades:
             continue
+        politician_data.append((pol_name, trades))
 
-        # Build current-price lookup (latest price_current per ticker)
-        # Fallback: compute from price_at_disclosure + return_since_disclosure
-        current_prices: dict[str, float] = {}
-        for t in reversed(trades):
-            if not t.ticker or t.ticker in current_prices:
+        # Check for open positions missing current prices
+        open_tickers: set[str] = set()
+        for t in trades:
+            if not t.ticker or not t.price_at_disclosure:
                 continue
-            if t.price_current:
-                current_prices[t.ticker] = t.price_current
-            elif t.price_at_disclosure and t.return_since_disclosure is not None:
-                current_prices[t.ticker] = t.price_at_disclosure * (1 + t.return_since_disclosure / 100)
+            if t.tx_type == "purchase":
+                open_tickers.add(t.ticker)
+            elif t.tx_type in ("sale", "sale_full"):
+                open_tickers.discard(t.ticker)
+        for ticker in open_tickers:
+            if ticker not in global_current_prices:
+                missing_tickers.add(ticker)
 
+    # Fetch missing prices from Yahoo (lightweight — only for tickers without DB prices)
+    if missing_tickers:
+        yahoo_prices = await _batch_fetch_current_prices(list(missing_tickers))
+        global_current_prices.update(yahoo_prices)
+
+    # Second pass: compute returns with complete price data
+    for pol_name, trades in politician_data:
         eq_result = None
         conv_result = None
 
@@ -446,10 +519,10 @@ async def compute_leaderboard_returns(
             if total_bought <= 0 or priced_buys < min_priced_trades:
                 continue
 
-            # Value open positions at current prices
+            # Value open positions at current prices (global lookup)
             holdings = 0.0
             for ticker, pos in positions.items():
-                cp = current_prices.get(ticker)
+                cp = global_current_prices.get(ticker)
                 holdings += pos["shares"] * cp if cp else pos["cost"]
 
             nav = holdings + cash

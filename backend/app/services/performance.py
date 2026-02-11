@@ -412,9 +412,11 @@ async def refresh_current_prices(session: AsyncSession):
             if chunk_start + chunk_size < len(tickers):
                 await asyncio.sleep(0.3)
 
-    # Batch update all trades per ticker
+    # Batch update all trades per ticker — commit every 100 tickers to avoid timeout
     updated = 0
-    for ticker, current_price in price_map.items():
+    batch_count = 0
+    ticker_items = list(price_map.items())
+    for ticker, current_price in ticker_items:
         # Update price_current and recalculate return in one SQL statement
         await session.execute(
             update(Trade)
@@ -432,8 +434,13 @@ async def refresh_current_prices(session: AsyncSession):
             )
         )
         updated += 1
+        batch_count += 1
+        if batch_count >= 100:
+            await session.commit()
+            batch_count = 0
 
-    await session.commit()
+    if batch_count > 0:
+        await session.commit()
     logger.info(
         f"Refreshed current prices: {len(price_map)}/{len(tickers)} tickers updated"
     )

@@ -528,6 +528,27 @@ async def trigger_price_update(
     return result
 
 
+@router.post("/admin/refresh-prices")
+async def trigger_price_refresh():
+    """Manually trigger current price refresh for all priced tickers.
+
+    This backfills price_current for trades where it's missing and
+    updates returns. Runs in background.
+    """
+    import asyncio
+    from app.services.performance import run_price_refresh
+
+    async def _run():
+        try:
+            result = await run_price_refresh()
+            logger.info(f"Price refresh finished: {result}")
+        except Exception as e:
+            logger.error(f"Price refresh failed: {e}")
+
+    asyncio.create_task(_run())
+    return {"status": "started", "message": "Refreshing current prices for all priced tickers"}
+
+
 @router.post("/admin/ingest-historical")
 async def trigger_historical_ingestion(
     start_year: int = Query(default=2012, ge=2012, le=2026),

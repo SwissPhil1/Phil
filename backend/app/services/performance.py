@@ -122,14 +122,16 @@ async def update_trade_prices(
     session: AsyncSession, limit: int = 2000, force: bool = False
 ):
     """Update prices for trades missing price data. Deduplicates by ticker for speed."""
+    # Include trades with either disclosure_date or tx_date
+    from sqlalchemy import or_
     stmt = select(Trade).where(
         Trade.ticker.isnot(None),
-        Trade.disclosure_date.isnot(None),
+        or_(Trade.disclosure_date.isnot(None), Trade.tx_date.isnot(None)),
         Trade.tx_type.in_(["purchase", "sale", "sale_partial", "sale_full"]),
     )
     if not force:
         stmt = stmt.where(Trade.price_at_disclosure.is_(None))
-    stmt = stmt.order_by(Trade.disclosure_date.desc()).limit(limit)
+    stmt = stmt.order_by(Trade.disclosure_date.desc().nullslast()).limit(limit)
     result = await session.execute(stmt)
     trades = result.scalars().all()
 
@@ -137,13 +139,16 @@ async def update_trade_prices(
         logger.info("No trades need pricing")
         return 0
 
-    # Group trades by ticker → unique disclosure dates
+    # Group trades by ticker → unique dates (use tx_date or disclosure_date)
     ticker_dates: dict[str, set[str]] = defaultdict(set)
     ticker_trades: dict[str, list] = defaultdict(list)
     for trade in trades:
         if not trade.ticker or trade.ticker in ("--", "N/A"):
             continue
-        date_key = trade.disclosure_date.isoformat()[:10]
+        trade_date = trade.tx_date or trade.disclosure_date
+        if not trade_date:
+            continue
+        date_key = trade_date.isoformat()[:10]
         ticker_dates[trade.ticker].add(date_key)
         ticker_trades[trade.ticker].append(trade)
 
@@ -183,7 +188,11 @@ async def update_trade_prices(
                     continue
 
                 for trade in ticker_trades[ticker]:
-                    date_key = trade.disclosure_date.isoformat()[:10]
+                    trade_date = trade.tx_date or trade.disclosure_date
+                    if not trade_date:
+                        errors += 1
+                        continue
+                    date_key = trade_date.isoformat()[:10]
                     hist_price = historical.get(date_key)
                     if hist_price and current_price:
                         ret = ((current_price - hist_price) / hist_price) * 100

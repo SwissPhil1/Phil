@@ -79,7 +79,7 @@ async def _run_initial_ingestions():
         ("13F hedge fund holdings", run_13f_ingestion, False),
         ("Senate historical trades (2012+)", run_historical_ingestion, True),  # skip if has data
         ("House trades (CapitolTrades)", lambda: run_capitoltrades_ingestion(chamber="house"), True),  # skip if has data
-        ("Politician stats + prices", lambda: run_performance_update(price_limit=5000), False),
+        ("Politician stats + prices", lambda: run_performance_update(price_limit=50000), False),
     ]
 
     for name, fn, skip_if_has_data in jobs:
@@ -148,7 +148,7 @@ async def lifespan(app: FastAPI):
             id="capitoltrades", name="CapitolTrades House trade refresh",
         )
         scheduler.add_job(
-            lambda: run_performance_update(price_limit=3000), "interval",
+            lambda: run_performance_update(price_limit=20000), "interval",
             minutes=60,
             id="performance", name="Price new trades",
         )

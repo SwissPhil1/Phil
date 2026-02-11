@@ -8,7 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { api, type LeaderboardEntry, type UnifiedLeaderboard } from "@/lib/api";
 import { Trophy, TrendingUp, Users } from "lucide-react";
 
-type SortColumn = "cagr" | "total" | "conv_cagr" | "avg_return" | "win_rate";
+type SortColumn = "cagr" | "total" | "conv_cagr" | "avg_return" | "win_rate" | "trades";
 
 function partyBadgeClass(party: string | null) {
   if (party === "R") return "bg-red-500/10 text-red-400 border-red-500/20";
@@ -35,18 +35,23 @@ export default function LeaderboardPage() {
     load();
   }, []);
 
+  // Auto-detect best sort: if portfolio data exists use CAGR, otherwise fall back to trades
+  const hasPortfolioData = data?.leaderboard?.some((e) => e.portfolio_cagr_pct != null) ?? false;
+  const effectiveSortCol = sortCol === "cagr" && !hasPortfolioData ? "trades" : sortCol;
+
   // Client-side sort (data comes pre-sorted by CAGR from backend)
   const sortedEntries = data?.leaderboard
     ? [...data.leaderboard]
         .filter((e) => !chamberFilter || e.chamber === chamberFilter)
         .sort((a, b) => {
           const getVal = (e: LeaderboardEntry) => {
-            switch (sortCol) {
+            switch (effectiveSortCol) {
               case "cagr": return e.portfolio_cagr_pct ?? -999;
               case "total": return e.portfolio_return_pct ?? -999;
               case "conv_cagr": return e.conviction_cagr_pct ?? -999;
               case "avg_return": return e.avg_return_pct ?? -999;
               case "win_rate": return e.win_rate_pct ?? -999;
+              case "trades": return e.total_trades ?? 0;
             }
           };
           return getVal(b) - getVal(a);
@@ -96,6 +101,7 @@ export default function LeaderboardPage() {
               { key: "conv_cagr" as const, label: "Conviction" },
               { key: "avg_return" as const, label: "Avg/Trade" },
               { key: "win_rate" as const, label: "Win Rate" },
+              { key: "trades" as const, label: "Most Active" },
             ]).map(({ key, label }) => (
               <button
                 key={key}
@@ -173,11 +179,12 @@ export default function LeaderboardPage() {
             <CardContent>
               <div className="space-y-0">
                 {sortedEntries.slice(0, 50).map((entry) => {
-                  const mainVal = sortCol === "cagr" ? entry.portfolio_cagr_pct
-                    : sortCol === "total" ? entry.portfolio_return_pct
-                    : sortCol === "conv_cagr" ? entry.conviction_cagr_pct
-                    : sortCol === "avg_return" ? entry.avg_return_pct
-                    : entry.win_rate_pct;
+                  const mainVal = effectiveSortCol === "cagr" ? entry.portfolio_cagr_pct
+                    : effectiveSortCol === "total" ? entry.portfolio_return_pct
+                    : effectiveSortCol === "conv_cagr" ? entry.conviction_cagr_pct
+                    : effectiveSortCol === "avg_return" ? entry.avg_return_pct
+                    : effectiveSortCol === "win_rate" ? entry.win_rate_pct
+                    : entry.total_trades;
                   const isPos = (mainVal ?? 0) >= 0;
 
                   return (
@@ -219,11 +226,11 @@ export default function LeaderboardPage() {
 
                       {/* Main Value (what we're sorting by) */}
                       <div className="text-right w-20">
-                        <div className={`font-mono text-sm font-bold ${isPos ? "text-emerald-400" : "text-red-400"}`}>
-                          {(mainVal ?? 0) > 0 ? "+" : ""}{mainVal?.toFixed(1) ?? "—"}{sortCol === "win_rate" ? "" : "%"}
+                        <div className={`font-mono text-sm font-bold ${effectiveSortCol === "trades" ? "text-blue-400" : isPos ? "text-emerald-400" : "text-red-400"}`}>
+                          {effectiveSortCol === "trades" ? (mainVal ?? 0) : `${(mainVal ?? 0) > 0 ? "+" : ""}${mainVal?.toFixed(1) ?? "—"}${effectiveSortCol === "win_rate" ? "" : "%"}`}
                         </div>
                         <div className="text-[10px] text-muted-foreground">
-                          {sortCol === "cagr" ? "CAGR" : sortCol === "total" ? "total" : sortCol === "conv_cagr" ? "conv. CAGR" : sortCol === "avg_return" ? "avg/trade" : "win rate"}
+                          {effectiveSortCol === "cagr" ? "CAGR" : effectiveSortCol === "total" ? "total" : effectiveSortCol === "conv_cagr" ? "conv. CAGR" : effectiveSortCol === "avg_return" ? "avg/trade" : effectiveSortCol === "win_rate" ? "win rate" : "trades"}
                         </div>
                       </div>
 

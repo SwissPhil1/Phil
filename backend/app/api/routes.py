@@ -126,7 +126,7 @@ async def get_recent_trades(
 async def get_politicians(
     chamber: str | None = None,
     party: str | None = None,
-    sort_by: str = Query(default="total_trades", regex="^(total_trades|avg_return|win_rate)$"),
+    sort_by: str = Query(default="total_trades", pattern="^(total_trades|avg_return|win_rate)$"),
     min_trades: int = Query(default=1, ge=1),
     limit: int = Query(default=50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),

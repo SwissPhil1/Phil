@@ -21,22 +21,40 @@ router = APIRouter(prefix="/leaderboard", tags=["Leaderboard & Backtest"])
 async def get_leaderboard(
     min_trades: int = Query(default=3, ge=1, description="Minimum priced buy trades to be ranked"),
     chamber: str | None = Query(default=None, description="Filter: house or senate"),
-    sort_by: str = Query(default="portfolio_cagr", description="Sort by: portfolio_cagr, conviction_cagr, avg_return, win_rate"),
+    sort_by: str = Query(default="portfolio_cagr", description="Sort by: portfolio_cagr, conviction_cagr, avg_return, win_rate, total_trades"),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Unified politician trading leaderboard — reads from pre-computed Politician table.
     Instant response (<100ms). Data refreshed every 15 min by background job.
+    Falls back to basic stats ranking if portfolio data isn't computed yet.
     """
-    stmt = select(Politician).where(
-        Politician.priced_buy_count >= min_trades,
-        Politician.portfolio_cagr.isnot(None),
-    )
-    if chamber:
-        stmt = stmt.where(Politician.chamber == chamber.lower())
+    # Try portfolio-based leaderboard first
+    try:
+        stmt = select(Politician).where(
+            Politician.priced_buy_count >= min_trades,
+            Politician.portfolio_cagr.isnot(None),
+        )
+        if chamber:
+            stmt = stmt.where(Politician.chamber == chamber.lower())
+        result = await db.execute(stmt)
+        politicians = list(result.scalars().all())
+    except Exception:
+        politicians = []
 
-    result = await db.execute(stmt)
-    politicians = result.scalars().all()
+    # Fallback: if no portfolio data, show politicians ranked by basic stats
+    if not politicians:
+        try:
+            stmt = select(Politician).where(
+                Politician.total_trades >= max(min_trades, 3),
+            )
+            if chamber:
+                stmt = stmt.where(Politician.chamber == chamber.lower())
+            stmt = stmt.order_by(Politician.total_trades.desc()).limit(100)
+            result = await db.execute(stmt)
+            politicians = list(result.scalars().all())
+        except Exception:
+            politicians = []
 
     # Sort
     sort_key_map = {
@@ -44,6 +62,7 @@ async def get_leaderboard(
         "conviction_cagr": lambda p: p.conviction_cagr or -999,
         "avg_return": lambda p: p.avg_return or -999,
         "win_rate": lambda p: p.win_rate or -999,
+        "total_trades": lambda p: p.total_trades or 0,
     }
     sort_fn = sort_key_map.get(sort_by, sort_key_map["portfolio_cagr"])
     politicians.sort(key=sort_fn, reverse=True)

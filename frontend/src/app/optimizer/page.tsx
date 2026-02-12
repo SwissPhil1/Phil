@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, type OptimizerResult, type TestWeightsResult } from "@/lib/api";
-import { Brain, Play, CheckCircle, XCircle, TrendingUp, Clock, Zap, BarChart3, Info, Sliders, RotateCcw, FlaskConical } from "lucide-react";
+import { Brain, Play, CheckCircle, XCircle, TrendingUp, Clock, Zap, BarChart3, Info, Sliders, RotateCcw, FlaskConical, Upload, Shield } from "lucide-react";
 
 export default function OptimizerPage() {
   const [result, setResult] = useState<OptimizerResult | null>(null);
@@ -31,6 +31,9 @@ export default function OptimizerPage() {
   const [testResult, setTestResult] = useState<TestWeightsResult | null>(null);
   const [testLoading, setTestLoading] = useState(false);
   const [testError, setTestError] = useState<string | null>(null);
+  const [applyLoading, setApplyLoading] = useState(false);
+  const [appliedStatus, setAppliedStatus] = useState<string | null>(null);
+  const [weightsSource, setWeightsSource] = useState<string | null>(null);
 
   const totalPoints = Object.values(customWeights).reduce((a, b) => a + b, 0);
   const defaultTotal = WEIGHT_FACTORS.reduce((a, f) => a + f.default, 0);
@@ -67,14 +70,50 @@ export default function OptimizerPage() {
   useEffect(() => {
     async function checkStatus() {
       try {
-        await api.getOptimizerStatus();
+        const status = await api.getOptimizerStatus();
         setAvailable(true);
+        if (status.has_applied_weights) {
+          setWeightsSource("optimizer");
+        } else {
+          setWeightsSource("defaults");
+        }
       } catch {
         setAvailable(false);
       }
     }
     checkStatus();
   }, []);
+
+  async function applyBestWeights() {
+    if (!result?.best_robust_formula?.weights) return;
+    setApplyLoading(true);
+    setAppliedStatus(null);
+    try {
+      await api.applyWeights(result.best_robust_formula.weights);
+      setAppliedStatus("applied");
+      setWeightsSource("optimizer");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Apply failed";
+      setAppliedStatus(`error: ${msg}`);
+    } finally {
+      setApplyLoading(false);
+    }
+  }
+
+  async function applyCustomWeights() {
+    setApplyLoading(true);
+    setAppliedStatus(null);
+    try {
+      await api.applyWeights(customWeights);
+      setAppliedStatus("applied");
+      setWeightsSource("optimizer");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Apply failed";
+      setAppliedStatus(`error: ${msg}`);
+    } finally {
+      setApplyLoading(false);
+    }
+  }
 
   async function runOptimizer() {
     setLoading(true);
@@ -91,6 +130,10 @@ export default function OptimizerPage() {
         throw new Error((data as any)?.error || "Optimizer returned incomplete data — not enough trades with price data yet. Try again after more prices have been fetched.");
       }
       setResult(data);
+      if (data.applied) {
+        setAppliedStatus("auto-applied");
+        setWeightsSource("optimizer");
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Optimizer failed";
       if (msg.includes("404")) {
@@ -132,6 +175,21 @@ export default function OptimizerPage() {
           )}
         </Button>
       </div>
+
+      {/* Active weights status */}
+      {weightsSource && (
+        <div className={`flex items-center gap-3 p-3 rounded-lg ${weightsSource === "optimizer" ? "bg-green-500/5 border border-green-500/10" : "bg-muted/30 border border-border/50"}`}>
+          <Shield className={`w-4 h-4 shrink-0 ${weightsSource === "optimizer" ? "text-green-400" : "text-muted-foreground"}`} />
+          <div className="text-sm">
+            <span className="font-medium">{weightsSource === "optimizer" ? "Optimizer weights active" : "Default weights active"}</span>
+            <span className="text-muted-foreground ml-2">
+              {weightsSource === "optimizer"
+                ? "Scoring uses optimizer-determined weights"
+                : "Run the optimizer to find better weights for your data"}
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Availability warning */}
       {available === false && (
@@ -241,6 +299,18 @@ export default function OptimizerPage() {
               )}
             </Button>
             <span className="text-xs text-muted-foreground">Tests against ~300 historical trades with actual returns</span>
+            {testResult && testResult.cross_validation.is_robust && (
+              <Button
+                onClick={applyCustomWeights}
+                disabled={applyLoading}
+                variant="outline"
+                size="sm"
+                className="gap-2"
+              >
+                <Upload className="w-3 h-3" />
+                Apply to Scoring
+              </Button>
+            )}
           </div>
 
           {testError && (
@@ -395,8 +465,37 @@ export default function OptimizerPage() {
                 Recommendation
               </CardTitle>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-3">
               <p className="text-sm">{result.recommendation.detail}</p>
+
+              {result.applied ? (
+                <div className="flex items-center gap-2 text-sm text-green-400">
+                  <CheckCircle className="w-4 h-4" />
+                  Optimized weights auto-applied to live scoring
+                </div>
+              ) : result.best_robust_formula && (
+                <div className="flex items-center gap-3">
+                  <Button
+                    onClick={applyBestWeights}
+                    disabled={applyLoading || appliedStatus === "applied"}
+                    variant={appliedStatus === "applied" ? "outline" : "default"}
+                    size="sm"
+                    className="gap-2"
+                  >
+                    {applyLoading ? (
+                      <Clock className="w-3 h-3 animate-spin" />
+                    ) : appliedStatus === "applied" ? (
+                      <CheckCircle className="w-3 h-3 text-green-400" />
+                    ) : (
+                      <Upload className="w-3 h-3" />
+                    )}
+                    {appliedStatus === "applied" ? "Weights Applied" : "Apply Best Weights to Scoring"}
+                  </Button>
+                  {appliedStatus?.startsWith("error") && (
+                    <span className="text-xs text-red-400">{appliedStatus}</span>
+                  )}
+                </div>
+              )}
             </CardContent>
           </Card>
 

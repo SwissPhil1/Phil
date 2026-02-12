@@ -15,6 +15,7 @@ Scoring factors (v2 - enhanced):
 8. Contrarian Signal (0-10 pts) - buying when others sell, or vice versa
 """
 
+import json
 import logging
 import math
 from datetime import datetime, timedelta
@@ -24,11 +25,72 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import (
     Trade, Politician, InsiderTrade, HedgeFundHolding,
-    PoliticianCommittee, async_session,
+    PoliticianCommittee, OptimizedWeights, async_session,
 )
 from app.config import DATABASE_URL
 
 logger = logging.getLogger(__name__)
+
+# ─── Configurable Weights (loaded from optimizer output) ───
+
+DEFAULT_WEIGHTS = {
+    "position_size_max": 25.0,
+    "committee_overlap_max": 30.0,
+    "disclosure_speed_max": 15.0,
+    "cluster_max": 20.0,
+    "cross_source_insider_max": 15.0,
+    "cross_source_fund_max": 10.0,
+    "triple_confirmation_bonus": 5.0,
+    "track_record_max": 15.0,
+    "contrarian_max": 10.0,
+    "small_cap_committee_max": 15.0,
+    "cluster_mega_cap_discount": 0.4,
+    "late_disclosure_days": 45,
+    "min_cluster_size": 3,
+}
+
+# Module-level cache — populated from DB by load_active_weights()
+_active_weights: dict | None = None
+
+
+async def load_active_weights():
+    """Load the most recently applied optimizer weights from DB into cache."""
+    global _active_weights
+    try:
+        async with async_session() as session:
+            result = await session.execute(
+                select(OptimizedWeights)
+                .where(OptimizedWeights.name == "active")
+                .order_by(OptimizedWeights.applied_at.desc())
+                .limit(1)
+            )
+            row = result.scalar_one_or_none()
+            if row:
+                _active_weights = json.loads(row.weights_json)
+                logger.info(f"Loaded optimized weights (fitness={row.fitness}, robust={row.is_robust})")
+            else:
+                _active_weights = None
+    except Exception as e:
+        logger.warning(f"Failed to load optimized weights from DB: {e}")
+
+
+def set_active_weights(weights: dict | None):
+    """Directly set the active weights cache (called by optimizer after applying)."""
+    global _active_weights
+    _active_weights = weights
+
+
+def get_active_weights() -> dict:
+    """Return the active weights (optimizer-determined or defaults)."""
+    return _active_weights if _active_weights else DEFAULT_WEIGHTS
+
+
+def get_weights_status() -> dict:
+    """Return info about which weights are in use."""
+    return {
+        "source": "optimizer" if _active_weights else "defaults",
+        "weights": _active_weights if _active_weights else DEFAULT_WEIGHTS,
+    }
 
 # Committee -> Sector mapping (expanded)
 COMMITTEE_SECTORS = {
@@ -346,117 +408,131 @@ def score_trade_conviction(
     recent_sells_count: int = 0,
 ) -> dict:
     """
-    Score a single trade on conviction (0-115).
+    Score a single trade on conviction (0-150+).
     Higher score = stronger signal that this trade has insider information edge.
 
-    v3 scoring with 9 factors:
-    1. Position Size (0-25 pts)
-    2. Committee Overlap (0-30 pts)
-    3. Disclosure Speed (0-15 pts) - includes late-disclosure penalty detection
-    4. Political Cluster (0-20 pts) - weighted by market cap
-    5. Cross-Source Confirmation (0-25 pts)
-    6. Historical Accuracy (0-15 pts) - politician's track record
-    7. Contrarian Signal (0-10 pts) - buying when market/others selling
-    8. Size Anomaly (0-10 pts) - trade size vs politician's usual
-    9. Small-Cap Committee (0-15 pts) - small/mid-cap + committee overlap bonus
+    Weights are loaded from the optimizer (stored in DB). If no optimized
+    weights are available, uses DEFAULT_WEIGHTS as fallback.
+
+    Factors:
+    1. Position Size - larger trades = more conviction
+    2. Committee Overlap - strongest insider signal
+    3. Disclosure Speed - fast/late disclosure patterns
+    4. Political Cluster - multiple politicians buying same stock
+    5. Cross-Source Confirmation - congress + insiders + funds
+    6. Historical Accuracy - politician's track record
+    7. Contrarian Signal - buying when others selling
+    8. Small-Cap Committee - small/mid-cap + committee overlap bonus
     """
-    score = 0
+    w = get_active_weights()
+    score = 0.0
     factors = []
 
     ticker = trade.get("ticker", "")
+    psm = w["position_size_max"]
+    com = w["committee_overlap_max"]
+    dsm = w["disclosure_speed_max"]
+    clm = w["cluster_max"]
+    csim = w["cross_source_insider_max"]
+    csfm = w["cross_source_fund_max"]
+    tcb = w["triple_confirmation_bonus"]
+    trm = w["track_record_max"]
+    ctm = w["contrarian_max"]
+    scm = w["small_cap_committee_max"]
+    cmcd = w["cluster_mega_cap_discount"]
+    ldd = w["late_disclosure_days"]
+    mcs = w["min_cluster_size"]
 
-    # ─── Factor 1: Position Size (0-25 pts) ───
+    # ─── Factor 1: Position Size ───
     amount = trade.get("amount_low", 0) or 0
-    if amount >= 5000001:
-        score += 25
-        factors.append({"factor": "position_size", "points": 25, "detail": "Very large position ($5M+)"})
-    elif amount >= 1000001:
-        score += 22
-        factors.append({"factor": "position_size", "points": 22, "detail": "Large position ($1M+)"})
-    elif amount >= 500001:
-        score += 18
-        factors.append({"factor": "position_size", "points": 18, "detail": "Significant position ($500K+)"})
-    elif amount >= 250001:
-        score += 15
-        factors.append({"factor": "position_size", "points": 15, "detail": "Medium-large position ($250K+)"})
-    elif amount >= 100001:
-        score += 10
-        factors.append({"factor": "position_size", "points": 10, "detail": "Medium position ($100K+)"})
-    elif amount >= 50001:
-        score += 7
-        factors.append({"factor": "position_size", "points": 7, "detail": "Moderate position ($50K+)"})
+    if amount >= 5_000_001:
+        pts = psm
+        detail = "Very large position ($5M+)"
+    elif amount >= 1_000_001:
+        pts = round(psm * 0.88, 1)
+        detail = "Large position ($1M+)"
+    elif amount >= 500_001:
+        pts = round(psm * 0.72, 1)
+        detail = "Significant position ($500K+)"
+    elif amount >= 250_001:
+        pts = round(psm * 0.60, 1)
+        detail = "Medium-large position ($250K+)"
+    elif amount >= 100_001:
+        pts = round(psm * 0.40, 1)
+        detail = "Medium position ($100K+)"
+    elif amount >= 50_001:
+        pts = round(psm * 0.28, 1)
+        detail = "Moderate position ($50K+)"
     else:
-        score += 3
-        factors.append({"factor": "position_size", "points": 3, "detail": "Small position"})
+        pts = round(psm * 0.12, 1)
+        detail = "Small position"
+    score += pts
+    factors.append({"factor": "position_size", "points": pts, "detail": detail})
 
-    # ─── Factor 2: Committee Overlap (0-30 pts) ───
+    # ─── Factor 2: Committee Overlap ───
     committee_overlap = None
     if committees and ticker:
         overlap = check_committee_overlap(committees, ticker)
         if overlap:
             committee_overlap = overlap
             if overlap["flag"] == "HIGH":
-                # Direct sector match - strongest signal
-                pts = 30
+                pts = com
                 score += pts
                 factors.append({
                     "factor": "committee_overlap", "points": pts,
                     "detail": f"DIRECT: {overlap['committee']} → {overlap['stock_sector']}"
                 })
-                # Small/mid-cap + direct committee overlap = very suspicious
-                # Less analyst coverage, more information asymmetry, bigger edge
                 if ticker not in MEGA_CAP and ticker not in LARGE_CAP:
-                    bonus = 15
+                    bonus = scm
                     score += bonus
                     factors.append({
                         "factor": "small_cap_committee", "points": bonus,
-                        "detail": f"Small/mid-cap + committee overlap (very suspicious — low coverage, high info edge)"
+                        "detail": "Small/mid-cap + committee overlap (very suspicious)"
                     })
             else:
-                score += 15
+                pts = round(com * 0.5, 1)
+                score += pts
                 factors.append({
-                    "factor": "committee_overlap", "points": 15,
+                    "factor": "committee_overlap", "points": pts,
                     "detail": f"Broad oversight: {overlap['committee']}"
                 })
-                # Broad oversight on small cap still worth a smaller bonus
                 if ticker not in MEGA_CAP and ticker not in LARGE_CAP:
-                    bonus = 8
+                    bonus = round(scm * 0.53, 1)
                     score += bonus
                     factors.append({
                         "factor": "small_cap_committee", "points": bonus,
-                        "detail": f"Small/mid-cap + broad committee oversight"
+                        "detail": "Small/mid-cap + broad committee oversight"
                     })
 
-    # ─── Factor 3: Disclosure Speed (0-10 pts) ───
+    # ─── Factor 3: Disclosure Speed ───
     delay = trade.get("disclosure_delay_days")
     if delay is not None:
-        if delay <= 3:
-            score += 5
-            factors.append({"factor": "disclosure_speed", "points": 5, "detail": "Very fast disclosure (≤3 days)"})
+        if delay > ldd:
+            pts = dsm  # Late disclosure — optimizer determines how suspicious
+            detail = f"Late disclosure ({delay} days)"
+        elif delay <= 3:
+            pts = round(dsm * 0.33, 1)
+            detail = "Very fast disclosure (≤3 days)"
         elif delay <= 7:
-            score += 10
-            factors.append({"factor": "disclosure_speed", "points": 10, "detail": "Fast disclosure (≤7 days) — strategic timing window"})
+            pts = round(dsm * 0.53, 1)
+            detail = "Fast disclosure (≤7 days) — strategic timing window"
         elif delay <= 14:
-            score += 7
-            factors.append({"factor": "disclosure_speed", "points": 7, "detail": "Timely disclosure (≤14 days)"})
+            pts = round(dsm * 0.33, 1)
+            detail = "Timely disclosure (≤14 days)"
         elif delay <= 30:
-            score += 3
-            factors.append({"factor": "disclosure_speed", "points": 3, "detail": "Standard disclosure (≤30 days)"})
-        elif delay > 45:
-            # Late disclosure — could be hiding trade or just negligence
-            # Lower weight because many late filers are poor traders, not strategic
-            score += 5
-            factors.append({
-                "factor": "disclosure_speed", "points": 5,
-                "detail": f"Late disclosure ({delay} days)"
-            })
+            pts = round(dsm * 0.13, 1)
+            detail = "Standard disclosure (≤30 days)"
+        else:
+            pts = 0
+            detail = None
+        if detail:
+            score += pts
+            factors.append({"factor": "disclosure_speed", "points": pts, "detail": detail})
 
-    # ─── Factor 4: Political Cluster (0-20 pts) ───
+    # ─── Factor 4: Political Cluster ───
+    cap_mult = cmcd if ticker in MEGA_CAP else 1.0
     if cluster_count >= 8:
-        pts = 20
-        # But if it's a mega-cap, reduce the signal (everyone buys NVDA)
-        if ticker in MEGA_CAP:
-            pts = 8
+        pts = round(clm * cap_mult, 1)
         score += pts
         factors.append({
             "factor": "cluster", "points": pts,
@@ -464,88 +540,77 @@ def score_trade_conviction(
             + (" (mega-cap discount)" if ticker in MEGA_CAP else "")
         })
     elif cluster_count >= 5:
-        pts = 18 if ticker not in MEGA_CAP else 6
+        pts = round(clm * 0.9 * cap_mult, 1)
         score += pts
         factors.append({
             "factor": "cluster", "points": pts,
             "detail": f"Cluster: {cluster_count} politicians trading {ticker}"
         })
-    elif cluster_count >= 3:
-        pts = 15 if ticker not in MEGA_CAP else 5
+    elif cluster_count >= mcs:
+        pts = round(clm * 0.75 * cap_mult, 1)
         score += pts
         factors.append({
             "factor": "cluster", "points": pts,
             "detail": f"Cluster: {cluster_count} politicians trading {ticker}"
         })
 
-    # ─── Factor 5: Cross-Source Confirmation (0-25 pts) ───
+    # ─── Factor 5: Cross-Source Confirmation ───
     cross_sources = 0
     if insider_also_buying:
         cross_sources += 1
-        score += 15
+        score += csim
         factors.append({
-            "factor": "cross_source_insider", "points": 15,
+            "factor": "cross_source_insider", "points": csim,
             "detail": "Corporate insiders also buying"
         })
     if fund_also_holds:
         cross_sources += 1
-        score += 10
+        score += csfm
         factors.append({
-            "factor": "cross_source_fund", "points": 10,
+            "factor": "cross_source_fund", "points": csfm,
             "detail": "Top hedge fund also holds/adding position"
         })
-    # Triple confirmation bonus
     if cross_sources >= 2:
-        bonus = 5
-        score += bonus
+        score += tcb
         factors.append({
-            "factor": "triple_confirmation", "points": bonus,
+            "factor": "triple_confirmation", "points": tcb,
             "detail": "TRIPLE CONFIRMATION: Congress + Insiders + Hedge Funds"
         })
 
-    # ─── Factor 6: Historical Accuracy (0-15 pts) ───
+    # ─── Factor 6: Historical Accuracy ───
     if politician_track_record and politician_track_record.get("total", 0) >= 5:
         win_rate = politician_track_record.get("win_rate", 0) or 0
         avg_return = politician_track_record.get("avg_return", 0) or 0
         if win_rate >= 70 and avg_return > 5:
-            score += 15
-            factors.append({
-                "factor": "track_record", "points": 15,
-                "detail": f"Star trader: {win_rate:.0f}% win rate, {avg_return:.1f}% avg return"
-            })
+            pts = trm
+            detail = f"Star trader: {win_rate:.0f}% win rate, {avg_return:.1f}% avg return"
         elif win_rate >= 60 and avg_return > 2:
-            score += 10
-            factors.append({
-                "factor": "track_record", "points": 10,
-                "detail": f"Good track record: {win_rate:.0f}% win rate, {avg_return:.1f}% avg return"
-            })
+            pts = round(trm * 0.67, 1)
+            detail = f"Good track record: {win_rate:.0f}% win rate, {avg_return:.1f}% avg return"
         elif win_rate >= 50:
-            score += 5
-            factors.append({
-                "factor": "track_record", "points": 5,
-                "detail": f"Average track record: {win_rate:.0f}% win rate"
-            })
+            pts = round(trm * 0.33, 1)
+            detail = f"Average track record: {win_rate:.0f}% win rate"
         elif win_rate < 40:
-            # Consistently bad trader - negative signal
-            score -= 5
-            factors.append({
-                "factor": "track_record", "points": -5,
-                "detail": f"Poor track record: {win_rate:.0f}% win rate (contrarian signal)"
-            })
+            pts = round(-trm * 0.33, 1)
+            detail = f"Poor track record: {win_rate:.0f}% win rate (contrarian signal)"
+        else:
+            pts = 0
+            detail = None
+        if detail:
+            score += pts
+            factors.append({"factor": "track_record", "points": pts, "detail": detail})
 
-    # ─── Factor 7: Contrarian Signal (0-10 pts) ───
+    # ─── Factor 7: Contrarian Signal ───
     tx_type = trade.get("tx_type", "")
     if tx_type == "purchase" and recent_sells_count >= 3:
-        score += 10
+        score += ctm
         factors.append({
-            "factor": "contrarian", "points": 10,
+            "factor": "contrarian", "points": ctm,
             "detail": f"Buying while {recent_sells_count} others selling (contrarian conviction)"
         })
 
-    # Cap at 115 (raised for small-cap committee factor)
-    score = min(max(score, 0), 115)
+    score = round(min(max(score, 0), 185), 1)
 
-    # Rating (thresholds scaled for new cap)
     if score >= 85:
         rating = "VERY_HIGH"
     elif score >= 65:

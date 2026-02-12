@@ -112,6 +112,13 @@ async def lifespan(app: FastAPI):
 
     logger.info(f"Database ready. Memory: {_get_memory_mb():.0f} MB.")
 
+    # Load optimizer weights from DB (if previously applied)
+    try:
+        from app.services.signals import load_active_weights
+        await load_active_weights()
+    except Exception as e:
+        logger.warning(f"Failed to load optimizer weights (will use defaults): {e}")
+
     # Phase 2: Setup scheduler (wrapped so it never blocks startup)
     try:
         scheduler.add_job(

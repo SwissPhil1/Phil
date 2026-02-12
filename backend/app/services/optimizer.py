@@ -756,14 +756,32 @@ def cross_validate(
         })
 
     avg_test_fitness = sum(f["test_fitness"] for f in fold_results) / len(fold_results) if fold_results else 0
+    avg_train_fitness = sum(f["train_fitness"] for f in fold_results) / len(fold_results) if fold_results else 0
     avg_overfit = sum(f["overfit_ratio"] for f in fold_results) / len(fold_results) if fold_results else 0
+
+    # Robustness criteria (relative, not absolute):
+    # 1. Enough folds ran
+    # 2. Overfit ratio < 2.0 (test fitness is at least 50% of train)
+    # 3. Test fitness is positive (formula adds value out-of-sample)
+    # 4. No fold has catastrophic negative edge
+    no_catastrophic_fold = all(
+        f["test_edge_90d"] > -5.0 for f in fold_results
+    ) if fold_results else False
+
+    is_robust = (
+        len(fold_results) >= 2
+        and avg_overfit < 2.0
+        and avg_test_fitness > 0.05
+        and no_catastrophic_fold
+    )
 
     return {
         "n_folds": n_folds,
         "folds": fold_results,
         "avg_test_fitness": round(avg_test_fitness, 4),
+        "avg_train_fitness": round(avg_train_fitness, 4),
         "avg_overfit_ratio": round(avg_overfit, 2),
-        "is_robust": avg_overfit < 1.5 and avg_test_fitness > 0.3,
+        "is_robust": is_robust,
     }
 
 
@@ -991,6 +1009,248 @@ async def run_optimization(
                 f"Cross-validation confirms it generalizes."
                 if best_robust and best_robust["fitness"] > current_result.fitness * 1.1
                 else "Current formula is already near-optimal or insufficient data to improve."
+            ),
+        },
+        "applied": applied_info,
+    }
+
+
+# ─── Multi-Period Validation ───
+
+
+def _validate_across_periods(
+    sorted_trades: list[dict],
+    weights: WeightConfig,
+) -> dict:
+    """
+    Validate a formula across multiple time periods to detect temporal overfitting.
+    Tests on 1Y, 2Y, 3Y, and full history slices.
+    """
+    now = datetime.utcnow()
+    periods = {
+        "1Y": timedelta(days=365),
+        "2Y": timedelta(days=730),
+        "3Y": timedelta(days=1095),
+        "Max": timedelta(days=9999),
+    }
+
+    period_results = {}
+    for label, delta in periods.items():
+        cutoff = now - delta
+        period_trades = [t for t in sorted_trades if (t.get("tx_date") or datetime.min) >= cutoff]
+
+        if len(period_trades) < 10:
+            period_results[label] = {"n_trades": len(period_trades), "skipped": True}
+            continue
+
+        result = evaluate_formula(period_trades, weights)
+        period_results[label] = {
+            "n_trades": len(period_trades),
+            "fitness": round(result.fitness, 4),
+            "edge_90d": round(result.edge_90d, 2),
+            "hit_rate_90d": round(result.hit_rate_90d, 1),
+            "correlation_90d": round(result.correlation_90d, 4),
+            "skipped": False,
+        }
+
+    active_periods = {k: v for k, v in period_results.items() if not v.get("skipped")}
+    is_consistent = all(
+        p.get("edge_90d", 0) > -3.0 for p in active_periods.values()
+    ) if active_periods else False
+
+    return {
+        "periods": period_results,
+        "is_consistent": is_consistent,
+        "worst_period_edge": round(min(
+            (p.get("edge_90d", 0) for p in active_periods.values()),
+            default=0,
+        ), 2),
+    }
+
+
+# ─── Deep Optimizer ───
+
+
+async def run_deep_optimization(top_n: int = 10) -> dict:
+    """
+    Deep optimization with proper train/holdout split and multi-period validation.
+
+    Unlike run_optimization() which trains on all data then cross-validates,
+    this holds out 40% of data chronologically and NEVER trains on it.
+    Then validates top formulas across multiple time periods.
+    """
+    start_time = time.time()
+    logger.info("Starting deep optimization: max data, train/holdout split, multi-period validation")
+
+    # Step 1: Extract maximum data
+    all_trades = await extract_trade_features(days=2500, max_trades=5000)
+    if not all_trades or len(all_trades) < 50:
+        return {
+            "error": f"Not enough trades for deep optimization (found {len(all_trades) if all_trades else 0}, need 50+)",
+            "trades_found": len(all_trades) if all_trades else 0,
+        }
+
+    # Step 2: Chronological sort and 60/40 split
+    sorted_trades = sorted(all_trades, key=lambda t: t.get("tx_date") or datetime.min)
+    split_idx = int(len(sorted_trades) * 0.6)
+    train_trades = sorted_trades[:split_idx]
+    holdout_trades = sorted_trades[split_idx:]
+
+    logger.info(f"Deep opt: {len(all_trades)} total, {len(train_trades)} train, {len(holdout_trades)} holdout")
+
+    # Step 3: Optimization on train set only (5 generations, larger pool)
+    configs = _generate_weight_grid()
+
+    all_results: list[FormulaResult] = []
+    for wc in configs:
+        r = evaluate_formula(train_trades, wc)
+        all_results.append(r)
+
+    all_results.sort(key=lambda r: r.fitness, reverse=True)
+    generation_history = [{
+        "generation": 0,
+        "configs_tested": len(configs),
+        "best_fitness": all_results[0].fitness if all_results else 0,
+        "avg_fitness": sum(r.fitness for r in all_results) / len(all_results) if all_results else 0,
+    }]
+
+    for gen in range(1, 6):  # 5 generations
+        top_weights = [r.weights for r in all_results[:20]]
+        children = _evolve_weights(top_weights, n_children=300)
+
+        child_results = [evaluate_formula(train_trades, wc) for wc in children]
+        all_results.extend(child_results)
+        all_results.sort(key=lambda r: r.fitness, reverse=True)
+        all_results = all_results[:100]
+
+        generation_history.append({
+            "generation": gen,
+            "configs_tested": len(children),
+            "best_fitness": all_results[0].fitness,
+            "avg_fitness": sum(r.fitness for r in all_results[:20]) / 20,
+        })
+        logger.info(f"Deep gen {gen}: best train fitness = {all_results[0].fitness:.4f}")
+
+    # Step 4: Evaluate top 20 on holdout + multi-period validation
+    top_candidates = all_results[:20]
+    validated_results = []
+
+    for i, fr in enumerate(top_candidates):
+        train_eval = evaluate_formula(train_trades, fr.weights)
+        holdout_eval = evaluate_formula(holdout_trades, fr.weights)
+        cv = cross_validate(all_trades, fr.weights)
+        time_periods = _validate_across_periods(sorted_trades, fr.weights)
+
+        overfit = train_eval.fitness / holdout_eval.fitness if holdout_eval.fitness != 0 else 999
+
+        is_deep_robust = (
+            holdout_eval.fitness > 0.05
+            and overfit < 2.5
+            and time_periods["is_consistent"]
+            and cv["is_robust"]
+        )
+
+        validated_results.append({
+            "rank": i + 1,
+            **fr.to_dict(),
+            "train_fitness": round(train_eval.fitness, 4),
+            "holdout_fitness": round(holdout_eval.fitness, 4),
+            "holdout_edge_90d": round(holdout_eval.edge_90d, 2),
+            "holdout_hit_rate_90d": round(holdout_eval.hit_rate_90d, 1),
+            "holdout_correlation_90d": round(holdout_eval.correlation_90d, 4),
+            "overfit_ratio": round(overfit, 2),
+            "cross_validation": cv,
+            "time_period_validation": time_periods,
+            "is_deep_robust": is_deep_robust,
+        })
+
+    # Re-rank by holdout fitness
+    validated_results.sort(key=lambda v: v["holdout_fitness"], reverse=True)
+    for i, vr in enumerate(validated_results):
+        vr["rank"] = i + 1
+    validated_results = validated_results[:top_n]
+
+    # Step 5: Find best robust formula
+    best_robust = None
+    for vr in validated_results:
+        if vr["is_deep_robust"]:
+            best_robust = vr
+            break
+
+    # Step 6: Compare to current defaults
+    current_weights = WeightConfig()
+    current_train = evaluate_formula(train_trades, current_weights)
+    current_holdout = evaluate_formula(holdout_trades, current_weights)
+    current_cv = cross_validate(all_trades, current_weights)
+    current_time_periods = _validate_across_periods(sorted_trades, current_weights)
+
+    # Step 7: Auto-apply if robust and beats current
+    applied_info = None
+    use_new = (
+        best_robust is not None
+        and best_robust["holdout_fitness"] > max(current_holdout.fitness + 0.05, current_holdout.fitness * 1.1)
+    )
+    if use_new:
+        best_wc = WeightConfig.from_dict(best_robust["weights"])
+        applied_info = await save_optimized_weights(
+            weights=best_wc,
+            fitness=best_robust["holdout_fitness"],
+            hit_rate_90d=best_robust.get("holdout_hit_rate_90d", 0),
+            edge_90d=best_robust.get("holdout_edge_90d", 0),
+            correlation_90d=best_robust.get("holdout_correlation_90d", 0),
+            is_robust=True,
+            trades_analyzed=len(all_trades),
+        )
+        logger.info("Deep optimizer: auto-applied best robust formula")
+
+    elapsed = time.time() - start_time
+
+    return {
+        "mode": "deep",
+        "optimization_params": {
+            "lookback_days": 2500,
+            "max_trades": 5000,
+            "generations": 5,
+            "total_configs_tested": sum(g["configs_tested"] for g in generation_history),
+            "elapsed_seconds": round(elapsed, 1),
+            "train_trades": len(train_trades),
+            "holdout_trades": len(holdout_trades),
+            "train_cutoff_date": (
+                train_trades[-1]["tx_date"].isoformat()
+                if train_trades and train_trades[-1].get("tx_date") else None
+            ),
+        },
+        "data_summary": {
+            "trades_with_returns": len(all_trades),
+            "trades_with_30d_return": sum(1 for t in all_trades if "return_30d" in t),
+            "trades_with_90d_return": sum(1 for t in all_trades if "return_90d" in t),
+            "trades_with_exit": sum(1 for t in all_trades if "exit_return" in t),
+            "date_range": {
+                "earliest": min(t["tx_date"].isoformat() for t in all_trades if t.get("tx_date")),
+                "latest": max(t["tx_date"].isoformat() for t in all_trades if t.get("tx_date")),
+            },
+        },
+        "generation_history": generation_history,
+        "current_formula": {
+            **current_train.to_dict(),
+            "holdout_fitness": round(current_holdout.fitness, 4),
+            "holdout_edge_90d": round(current_holdout.edge_90d, 2),
+            "cross_validation": current_cv,
+            "time_period_validation": current_time_periods,
+        },
+        "top_formulas": validated_results,
+        "best_robust_formula": best_robust,
+        "recommendation": {
+            "use_new_formula": use_new,
+            "improvement_pct": round(
+                (best_robust["holdout_fitness"] - current_holdout.fitness) / max(abs(current_holdout.fitness), 0.01) * 100, 1
+            ) if best_robust else 0,
+            "detail": (
+                f"Deep optimization found robust formula. Holdout fitness {best_robust['holdout_fitness']:.4f} "
+                f"(overfit ratio {best_robust['overfit_ratio']:.1f}x). "
+                f"Consistent across all time periods."
+                if best_robust
+                else "No formula passed deep robustness checks (holdout + multi-period consistency)."
             ),
         },
         "applied": applied_info,

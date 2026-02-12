@@ -196,6 +196,97 @@ export interface OptimizerResult {
   } | null;
 }
 
+export interface TimePeriodValidation {
+  periods: Record<string, {
+    n_trades: number;
+    fitness?: number;
+    edge_90d?: number;
+    hit_rate_90d?: number;
+    correlation_90d?: number;
+    skipped: boolean;
+  }>;
+  is_consistent: boolean;
+  worst_period_edge: number;
+}
+
+export interface DeepOptimizerResult {
+  mode: "deep";
+  optimization_params: {
+    lookback_days: number;
+    max_trades: number;
+    generations: number;
+    total_configs_tested: number;
+    elapsed_seconds: number;
+    train_trades: number;
+    holdout_trades: number;
+    train_cutoff_date: string | null;
+  };
+  data_summary: {
+    trades_with_returns: number;
+    trades_with_30d_return: number;
+    trades_with_90d_return: number;
+    trades_with_exit: number;
+  };
+  generation_history: {
+    generation: number;
+    configs_tested: number;
+    best_fitness: number;
+    avg_fitness: number;
+  }[];
+  current_formula: {
+    fitness: number;
+    correlation_30d: number;
+    correlation_90d: number;
+    hit_rate_30d: number;
+    hit_rate_90d: number;
+    edge_30d: number;
+    edge_90d: number;
+    weights: Record<string, number>;
+    holdout_fitness: number;
+    holdout_edge_90d: number;
+    time_period_validation: TimePeriodValidation;
+  };
+  top_formulas: {
+    rank: number;
+    fitness: number;
+    train_fitness: number;
+    holdout_fitness: number;
+    holdout_edge_90d: number;
+    holdout_hit_rate_90d: number;
+    holdout_correlation_90d: number;
+    overfit_ratio: number;
+    correlation_30d: number;
+    correlation_90d: number;
+    hit_rate_30d: number;
+    hit_rate_90d: number;
+    edge_30d: number;
+    edge_90d: number;
+    weights: Record<string, number>;
+    cross_validation: { is_robust: boolean; avg_test_fitness: number; avg_overfit_ratio: number };
+    time_period_validation: TimePeriodValidation;
+    is_deep_robust: boolean;
+  }[];
+  best_robust_formula: {
+    rank: number;
+    fitness: number;
+    holdout_fitness: number;
+    weights: Record<string, number>;
+    is_deep_robust: boolean;
+    time_period_validation: TimePeriodValidation;
+  } | null;
+  recommendation: {
+    use_new_formula: boolean;
+    improvement_pct: number;
+    detail: string;
+  };
+  applied: {
+    status: string;
+    weights: Record<string, number>;
+    fitness: number;
+    is_robust: boolean;
+  } | null;
+}
+
 export interface TestWeightsResult {
   weights: Record<string, number>;
   result: {
@@ -519,6 +610,10 @@ export const api = {
   runOptimizer: (params?: Record<string, string>) => {
     const qs = params ? "?" + new URLSearchParams(params).toString() : "";
     return fetchApi<OptimizerResult>(`/api/v1/optimizer/run${qs}`);
+  },
+  runDeepOptimizer: (params?: Record<string, string>) => {
+    const qs = params ? "?" + new URLSearchParams(params).toString() : "";
+    return fetchApi<DeepOptimizerResult>(`/api/v1/optimizer/run-deep${qs}`);
   },
   getOptimizerStatus: () => fetchApi<{ status: string; sample_trades: number; has_applied_weights?: boolean; applied_weights?: unknown }>("/api/v1/optimizer/status"),
   testCustomWeights: (params: Record<string, string>) => {

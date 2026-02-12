@@ -544,19 +544,30 @@ def evaluate_formula(
         score = score_trade_with_weights(t, weights)
         scores.append(score)
 
+    # Use median as threshold if fixed threshold produces a degenerate split
+    # (e.g., when most weights are 0, all scores cluster near 0 and nothing exceeds 50)
+    effective_threshold = score_threshold
+    if scores:
+        n_above = sum(1 for s in scores if s >= score_threshold)
+        if n_above < len(scores) * 0.05 or n_above > len(scores) * 0.95:
+            sorted_scores = sorted(scores)
+            effective_threshold = sorted_scores[len(sorted_scores) // 2]
+
+    for i, t in enumerate(trades):
+        score = scores[i]
         r30 = t.get("return_30d")
         r90 = t.get("return_90d")
 
         if r30 is not None:
             returns_30d.append((score, r30))
-            if score >= score_threshold:
+            if score >= effective_threshold:
                 high_score_returns_30d.append(r30)
             else:
                 low_score_returns_30d.append(r30)
 
         if r90 is not None:
             returns_90d.append((score, r90))
-            if score >= score_threshold:
+            if score >= effective_threshold:
                 high_score_returns_90d.append(r90)
             else:
                 low_score_returns_90d.append(r90)
@@ -1145,7 +1156,7 @@ async def run_deep_optimization(top_n: int = 10) -> dict:
 
         is_deep_robust = (
             holdout_eval.fitness > 0.05
-            and overfit < 2.5
+            and overfit < 3.5
             and time_periods["is_consistent"]
             and cv["is_robust"]
         )

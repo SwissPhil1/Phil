@@ -97,7 +97,17 @@ export default function OptimizerPage() {
         setAvailable(false);
       }
     }
+    async function loadLastResults() {
+      try {
+        const last = await api.getLastOptimizerResults();
+        if (last.quick) setResult(last.quick);
+        if (last.deep) setDeepResult(last.deep);
+      } catch {
+        // Endpoint may not exist on older backend — ignore
+      }
+    }
     checkStatus();
+    loadLastResults();
   }, []);
 
   async function applyBestWeights() {

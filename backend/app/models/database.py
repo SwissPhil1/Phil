@@ -360,6 +360,7 @@ class OptimizedWeights(Base):
     correlation_90d = Column(Float)
     is_robust = Column(Boolean, default=False)
     trades_analyzed = Column(Integer)
+    full_result_json = Column(Text, nullable=True)  # Full optimizer output JSON for UI persistence
     applied_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -453,6 +454,9 @@ async def _migrate_missing_columns():
             ("total_buys", "INTEGER", "0"),
             ("total_sells", "INTEGER", "0"),
             ("district", "VARCHAR(10)", None),
+        ],
+        "optimized_weights": [
+            ("full_result_json", "TEXT", None),
         ],
     }
 

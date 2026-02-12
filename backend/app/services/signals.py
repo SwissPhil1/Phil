@@ -205,10 +205,9 @@ def check_committee_overlap(committees: list[str], ticker: str) -> dict | None:
     """
     Check if a politician's committee assignments overlap with a stock's sector.
     Returns correlation details if overlap found.
+    Gives partial credit for broad-oversight committees even if ticker isn't mapped.
     """
     stock_sector = TICKER_SECTORS.get(ticker)
-    if not stock_sector:
-        return None
 
     for committee in committees:
         sectors = []
@@ -217,13 +216,28 @@ def check_committee_overlap(committees: list[str], ticker: str) -> dict | None:
                 sectors = comm_sectors
                 break
 
-        if "all" in sectors or stock_sector in sectors:
-            return {
-                "committee": committee,
-                "stock_sector": stock_sector,
-                "overlap_type": "direct" if stock_sector in sectors else "broad_oversight",
-                "flag": "HIGH" if stock_sector in sectors else "MEDIUM",
-            }
+        if not sectors:
+            continue
+
+        if stock_sector:
+            # Ticker is in our sector map — full scoring
+            if "all" in sectors or stock_sector in sectors:
+                return {
+                    "committee": committee,
+                    "stock_sector": stock_sector,
+                    "overlap_type": "direct" if stock_sector in sectors else "broad_oversight",
+                    "flag": "HIGH" if stock_sector in sectors else "MEDIUM",
+                }
+        else:
+            # Ticker NOT in TICKER_SECTORS — give partial credit for
+            # broad-oversight committees (Appropriations, Budget, Rules, etc.)
+            if "all" in sectors:
+                return {
+                    "committee": committee,
+                    "stock_sector": "unknown",
+                    "overlap_type": "broad_oversight_unmapped",
+                    "flag": "LOW",
+                }
 
     return None
 
@@ -458,14 +472,20 @@ def score_trade_conviction(
         pts = round(psm * 0.60, 1)
         detail = "Medium-large position ($250K+)"
     elif amount >= 100_001:
-        pts = round(psm * 0.40, 1)
+        pts = round(psm * 0.44, 1)
         detail = "Medium position ($100K+)"
     elif amount >= 50_001:
-        pts = round(psm * 0.28, 1)
+        pts = round(psm * 0.34, 1)
         detail = "Moderate position ($50K+)"
+    elif amount >= 15_001:
+        pts = round(psm * 0.24, 1)
+        detail = "Standard position ($15K+)"
+    elif amount >= 1_001:
+        pts = round(psm * 0.16, 1)
+        detail = "Small position ($1K+)"
     else:
-        pts = round(psm * 0.12, 1)
-        detail = "Small position"
+        pts = round(psm * 0.08, 1)
+        detail = "Micro position"
     score += pts
     factors.append({"factor": "position_size", "points": pts, "detail": detail})
 
@@ -489,6 +509,14 @@ def score_trade_conviction(
                         "factor": "small_cap_committee", "points": bonus,
                         "detail": "Small/mid-cap + committee overlap (very suspicious)"
                     })
+            elif overlap["flag"] == "LOW":
+                pts = round(com * 0.25, 1)
+                score += pts
+                factors.append({
+                    "factor": "committee_overlap", "points": pts,
+                    "detail": f"Broad oversight (unmapped ticker): {overlap['committee']}"
+                })
+                # No small-cap committee bonus for unmapped tickers
             else:
                 pts = round(com * 0.5, 1)
                 score += pts

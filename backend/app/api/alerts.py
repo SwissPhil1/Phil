@@ -550,21 +550,23 @@ async def conviction_portfolio_sim(
     min_score: int = Query(default=50, ge=0, le=115),
     days: int = Query(default=1825, ge=30, le=3650),
     initial_capital: float = Query(default=10000, ge=1000, le=10_000_000),
+    max_positions: int = Query(default=20, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
 ):
     """Simulate a fixed-capital copy-trade portfolio.
 
-    Starts with initial_capital, allocates ~20% per position. Buys when a
-    high-conviction trade signal fires, sells when the original trader sells.
-    Cash from sells funds future buys (compounding). Trades are skipped when
-    cash is insufficient. Returns a weekly NAV series for equity curve charting.
+    Starts with initial_capital, allocates capital / max_positions per position.
+    Buys when a high-conviction trade signal fires, sells when the original
+    trader sells. Cash from sells funds future buys (compounding). Trades are
+    skipped when cash is insufficient or max concurrent positions reached.
+    Returns a weekly NAV series for equity curve charting.
 
     Uses stored DB prices (TickerPrice cache + Trade.price_at_disclosure) —
     no external API calls during the request.
     """
     since = datetime.utcnow() - timedelta(days=days)
     now = datetime.utcnow()
-    position_size = initial_capital / 5  # 20% per trade
+    position_size = initial_capital / max_positions
 
     # ── 1. Fetch all trades (buys + sells) ──
     congress_stmt = (
@@ -572,7 +574,6 @@ async def conviction_portfolio_sim(
         .where(Trade.ticker.isnot(None))
         .where(Trade.tx_date >= since)
         .order_by(Trade.tx_date.asc())
-        .limit(10000)
     )
     congress_result = await db.execute(congress_stmt)
     all_congress = congress_result.scalars().all()
@@ -582,10 +583,11 @@ async def conviction_portfolio_sim(
         .where(InsiderTrade.ticker.isnot(None))
         .where(InsiderTrade.tx_date >= since)
         .order_by(InsiderTrade.tx_date.asc())
-        .limit(10000)
     )
     insider_result = await db.execute(insider_stmt)
     all_insiders = insider_result.scalars().all()
+
+    logger.info(f"Portfolio sim: {len(all_congress)} congress + {len(all_insiders)} insider trades loaded")
 
     # ── 2. Build price infrastructure (DB-only, no Yahoo calls) ──
     all_tickers = set()
@@ -750,6 +752,7 @@ async def conviction_portfolio_sim(
     # ── 4. Build unified chronological trade events ──
     events: list[dict] = []
     skipped_no_cash = 0
+    skipped_max_pos = 0
 
     # Score and add congress buys + all sells
     for t in all_congress:
@@ -860,7 +863,9 @@ async def conviction_portfolio_sim(
 
             if ev["type"] == "buy":
                 if key not in positions:
-                    if cash >= position_size:
+                    if len(positions) >= max_positions:
+                        skipped_max_pos += 1
+                    elif cash >= position_size:
                         price = get_price(ev["ticker"], ev["date"])
                         if price and price > 0:
                             alloc = min(position_size, cash)
@@ -950,10 +955,11 @@ async def conviction_portfolio_sim(
                 "closed_positions": 0, "win_rate": 0,
                 "best_trade_pct": None, "worst_trade_pct": None,
                 "avg_holding_days": None, "cash": initial_capital,
-                "skipped_no_cash": 0,
+                "skipped_no_cash": 0, "skipped_max_positions": 0,
             },
             "positions": [], "min_score": min_score,
             "days": days, "initial_capital": initial_capital,
+            "max_positions": max_positions,
         }
 
     final_nav = nav_series[-1]["nav"] if nav_series else initial_capital
@@ -1009,9 +1015,11 @@ async def conviction_portfolio_sim(
             "avg_holding_days": round(avg_holding, 0) if all_pos else None,
             "cash": round(cash, 2),
             "skipped_no_cash": skipped_no_cash,
+            "skipped_max_positions": skipped_max_pos,
         },
         "positions": formatted,
         "min_score": min_score,
         "days": days,
         "initial_capital": initial_capital,
+        "max_positions": max_positions,
     }

@@ -865,6 +865,53 @@ async def get_current_applied_weights() -> dict | None:
     return None
 
 
+async def save_optimizer_result(mode: str, result_data: dict) -> None:
+    """Persist full optimizer output JSON so it survives page navigation."""
+    import json
+
+    name = f"last_{mode}"  # "last_quick" or "last_deep"
+    async with async_session() as session:
+        # Delete previous result of same mode
+        await session.execute(
+            select(OptimizedWeights)
+            .where(OptimizedWeights.name == name)
+        )
+        from sqlalchemy import delete
+        await session.execute(
+            delete(OptimizedWeights).where(OptimizedWeights.name == name)
+        )
+        row = OptimizedWeights(
+            name=name,
+            weights_json="{}",
+            full_result_json=json.dumps(result_data, default=str),
+            applied_at=datetime.utcnow(),
+        )
+        session.add(row)
+        await session.commit()
+
+
+async def get_last_optimizer_results() -> dict:
+    """Retrieve last quick and deep optimizer results."""
+    import json
+
+    out: dict = {"quick": None, "deep": None}
+    async with async_session() as session:
+        for mode in ("quick", "deep"):
+            result = await session.execute(
+                select(OptimizedWeights)
+                .where(OptimizedWeights.name == f"last_{mode}")
+                .order_by(OptimizedWeights.applied_at.desc())
+                .limit(1)
+            )
+            row = result.scalar_one_or_none()
+            if row and row.full_result_json:
+                try:
+                    out[mode] = json.loads(row.full_result_json)
+                except Exception:
+                    pass
+    return out
+
+
 # ─── Main Optimizer ───
 
 
@@ -980,7 +1027,7 @@ async def run_optimization(
 
     elapsed = time.time() - start_time
 
-    return {
+    output = {
         "optimization_params": {
             "lookback_days": lookback_days,
             "max_trades": max_trades,
@@ -1024,6 +1071,9 @@ async def run_optimization(
         },
         "applied": applied_info,
     }
+
+    await save_optimizer_result("quick", output)
+    return output
 
 
 # ─── Multi-Period Validation ───
@@ -1216,7 +1266,7 @@ async def run_deep_optimization(top_n: int = 10) -> dict:
 
     elapsed = time.time() - start_time
 
-    return {
+    output = {
         "mode": "deep",
         "optimization_params": {
             "lookback_days": 2500,
@@ -1266,3 +1316,6 @@ async def run_deep_optimization(top_n: int = 10) -> dict:
         },
         "applied": applied_info,
     }
+
+    await save_optimizer_result("deep", output)
+    return output

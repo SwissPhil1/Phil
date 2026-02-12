@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from app.services.optimizer import (
     run_optimization, run_deep_optimization, WeightConfig, evaluate_formula,
     extract_trade_features, cross_validate,
-    save_optimized_weights, get_current_applied_weights,
+    save_optimized_weights, get_current_applied_weights, get_last_optimizer_results,
 )
 from app.services.signals import get_active_weights, get_weights_status
 
@@ -200,3 +200,13 @@ async def reset_to_default_weights():
         "detail": "Scoring weights reset to defaults. Optimized weights still stored in DB.",
         "weights": get_active_weights(),
     }
+
+
+@router.get("/last-results")
+async def get_last_results():
+    """Return the last quick and deep optimizer results (persisted across page navigation)."""
+    try:
+        return await get_last_optimizer_results()
+    except Exception as e:
+        logger.error(f"Failed to retrieve last optimizer results: {e}")
+        return {"quick": None, "deep": None}

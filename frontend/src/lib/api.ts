@@ -627,6 +627,8 @@ export const api = {
     ),
   getActiveWeights: () =>
     fetchApi<{ source: string; weights: Record<string, number>; applied_details: unknown }>("/api/v1/optimizer/active-weights"),
+  getLastOptimizerResults: () =>
+    fetchApi<{ quick: OptimizerResult | null; deep: DeepOptimizerResult | null }>("/api/v1/optimizer/last-results"),
   resetWeights: () =>
     fetchApi<{ status: string; weights: Record<string, number> }>("/api/v1/optimizer/reset-weights", { method: "POST" }),
 

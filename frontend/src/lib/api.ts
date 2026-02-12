@@ -477,11 +477,13 @@ export interface ConvictionPortfolioResponse {
     avg_holding_days: number | null;
     cash: number;
     skipped_no_cash: number;
+    skipped_max_positions: number;
   };
   positions: ConvictionPortfolioPosition[];
   min_score: number;
   days: number;
   initial_capital: number;
+  max_positions: number;
 }
 
 // Chart data for ticker price + trade markers
@@ -659,11 +661,12 @@ export const api = {
     const qs = params.toString() ? `?${params.toString()}` : "";
     return fetchApi<TickerChartData>(`/api/v1/tickers/${encodeURIComponent(ticker)}/chart${qs}`);
   },
-  getConvictionPortfolio: (minScore?: number, days?: number, initialCapital?: number) => {
+  getConvictionPortfolio: (minScore?: number, days?: number, initialCapital?: number, maxPositions?: number) => {
     const params = new URLSearchParams();
     if (minScore !== undefined) params.set("min_score", String(minScore));
     if (days) params.set("days", String(days));
     if (initialCapital) params.set("initial_capital", String(initialCapital));
+    if (maxPositions) params.set("max_positions", String(maxPositions));
     const qs = params.toString() ? `?${params.toString()}` : "";
     return fetchApi<ConvictionPortfolioResponse>(`/api/v1/alerts/conviction-portfolio${qs}`);
   },

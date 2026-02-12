@@ -116,11 +116,15 @@ def score_trade_with_weights(
     elif amount >= 250_001:
         score += weights.position_size_max * 0.60
     elif amount >= 100_001:
-        score += weights.position_size_max * 0.40
+        score += weights.position_size_max * 0.44
     elif amount >= 50_001:
-        score += weights.position_size_max * 0.28
+        score += weights.position_size_max * 0.34
+    elif amount >= 15_001:
+        score += weights.position_size_max * 0.24
+    elif amount >= 1_001:
+        score += weights.position_size_max * 0.16
     else:
-        score += weights.position_size_max * 0.12
+        score += weights.position_size_max * 0.08
 
     # Factor 2: Committee Overlap
     if trade_features.get("has_committee_overlap"):

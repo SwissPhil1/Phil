@@ -304,6 +304,7 @@ export default function AlertsPage() {
   const [simMinScore, setSimMinScore] = useState(50);
   const [simCapital, setSimCapital] = useState(10000);
   const [simDays, setSimDays] = useState(1825);
+  const [simMaxPositions, setSimMaxPositions] = useState(20);
   const [chartTrade, setChartTrade] = useState<SuspiciousTrade | null>(null);
   const [chartData, setChartData] = useState<TickerChartData | null>(null);
   const [chartLoading, setChartLoading] = useState(false);
@@ -344,8 +345,8 @@ export default function AlertsPage() {
     { refreshInterval: 300, deps: [hours] }
   );
   const { data: portfolioData, loading: portfolioLoading, error: portfolioError } = useApiData(
-    () => api.getConvictionPortfolio(simMinScore, simDays, simCapital),
-    { refreshInterval: 0, deps: [simMinScore, simCapital, simDays] }
+    () => api.getConvictionPortfolio(simMinScore, simDays, simCapital, simMaxPositions),
+    { refreshInterval: 0, deps: [simMinScore, simCapital, simDays, simMaxPositions] }
   );
 
   if (error) return <ErrorState error={error} onRetry={retry} />;
@@ -578,6 +579,20 @@ export default function AlertsPage() {
                     </Button>
                   ))}
                 </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground whitespace-nowrap">Max Pos:</span>
+                  {[5, 10, 20, 50, 100].map((n) => (
+                    <Button
+                      key={n}
+                      variant={simMaxPositions === n ? "default" : "outline"}
+                      size="sm"
+                      className="h-7 text-xs px-3"
+                      onClick={() => setSimMaxPositions(n)}
+                    >
+                      {n}
+                    </Button>
+                  ))}
+                </div>
               </div>
             </CardHeader>
             <CardContent>
@@ -646,7 +661,7 @@ export default function AlertsPage() {
                       <div className="text-xl font-bold font-mono">{portfolioData.summary.open_positions}</div>
                       <div className="text-[10px] text-muted-foreground">
                         {portfolioData.summary.closed_positions} closed
-                        {portfolioData.summary.skipped_no_cash > 0 && ` · ${portfolioData.summary.skipped_no_cash} skipped`}
+                        {(portfolioData.summary.skipped_no_cash > 0 || (portfolioData.summary.skipped_max_positions ?? 0) > 0) && ` · ${portfolioData.summary.skipped_no_cash + (portfolioData.summary.skipped_max_positions ?? 0)} skipped`}
                       </div>
                     </div>
                   </div>
@@ -747,7 +762,7 @@ export default function AlertsPage() {
                     {portfolioData.summary.worst_trade_pct != null && (
                       <span>Worst: <span className="font-mono font-semibold text-red-400">{portfolioData.summary.worst_trade_pct.toFixed(1)}%</span></span>
                     )}
-                    <span>Pos Size: <span className="font-mono font-semibold">${(simCapital / 5 / 1000).toFixed(1)}K</span> <span className="text-muted-foreground/70">(20%)</span></span>
+                    <span>Pos Size: <span className="font-mono font-semibold">${(simCapital / simMaxPositions >= 1000) ? `${(simCapital / simMaxPositions / 1000).toFixed(1)}K` : `${(simCapital / simMaxPositions).toFixed(0)}`}</span> <span className="text-muted-foreground/70">({(100 / simMaxPositions).toFixed(0)}%)</span></span>
                   </div>
 
                   {/* Position table */}

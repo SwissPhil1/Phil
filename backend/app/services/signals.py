@@ -19,7 +19,7 @@ import logging
 import math
 from datetime import datetime, timedelta
 
-from sqlalchemy import func, select, and_
+from sqlalchemy import case, func, select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import (
@@ -318,7 +318,7 @@ async def get_politician_track_record(
             func.count().label("total"),
             func.avg(Trade.return_since_disclosure).label("avg_return"),
             func.sum(
-                func.case((Trade.return_since_disclosure > 0, 1), else_=0)
+                case((Trade.return_since_disclosure > 0, 1), else_=0)
             ).label("wins"),
         )
         .where(Trade.politician.ilike(f"%{politician}%"))

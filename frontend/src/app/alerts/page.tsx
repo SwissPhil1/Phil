@@ -237,7 +237,7 @@ export default function AlertsPage() {
   );
   const { data: summary } = useApiData(() => api.getAlertsSummary(), { refreshInterval: 120 });
   const suspDays = Math.max(1, Math.ceil(hours / 24));
-  const { data: suspiciousData, loading: suspLoading } = useApiData(
+  const { data: suspiciousData, loading: suspLoading, error: suspError } = useApiData(
     () => api.getSuspiciousTrades(suspDays),
     { refreshInterval: 300, deps: [hours] }
   );
@@ -358,6 +358,12 @@ export default function AlertsPage() {
                   {[...Array(5)].map((_, i) => (
                     <div key={i} className="h-24 bg-muted/30 rounded-lg animate-pulse" />
                   ))}
+                </div>
+              ) : suspError ? (
+                <div className="text-center py-8 text-red-400">
+                  <ShieldAlert className="w-8 h-8 mx-auto mb-2 opacity-70" />
+                  <p className="font-medium">Failed to load suspicious trades</p>
+                  <p className="text-xs text-muted-foreground mt-1">{suspError}</p>
                 </div>
               ) : suspicious.length === 0 ? (
                 <div className="text-center py-8 text-muted-foreground">

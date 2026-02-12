@@ -427,27 +427,28 @@ def score_trade_conviction(
                         "detail": f"Small/mid-cap + broad committee oversight"
                     })
 
-    # ─── Factor 3: Disclosure Speed (0-15 pts) ───
+    # ─── Factor 3: Disclosure Speed (0-10 pts) ───
     delay = trade.get("disclosure_delay_days")
     if delay is not None:
         if delay <= 3:
             score += 5
             factors.append({"factor": "disclosure_speed", "points": 5, "detail": "Very fast disclosure (≤3 days)"})
         elif delay <= 7:
-            score += 8
-            factors.append({"factor": "disclosure_speed", "points": 8, "detail": "Fast disclosure (≤7 days)"})
+            score += 10
+            factors.append({"factor": "disclosure_speed", "points": 10, "detail": "Fast disclosure (≤7 days) — strategic timing window"})
         elif delay <= 14:
-            score += 5
-            factors.append({"factor": "disclosure_speed", "points": 5, "detail": "Timely disclosure (≤14 days)"})
+            score += 7
+            factors.append({"factor": "disclosure_speed", "points": 7, "detail": "Timely disclosure (≤14 days)"})
         elif delay <= 30:
-            score += 2
-            factors.append({"factor": "disclosure_speed", "points": 2, "detail": "Standard disclosure (≤30 days)"})
+            score += 3
+            factors.append({"factor": "disclosure_speed", "points": 3, "detail": "Standard disclosure (≤30 days)"})
         elif delay > 45:
-            # LATE disclosure is actually MORE suspicious - they're trying to hide it
-            score += 15
+            # Late disclosure — could be hiding trade or just negligence
+            # Lower weight because many late filers are poor traders, not strategic
+            score += 5
             factors.append({
-                "factor": "disclosure_speed", "points": 15,
-                "detail": f"LATE disclosure ({delay} days) - potentially hiding trade"
+                "factor": "disclosure_speed", "points": 5,
+                "detail": f"Late disclosure ({delay} days)"
             })
 
     # ─── Factor 4: Political Cluster (0-20 pts) ───

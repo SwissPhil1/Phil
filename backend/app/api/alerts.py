@@ -307,7 +307,7 @@ async def get_activity_feed(
 async def get_suspicious_trades(
     days: int = Query(default=90, ge=1, le=730),
     limit: int = Query(default=100, ge=1, le=500),
-    min_score: int = Query(default=10, ge=0, le=115),
+    min_score: int = Query(default=10, ge=0, le=100),
     db: AsyncSession = Depends(get_db),
 ):
     """Identify the most suspicious/high-conviction trades using conviction scoring.
@@ -547,7 +547,7 @@ async def get_suspicious_trades(
 
 @router.get("/conviction-portfolio")
 async def conviction_portfolio_sim(
-    min_score: int = Query(default=50, ge=0, le=115),
+    min_score: int = Query(default=50, ge=0, le=100),
     days: int = Query(default=1825, ge=30, le=3650),
     initial_capital: float = Query(default=10000, ge=1000, le=10_000_000),
     max_positions: int = Query(default=20, ge=1, le=200),

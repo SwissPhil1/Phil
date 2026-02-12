@@ -13,10 +13,25 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { api, AlertItem } from "@/lib/api";
+import { api, AlertItem, SuspiciousTrade } from "@/lib/api";
 import { useApiData } from "@/lib/hooks";
 import { ErrorState } from "@/components/error-state";
-import { Bell, TrendingUp, TrendingDown, Clock, Flame, Landmark, UserCheck } from "lucide-react";
+import {
+  Bell,
+  TrendingUp,
+  TrendingDown,
+  Clock,
+  Flame,
+  Landmark,
+  UserCheck,
+  ChevronLeft,
+  ChevronRight,
+  ShieldAlert,
+  AlertTriangle,
+  Building2,
+  Users,
+  Briefcase,
+} from "lucide-react";
 
 function formatAmount(low: number | null, high: number | null): string {
   if (!low) return "-";
@@ -33,7 +48,8 @@ function timeAgo(dateStr: string | null): string {
   if (diffH < 1) return `${Math.max(1, Math.floor(diffMs / (1000 * 60)))}m ago`;
   if (diffH < 24) return `${diffH}h ago`;
   const diffD = Math.floor(diffH / 24);
-  return `${diffD}d ago`;
+  if (diffD < 30) return `${diffD}d ago`;
+  return `${Math.floor(diffD / 30)}mo ago`;
 }
 
 function AlertRow({ alert }: { alert: AlertItem }) {
@@ -90,19 +106,115 @@ function AlertRow({ alert }: { alert: AlertItem }) {
   );
 }
 
+function SuspiciousRow({ trade }: { trade: SuspiciousTrade }) {
+  const scoreColor =
+    trade.suspicion_score >= 50 ? "text-red-400 bg-red-500/10 border-red-500/20"
+    : trade.suspicion_score >= 30 ? "text-orange-400 bg-orange-500/10 border-orange-500/20"
+    : "text-yellow-400 bg-yellow-500/10 border-yellow-500/20";
+
+  return (
+    <div className="p-4 rounded-lg bg-muted/20 border border-border/50 space-y-2">
+      <div className="flex items-start justify-between">
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-base font-bold">{trade.ticker}</span>
+          <Badge variant="outline" className={`text-xs ${scoreColor}`}>
+            Score: {trade.suspicion_score}
+          </Badge>
+          {trade.committee_overlap && (
+            <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-400 border-amber-500/20">
+              <Building2 className="w-3 h-3 mr-1" />
+              Committee Overlap
+            </Badge>
+          )}
+          {trade.insider_also_buying && (
+            <Badge variant="outline" className="text-[10px] bg-purple-500/10 text-purple-400 border-purple-500/20">
+              <UserCheck className="w-3 h-3 mr-1" />
+              Insider Buying
+            </Badge>
+          )}
+          {trade.fund_also_holds && (
+            <Badge variant="outline" className="text-[10px] bg-blue-500/10 text-blue-400 border-blue-500/20">
+              <Briefcase className="w-3 h-3 mr-1" />
+              Fund Position
+            </Badge>
+          )}
+        </div>
+        <div className="text-right">
+          {trade.return_since != null && (
+            <span className={`text-sm font-mono font-semibold ${trade.return_since >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+              {trade.return_since >= 0 ? "+" : ""}{trade.return_since.toFixed(1)}%
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 text-sm">
+        <span className="font-medium">{trade.politician}</span>
+        <span className="text-muted-foreground text-xs">
+          {trade.party && trade.state ? `${trade.party}-${trade.state}` : ""}
+        </span>
+        <span className="text-muted-foreground text-xs">·</span>
+        <span className="text-xs text-muted-foreground">{formatAmount(trade.amount_low, trade.amount_high)}</span>
+        {trade.cluster_count > 1 && (
+          <>
+            <span className="text-muted-foreground text-xs">·</span>
+            <span className="text-xs text-muted-foreground flex items-center gap-1">
+              <Users className="w-3 h-3" /> {trade.cluster_count} politicians
+            </span>
+          </>
+        )}
+      </div>
+
+      {trade.flags.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {trade.flags.map((flag, i) => (
+            <span key={i} className="text-[11px] px-2 py-0.5 rounded-md bg-amber-500/5 border border-amber-500/10 text-amber-300">
+              <AlertTriangle className="w-3 h-3 inline mr-1" />
+              {flag}
+            </span>
+          ))}
+        </div>
+      )}
+
+      <div className="text-[11px] text-muted-foreground">
+        Traded: {trade.tx_date ? new Date(trade.tx_date).toLocaleDateString() : "-"}
+        {trade.disclosure_date && ` · Disclosed: ${new Date(trade.disclosure_date).toLocaleDateString()}`}
+        {trade.disclosure_delay_days != null && trade.disclosure_delay_days > 0 && (
+          <span className={trade.disclosure_delay_days > 30 ? "text-amber-400" : ""}>
+            {" "}· {trade.disclosure_delay_days}d delay
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function AlertsPage() {
   const [hours, setHours] = useState(168);
+  const [page, setPage] = useState(1);
+  const pageSize = 100;
+
   const { data: alertsData, loading, error, retry } = useApiData(
-    () => api.getRecentAlerts(hours),
-    { refreshInterval: 60, deps: [hours] }
+    () => api.getRecentAlerts(hours, page, pageSize),
+    { refreshInterval: 60, deps: [hours, page] }
   );
   const { data: summary } = useApiData(() => api.getAlertsSummary(), { refreshInterval: 120 });
+  const { data: suspiciousData, loading: suspLoading } = useApiData(
+    () => api.getSuspiciousTrades(90),
+    { refreshInterval: 300 }
+  );
 
   if (error) return <ErrorState error={error} onRetry={retry} />;
 
   const alerts = alertsData?.alerts || [];
+  const totalAlerts = alertsData?.total || 0;
+  const totalPages = Math.ceil(totalAlerts / pageSize);
   const congressAlerts = alerts.filter((a) => a.source === "congress");
   const insiderAlerts = alerts.filter((a) => a.source === "insider");
+  const suspicious = suspiciousData?.trades || [];
+
+  const formatPeriod = (h: number) =>
+    h < 24 ? `${h}h` : h <= 720 ? `${h / 24}d` : h <= 2160 ? `${Math.round(h / 720)}mo` : "1y";
 
   return (
     <div className="space-y-6">
@@ -122,9 +234,9 @@ export default function AlertsPage() {
               key={h}
               variant={hours === h ? "default" : "outline"}
               size="sm"
-              onClick={() => setHours(h)}
+              onClick={() => { setHours(h); setPage(1); }}
             >
-              {h < 24 ? `${h}h` : h <= 720 ? `${h / 24}d` : h <= 2160 ? `${Math.round(h / 720)}mo` : "1y"}
+              {formatPeriod(h)}
             </Button>
           ))}
         </div>
@@ -175,9 +287,13 @@ export default function AlertsPage() {
       )}
 
       {/* Alert Tables */}
-      <Tabs defaultValue="all" className="w-full">
+      <Tabs defaultValue="suspicious" className="w-full">
         <TabsList>
-          <TabsTrigger value="all">All ({alerts.length})</TabsTrigger>
+          <TabsTrigger value="suspicious" className="gap-1.5">
+            <ShieldAlert className="w-3.5 h-3.5" />
+            Suspicious ({suspicious.length})
+          </TabsTrigger>
+          <TabsTrigger value="all">All ({totalAlerts})</TabsTrigger>
           <TabsTrigger value="congress">
             Congress ({congressAlerts.length})
           </TabsTrigger>
@@ -185,6 +301,41 @@ export default function AlertsPage() {
             Insiders ({insiderAlerts.length})
           </TabsTrigger>
         </TabsList>
+
+        {/* Suspicious trades tab */}
+        <TabsContent value="suspicious">
+          <Card className="border-amber-500/10">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base flex items-center gap-2">
+                <ShieldAlert className="w-4 h-4 text-amber-400" />
+                Suspicious Trades
+              </CardTitle>
+              <p className="text-xs text-muted-foreground">
+                Purchases scored by committee overlap, political clustering, cross-source confirmation, trade size, and disclosure delays
+              </p>
+            </CardHeader>
+            <CardContent>
+              {suspLoading ? (
+                <div className="space-y-3">
+                  {[...Array(5)].map((_, i) => (
+                    <div key={i} className="h-24 bg-muted/30 rounded-lg animate-pulse" />
+                  ))}
+                </div>
+              ) : suspicious.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  <ShieldAlert className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                  <p>No suspicious trades detected in the last 90 days</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {suspicious.map((trade) => (
+                    <SuspiciousRow key={trade.id} trade={trade} />
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
 
         {["all", "congress", "insider"].map((tab) => {
           const filtered =
@@ -198,7 +349,15 @@ export default function AlertsPage() {
               <Card>
                 <CardHeader className="pb-2">
                   <CardTitle className="text-base">
-                    {loading ? "Loading alerts..." : `${filtered.length} alerts in the last ${hours < 24 ? `${hours}h` : `${hours / 24}d`}`}
+                    {loading
+                      ? "Loading alerts..."
+                      : `${totalAlerts} alerts in the last ${formatPeriod(hours)}`
+                    }
+                    {totalAlerts > pageSize && (
+                      <span className="text-xs text-muted-foreground font-normal ml-2">
+                        (showing {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, totalAlerts)})
+                      </span>
+                    )}
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
@@ -232,6 +391,31 @@ export default function AlertsPage() {
                         ))}
                       </TableBody>
                     </Table>
+                  )}
+
+                  {/* Pagination */}
+                  {totalPages > 1 && (
+                    <div className="flex items-center justify-between mt-4 pt-4 border-t border-border/50">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={page <= 1}
+                        onClick={() => setPage(page - 1)}
+                      >
+                        <ChevronLeft className="w-4 h-4 mr-1" /> Previous
+                      </Button>
+                      <span className="text-xs text-muted-foreground">
+                        Page {page} of {totalPages}
+                      </span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={page >= totalPages}
+                        onClick={() => setPage(page + 1)}
+                      >
+                        Next <ChevronRight className="w-4 h-4 ml-1" />
+                      </Button>
+                    </div>
                   )}
                 </CardContent>
               </Card>

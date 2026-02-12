@@ -307,6 +307,7 @@ export interface AlertsResponse {
 
 export interface SuspiciousTrade {
   id: string;
+  source: "congress" | "insider";
   politician: string;
   party: string | null;
   state: string | null;
@@ -317,16 +318,16 @@ export interface SuspiciousTrade {
   tx_date: string | null;
   disclosure_date: string | null;
   disclosure_delay_days: number | null;
+  tx_type: string;
+  action: string;
   return_since: number | null;
-  price_at_trade: number | null;
-  price_current: number | null;
-  suspicion_score: number;
-  flags: string[];
+  conviction_score: number;
+  conviction_rating: "VERY_HIGH" | "HIGH" | "MEDIUM" | "LOW" | "VERY_LOW";
+  factors: { factor: string; points: number; detail: string }[];
   cluster_count: number;
   insider_also_buying: boolean;
   fund_also_holds: boolean;
-  committee_overlap: { committee: string; stock_sector: string; flag: string } | null;
-  sector: string | null;
+  committee_overlap: { committee: string; stock_sector: string; overlap_type: string; flag: string } | null;
 }
 
 export interface SuspiciousResponse {

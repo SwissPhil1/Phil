@@ -27,7 +27,6 @@ import {
   ChevronLeft,
   ChevronRight,
   ShieldAlert,
-  AlertTriangle,
   Building2,
   Users,
   Briefcase,
@@ -106,19 +105,44 @@ function AlertRow({ alert }: { alert: AlertItem }) {
   );
 }
 
+const RATING_CONFIG: Record<string, { color: string; label: string }> = {
+  VERY_HIGH: { color: "text-red-400 bg-red-500/10 border-red-500/20", label: "Very High" },
+  HIGH: { color: "text-orange-400 bg-orange-500/10 border-orange-500/20", label: "High" },
+  MEDIUM: { color: "text-yellow-400 bg-yellow-500/10 border-yellow-500/20", label: "Medium" },
+  LOW: { color: "text-blue-400 bg-blue-500/10 border-blue-500/20", label: "Low" },
+  VERY_LOW: { color: "text-slate-400 bg-slate-500/10 border-slate-500/20", label: "Very Low" },
+};
+
 function SuspiciousRow({ trade }: { trade: SuspiciousTrade }) {
-  const scoreColor =
-    trade.suspicion_score >= 50 ? "text-red-400 bg-red-500/10 border-red-500/20"
-    : trade.suspicion_score >= 30 ? "text-orange-400 bg-orange-500/10 border-orange-500/20"
-    : "text-yellow-400 bg-yellow-500/10 border-yellow-500/20";
+  const rating = RATING_CONFIG[trade.conviction_rating] || RATING_CONFIG.VERY_LOW;
 
   return (
     <div className="p-4 rounded-lg bg-muted/20 border border-border/50 space-y-2">
       <div className="flex items-start justify-between">
         <div className="flex items-center gap-2">
+          {trade.source === "congress" ? (
+            <Landmark className="w-4 h-4 text-blue-400" />
+          ) : (
+            <UserCheck className="w-4 h-4 text-purple-400" />
+          )}
           <span className="font-mono text-base font-bold">{trade.ticker}</span>
-          <Badge variant="outline" className={`text-xs ${scoreColor}`}>
-            Score: {trade.suspicion_score}
+          <Badge variant="outline" className={`text-xs ${rating.color}`}>
+            {trade.conviction_score} — {rating.label}
+          </Badge>
+          <Badge
+            variant="outline"
+            className={`text-[10px] ${
+              trade.action === "bought"
+                ? "bg-green-500/10 text-green-400 border-green-500/20"
+                : "bg-red-500/10 text-red-400 border-red-500/20"
+            }`}
+          >
+            {trade.action === "bought" ? (
+              <TrendingUp className="w-3 h-3 mr-1" />
+            ) : (
+              <TrendingDown className="w-3 h-3 mr-1" />
+            )}
+            {trade.action}
           </Badge>
           {trade.committee_overlap && (
             <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-400 border-amber-500/20">
@@ -151,7 +175,7 @@ function SuspiciousRow({ trade }: { trade: SuspiciousTrade }) {
       <div className="flex items-center gap-2 text-sm">
         <span className="font-medium">{trade.politician}</span>
         <span className="text-muted-foreground text-xs">
-          {trade.party && trade.state ? `${trade.party}-${trade.state}` : ""}
+          {trade.party && trade.state ? `${trade.party}-${trade.state}` : trade.source === "insider" ? "Corporate Insider" : ""}
         </span>
         <span className="text-muted-foreground text-xs">·</span>
         <span className="text-xs text-muted-foreground">{formatAmount(trade.amount_low, trade.amount_high)}</span>
@@ -165,12 +189,25 @@ function SuspiciousRow({ trade }: { trade: SuspiciousTrade }) {
         )}
       </div>
 
-      {trade.flags.length > 0 && (
+      {trade.factors.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
-          {trade.flags.map((flag, i) => (
-            <span key={i} className="text-[11px] px-2 py-0.5 rounded-md bg-amber-500/5 border border-amber-500/10 text-amber-300">
-              <AlertTriangle className="w-3 h-3 inline mr-1" />
-              {flag}
+          {trade.factors.map((factor, i) => (
+            <span
+              key={i}
+              className={`text-[11px] px-2 py-0.5 rounded-md border ${
+                factor.points >= 15
+                  ? "bg-red-500/5 border-red-500/10 text-red-300"
+                  : factor.points >= 8
+                  ? "bg-amber-500/5 border-amber-500/10 text-amber-300"
+                  : factor.points > 0
+                  ? "bg-blue-500/5 border-blue-500/10 text-blue-300"
+                  : "bg-slate-500/5 border-slate-500/10 text-slate-400"
+              }`}
+            >
+              <span className="font-mono font-semibold mr-1">
+                {factor.points > 0 ? "+" : ""}{factor.points}
+              </span>
+              {factor.detail}
             </span>
           ))}
         </div>
@@ -312,7 +349,7 @@ export default function AlertsPage() {
                 Suspicious Trades
               </CardTitle>
               <p className="text-xs text-muted-foreground">
-                Purchases in the last {formatPeriod(hours)} scored by committee overlap, political clustering, cross-source confirmation, trade size, and disclosure delays
+                Trades in the last {formatPeriod(hours)} scored by conviction: committee overlap, political clustering, cross-source confirmation, trade size, disclosure timing, and track record
               </p>
             </CardHeader>
             <CardContent>

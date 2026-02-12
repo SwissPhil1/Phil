@@ -637,7 +637,19 @@ def score_trade_conviction(
             "detail": f"Buying while {recent_sells_count} others selling (contrarian conviction)"
         })
 
-    score = round(min(max(score, 0), 185), 1)
+    # ─── Normalize to 0-100 scale ───
+    # This ensures thresholds (e.g. 65+) mean the same thing regardless of
+    # what weights the optimizer applies. Without this, reduced weights compress
+    # the score range and make higher thresholds unreachable.
+    max_possible = (
+        psm + com + scm + dsm + clm + csim + csfm + tcb + trm + ctm
+    )
+    if max_possible > 0:
+        scale = 100 / max_possible
+        score = round(score * scale, 1)
+        for f in factors:
+            f["points"] = round(f["points"] * scale, 1)
+    score = min(max(score, 0), 100)
 
     if score >= 85:
         rating = "VERY_HIGH"

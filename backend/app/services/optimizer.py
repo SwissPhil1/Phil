@@ -208,7 +208,23 @@ def score_trade_with_weights(
         else:
             score += weights.small_cap_committee_max * 0.5  # Broad oversight on small cap
 
-    return min(max(score, 0), 185)  # Raised cap for new factor
+    # Normalize to 0-100 scale (matches signals.py normalization)
+    max_possible = (
+        weights.position_size_max
+        + weights.committee_overlap_max
+        + weights.small_cap_committee_max
+        + weights.disclosure_speed_max
+        + weights.cluster_max
+        + weights.cross_source_insider_max
+        + weights.cross_source_fund_max
+        + weights.triple_confirmation_bonus
+        + weights.track_record_max
+        + weights.contrarian_max
+        + weights.leadership_role_max
+    )
+    if max_possible > 0:
+        return round(min(max(score / max_possible * 100, 0), 100), 1)
+    return 0
 
 
 # ─── Trade Feature Extraction ───

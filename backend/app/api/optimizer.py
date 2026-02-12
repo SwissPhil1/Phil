@@ -6,7 +6,7 @@ from fastapi import APIRouter, Query, Body
 from fastapi.responses import JSONResponse
 
 from app.services.optimizer import (
-    run_optimization, WeightConfig, evaluate_formula,
+    run_optimization, run_deep_optimization, WeightConfig, evaluate_formula,
     extract_trade_features, cross_validate,
     save_optimized_weights, get_current_applied_weights,
 )
@@ -45,6 +45,27 @@ async def run_optimizer(
     except Exception as e:
         logger.error(f"Optimizer run failed: {e}")
         from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=500, content={"error": str(e), "status": "failed"})
+
+
+@router.get("/run-deep")
+async def run_deep_optimizer(
+    top_n: int = Query(10, description="Number of top formulas to return"),
+):
+    """
+    Run deep optimization with train/holdout split and multi-period validation.
+
+    Uses maximum available data, trains on the first 60% chronologically,
+    validates on the remaining 40%. Then tests across 1Y, 2Y, 3Y, Max periods.
+    Takes 3-10 minutes.
+    """
+    try:
+        result = await run_deep_optimization(top_n=top_n)
+        if "error" in result:
+            return JSONResponse(status_code=422, content=result)
+        return result
+    except Exception as e:
+        logger.error(f"Deep optimizer run failed: {e}")
         return JSONResponse(status_code=500, content={"error": str(e), "status": "failed"})
 
 

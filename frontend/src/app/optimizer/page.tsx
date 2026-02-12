@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { api, type OptimizerResult, type TestWeightsResult } from "@/lib/api";
+import { api, type OptimizerResult, type TestWeightsResult, type DeepOptimizerResult } from "@/lib/api";
 import { Brain, Play, CheckCircle, XCircle, TrendingUp, Clock, Zap, BarChart3, Info, Sliders, RotateCcw, FlaskConical, Upload, Shield } from "lucide-react";
 
 export default function OptimizerPage() {
@@ -35,11 +35,27 @@ export default function OptimizerPage() {
   const [appliedStatus, setAppliedStatus] = useState<string | null>(null);
   const [weightsSource, setWeightsSource] = useState<string | null>(null);
 
+  // Deep optimization
+  const [deepResult, setDeepResult] = useState<DeepOptimizerResult | null>(null);
+  const [deepLoading, setDeepLoading] = useState(false);
+  const [deepError, setDeepError] = useState<string | null>(null);
+
   const totalPoints = Object.values(customWeights).reduce((a, b) => a + b, 0);
   const defaultTotal = WEIGHT_FACTORS.reduce((a, f) => a + f.default, 0);
 
   function resetWeights() {
     setCustomWeights({ ...defaultWeights });
+    setTestResult(null);
+    setTestError(null);
+  }
+
+  function loadFormulaWeights(weights: Record<string, number>) {
+    const clamped: Record<string, number> = {};
+    for (const factor of WEIGHT_FACTORS) {
+      const raw = weights[factor.key] ?? factor.default;
+      clamped[factor.key] = Math.min(Math.round(raw), factor.max);
+    }
+    setCustomWeights(clamped);
     setTestResult(null);
     setTestError(null);
   }
@@ -146,6 +162,28 @@ export default function OptimizerPage() {
     }
   }
 
+  async function runDeepOptimizer() {
+    setDeepLoading(true);
+    setDeepError(null);
+    try {
+      const data = await api.runDeepOptimizer({ top_n: "10" });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (!data?.data_summary || !data?.top_formulas) {
+        throw new Error((data as any)?.error || "Deep optimizer returned incomplete data.");
+      }
+      setDeepResult(data);
+      if (data.applied) {
+        setAppliedStatus("auto-applied");
+        setWeightsSource("optimizer");
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Deep optimizer failed";
+      setDeepError(msg);
+    } finally {
+      setDeepLoading(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-start justify-between">
@@ -156,24 +194,45 @@ export default function OptimizerPage() {
             Finds formulas that best predict profitable trades, then validates on out-of-sample data.
           </p>
         </div>
-        <Button
-          onClick={runOptimizer}
-          disabled={loading}
-          className="gap-2"
-          size="lg"
-        >
-          {loading ? (
-            <>
-              <Clock className="w-4 h-4 animate-spin" />
-              Running...
-            </>
-          ) : (
-            <>
-              <Play className="w-4 h-4" />
-              Run Optimizer
-            </>
-          )}
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            onClick={runOptimizer}
+            disabled={loading || deepLoading}
+            className="gap-2"
+            size="lg"
+          >
+            {loading ? (
+              <>
+                <Clock className="w-4 h-4 animate-spin" />
+                Running...
+              </>
+            ) : (
+              <>
+                <Play className="w-4 h-4" />
+                Quick Optimize
+              </>
+            )}
+          </Button>
+          <Button
+            onClick={runDeepOptimizer}
+            disabled={loading || deepLoading}
+            variant="outline"
+            className="gap-2"
+            size="lg"
+          >
+            {deepLoading ? (
+              <>
+                <Clock className="w-4 h-4 animate-spin" />
+                Deep Running...
+              </>
+            ) : (
+              <>
+                <Brain className="w-4 h-4" />
+                Deep Optimize
+              </>
+            )}
+          </Button>
+        </div>
       </div>
 
       {/* Active weights status */}
@@ -249,6 +308,23 @@ export default function OptimizerPage() {
                 </span>
                 <span className="text-muted-foreground"> / {defaultTotal} default</span>
               </div>
+              {(result || deepResult) && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    const weights = deepResult?.best_robust_formula?.weights
+                      ?? deepResult?.top_formulas?.[0]?.weights
+                      ?? result?.best_robust_formula?.weights
+                      ?? result?.top_formulas?.[0]?.weights;
+                    if (weights) loadFormulaWeights(weights);
+                  }}
+                  className="gap-1 h-7 text-xs"
+                >
+                  <Zap className="w-3 h-3" />
+                  Load Best
+                </Button>
+              )}
               <Button variant="ghost" size="sm" onClick={resetWeights} className="gap-1 h-7 text-xs">
                 <RotateCcw className="w-3 h-3" />
                 Reset
@@ -416,6 +492,51 @@ export default function OptimizerPage() {
           <CardContent className="p-4 flex items-center gap-2 text-destructive">
             <XCircle className="w-4 h-4" />
             <span className="text-sm">{error}</span>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Deep optimizer loading state */}
+      {deepLoading && (
+        <Card>
+          <CardContent className="p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <Brain className="w-5 h-5 text-primary animate-pulse" />
+              <div>
+                <div className="font-medium">Deep Optimization running...</div>
+                <div className="text-sm text-muted-foreground">
+                  Training on 60% of data, validating on 40% holdout. Then testing across 1Y, 2Y, 3Y, and Max time periods. This takes 3-10 minutes.
+                </div>
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-4 text-center text-xs text-muted-foreground">
+              <div className="p-3 rounded-lg bg-muted/30">
+                <div className="text-foreground font-medium mb-1">Step 1</div>
+                Gathering maximum historical data (up to 7 years)
+              </div>
+              <div className="p-3 rounded-lg bg-muted/30">
+                <div className="text-foreground font-medium mb-1">Step 2</div>
+                Evolving formulas on training set (5 generations)
+              </div>
+              <div className="p-3 rounded-lg bg-muted/30">
+                <div className="text-foreground font-medium mb-1">Step 3</div>
+                Validating on holdout + multi-period consistency
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-3/4" />
+              <Skeleton className="h-4 w-1/2" />
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {deepError && (
+        <Card className="border-destructive/50">
+          <CardContent className="p-4 flex items-center gap-2 text-destructive">
+            <XCircle className="w-4 h-4" />
+            <span className="text-sm">{deepError}</span>
           </CardContent>
         </Card>
       )}
@@ -625,7 +746,7 @@ export default function OptimizerPage() {
                   </thead>
                   <tbody>
                     {result.top_formulas.map((formula) => (
-                      <tr key={formula.rank} className="border-b border-border/30 hover:bg-muted/30">
+                      <tr key={formula.rank} className="border-b border-border/30 hover:bg-muted/30 cursor-pointer" onClick={() => loadFormulaWeights(formula.weights)} title="Click to load into Custom Formula Builder">
                         <td className="py-2 pr-3 font-medium">{formula.rank}</td>
                         <td className="text-right py-2 px-3 font-mono-data">{formula.fitness.toFixed(4)}</td>
                         <td className="text-right py-2 px-3 font-mono-data">{formula.correlation_30d.toFixed(3)}</td>
@@ -677,6 +798,304 @@ export default function OptimizerPage() {
                             </span>
                           )}
                         </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
+
+      {/* Deep Optimization Results */}
+      {deepResult && (
+        <div className="space-y-4">
+          <h2 className="text-xl font-bold flex items-center gap-2">
+            <Brain className="w-5 h-5" />
+            Deep Optimization Results
+          </h2>
+
+          {/* Summary cards */}
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+            <Card>
+              <CardContent className="p-4">
+                <div className="text-sm text-muted-foreground">Total Trades</div>
+                <div className="text-2xl font-bold font-mono-data">{deepResult.data_summary.trades_with_returns}</div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-4">
+                <div className="text-sm text-muted-foreground">Train Set</div>
+                <div className="text-2xl font-bold font-mono-data">{deepResult.optimization_params.train_trades}</div>
+                <div className="text-xs text-muted-foreground">60% of data</div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-4">
+                <div className="text-sm text-muted-foreground">Holdout Set</div>
+                <div className="text-2xl font-bold font-mono-data">{deepResult.optimization_params.holdout_trades}</div>
+                <div className="text-xs text-muted-foreground">40% unseen</div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-4">
+                <div className="text-sm text-muted-foreground">Configs Tested</div>
+                <div className="text-2xl font-bold font-mono-data">{deepResult.optimization_params.total_configs_tested}</div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-4">
+                <div className="text-sm text-muted-foreground">Time</div>
+                <div className="text-2xl font-bold font-mono-data">{deepResult.optimization_params.elapsed_seconds}s</div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Train/Holdout split info */}
+          {deepResult.optimization_params.train_cutoff_date && (
+            <div className="flex items-center gap-3 p-3 rounded-lg bg-blue-500/5 border border-blue-500/10">
+              <Info className="w-4 h-4 text-blue-400 shrink-0" />
+              <div className="text-sm">
+                <span className="font-medium">Chronological split:</span>{" "}
+                <span className="text-muted-foreground">
+                  Training on trades before {new Date(deepResult.optimization_params.train_cutoff_date).toLocaleDateString()},
+                  validating on trades after. The holdout set was never seen during optimization.
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* Holdout Performance: Current vs Best */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm text-muted-foreground">Current Formula (Holdout Performance)</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-2">
+                  <div className="flex justify-between">
+                    <span className="text-sm">Holdout Fitness</span>
+                    <span className="font-mono-data">{deepResult.current_formula.holdout_fitness.toFixed(4)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-sm">Holdout Edge (90d)</span>
+                    <span className={`font-mono-data ${deepResult.current_formula.holdout_edge_90d >= 0 ? "text-green-400" : "text-red-400"}`}>
+                      {deepResult.current_formula.holdout_edge_90d >= 0 ? "+" : ""}{deepResult.current_formula.holdout_edge_90d.toFixed(2)}%
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-sm">Time Consistent</span>
+                    <span className={deepResult.current_formula.time_period_validation.is_consistent ? "text-green-400" : "text-yellow-400"}>
+                      {deepResult.current_formula.time_period_validation.is_consistent ? "Yes" : "No"}
+                    </span>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {deepResult.best_robust_formula && (
+              <Card className="border-green-500/20">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm text-green-400">Best Deep-Robust Formula</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-2">
+                    <div className="flex justify-between">
+                      <span className="text-sm">Holdout Fitness</span>
+                      <span className="font-mono-data">{deepResult.best_robust_formula.holdout_fitness.toFixed(4)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-sm">Time Consistent</span>
+                      <span className={deepResult.best_robust_formula.time_period_validation.is_consistent ? "text-green-400" : "text-yellow-400"}>
+                        {deepResult.best_robust_formula.time_period_validation.is_consistent ? "Yes" : "No"}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-sm">Deep Robust</span>
+                      <span className={deepResult.best_robust_formula.is_deep_robust ? "text-green-400" : "text-yellow-400"}>
+                        {deepResult.best_robust_formula.is_deep_robust ? "Yes" : "No"}
+                      </span>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+
+          {/* Recommendation */}
+          <Card className={deepResult.recommendation.use_new_formula ? "border-green-500/30" : "border-border"}>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base flex items-center gap-2">
+                {deepResult.recommendation.use_new_formula ? (
+                  <CheckCircle className="w-4 h-4 text-green-400" />
+                ) : (
+                  <Zap className="w-4 h-4 text-yellow-400" />
+                )}
+                Deep Optimization Recommendation
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-sm">{deepResult.recommendation.detail}</p>
+              {deepResult.recommendation.improvement_pct !== 0 && (
+                <p className="text-sm text-muted-foreground">
+                  Improvement over current: <span className={`font-mono-data ${deepResult.recommendation.improvement_pct > 0 ? "text-green-400" : "text-red-400"}`}>
+                    {deepResult.recommendation.improvement_pct > 0 ? "+" : ""}{deepResult.recommendation.improvement_pct}%
+                  </span>
+                </p>
+              )}
+
+              {deepResult.applied ? (
+                <div className="flex items-center gap-2 text-sm text-green-400">
+                  <CheckCircle className="w-4 h-4" />
+                  Deep-optimized weights auto-applied to live scoring
+                </div>
+              ) : deepResult.best_robust_formula && (
+                <div className="flex items-center gap-3">
+                  <Button
+                    onClick={async () => {
+                      if (!deepResult.best_robust_formula?.weights) return;
+                      setApplyLoading(true);
+                      setAppliedStatus(null);
+                      try {
+                        await api.applyWeights(deepResult.best_robust_formula.weights);
+                        setAppliedStatus("applied");
+                        setWeightsSource("optimizer");
+                      } catch (e) {
+                        const msg = e instanceof Error ? e.message : "Apply failed";
+                        setAppliedStatus(`error: ${msg}`);
+                      } finally {
+                        setApplyLoading(false);
+                      }
+                    }}
+                    disabled={applyLoading || appliedStatus === "applied"}
+                    variant={appliedStatus === "applied" ? "outline" : "default"}
+                    size="sm"
+                    className="gap-2"
+                  >
+                    {applyLoading ? (
+                      <Clock className="w-3 h-3 animate-spin" />
+                    ) : appliedStatus === "applied" ? (
+                      <CheckCircle className="w-3 h-3 text-green-400" />
+                    ) : (
+                      <Upload className="w-3 h-3" />
+                    )}
+                    {appliedStatus === "applied" ? "Weights Applied" : "Apply Best Deep Weights"}
+                  </Button>
+                  {appliedStatus?.startsWith("error") && (
+                    <span className="text-xs text-red-400">{appliedStatus}</span>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Multi-period Formulas Table */}
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base flex items-center gap-2">
+                <BarChart3 className="w-4 h-4" />
+                Top Formulas — Holdout + Multi-Period Validation
+              </CardTitle>
+              <p className="text-xs text-muted-foreground mt-1">
+                Ranked by holdout fitness (out-of-sample). Click any row to load its weights into the Custom Formula Builder.
+              </p>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-border text-xs text-muted-foreground">
+                      <th className="text-left py-2 pr-3">#</th>
+                      <th className="text-right py-2 px-2">Train Fit</th>
+                      <th className="text-right py-2 px-2">Holdout Fit</th>
+                      <th className="text-right py-2 px-2">Overfit</th>
+                      <th className="text-right py-2 px-2">Edge 90d</th>
+                      {["1Y", "2Y", "3Y", "Max"].map(period => (
+                        <th key={period} className="text-right py-2 px-2">{period} Edge</th>
+                      ))}
+                      <th className="text-center py-2 px-2">Consistent</th>
+                      <th className="text-center py-2 px-2">Robust</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {deepResult.top_formulas.map((formula) => {
+                      const periods = formula.time_period_validation?.periods || {};
+                      return (
+                        <tr
+                          key={formula.rank}
+                          className="border-b border-border/30 hover:bg-muted/30 cursor-pointer"
+                          onClick={() => loadFormulaWeights(formula.weights)}
+                          title="Click to load into Custom Formula Builder"
+                        >
+                          <td className="py-2 pr-3 font-medium">{formula.rank}</td>
+                          <td className="text-right py-2 px-2 font-mono-data">{formula.train_fitness.toFixed(3)}</td>
+                          <td className="text-right py-2 px-2 font-mono-data font-medium">{formula.holdout_fitness.toFixed(3)}</td>
+                          <td className={`text-right py-2 px-2 font-mono-data ${formula.overfit_ratio > 2 ? "text-red-400" : formula.overfit_ratio > 1.5 ? "text-yellow-400" : "text-muted-foreground"}`}>
+                            {formula.overfit_ratio.toFixed(1)}x
+                          </td>
+                          <td className={`text-right py-2 px-2 font-mono-data ${formula.holdout_edge_90d >= 0 ? "text-green-400" : "text-red-400"}`}>
+                            {formula.holdout_edge_90d >= 0 ? "+" : ""}{formula.holdout_edge_90d.toFixed(1)}%
+                          </td>
+                          {["1Y", "2Y", "3Y", "Max"].map(period => {
+                            const p = periods[period];
+                            const edge = p?.edge_90d;
+                            if (!p || p.skipped || edge === undefined) {
+                              return <td key={period} className="text-right py-2 px-2 text-muted-foreground">—</td>;
+                            }
+                            return (
+                              <td key={period} className={`text-right py-2 px-2 font-mono-data ${edge >= 0 ? "text-green-400" : "text-red-400"}`}>
+                                {edge >= 0 ? "+" : ""}{edge.toFixed(1)}%
+                              </td>
+                            );
+                          })}
+                          <td className="text-center py-2 px-2">
+                            {formula.time_period_validation?.is_consistent ? (
+                              <CheckCircle className="w-4 h-4 text-green-400 inline" />
+                            ) : (
+                              <XCircle className="w-4 h-4 text-muted-foreground inline" />
+                            )}
+                          </td>
+                          <td className="text-center py-2 px-2">
+                            {formula.is_deep_robust ? (
+                              <CheckCircle className="w-4 h-4 text-green-400 inline" />
+                            ) : (
+                              <XCircle className="w-4 h-4 text-muted-foreground inline" />
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Evolution Progress for Deep */}
+          {deepResult.generation_history && deepResult.generation_history.length > 0 && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <TrendingUp className="w-4 h-4" />
+                  Deep Evolution Progress (Train Set)
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-end gap-4 h-32">
+                  {deepResult.generation_history.map((gen) => {
+                    const maxFitness = Math.max(...deepResult.generation_history.map(g => g.best_fitness));
+                    const height = maxFitness > 0 ? (gen.best_fitness / maxFitness) * 100 : 0;
+                    return (
+                      <div key={gen.generation} className="flex-1 flex flex-col items-center gap-1">
+                        <span className="text-xs font-mono-data text-muted-foreground">
+                          {gen.best_fitness.toFixed(3)}
+                        </span>
+                        <div
+                          className="w-full bg-primary/60 rounded-t"
+                          style={{ height: `${Math.max(height, 5)}%` }}
+                        />
+                        <span className="text-xs text-muted-foreground">Gen {gen.generation}</span>
                       </div>
                     );
                   })}

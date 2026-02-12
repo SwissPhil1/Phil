@@ -299,8 +299,8 @@ async def get_activity_feed(
 
 @router.get("/suspicious")
 async def get_suspicious_trades(
-    days: int = Query(default=90, ge=7, le=365),
-    limit: int = Query(default=50, ge=1, le=200),
+    days: int = Query(default=90, ge=1, le=730),
+    limit: int = Query(default=100, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
 ):
     """Identify the most suspicious/high-conviction trades.
@@ -311,6 +311,7 @@ async def get_suspicious_trades(
     - Cross-source confirmation (insiders or hedge funds also buying)
     - Trade size (larger amounts = higher conviction)
     - Disclosure delay (late disclosures = more suspicious)
+    - Known sector (trackable sector = more analyzable)
 
     Returns trades ranked by suspicion score, highest first.
     """
@@ -327,7 +328,7 @@ async def get_suspicious_trades(
             Trade.created_at >= since,
         ))
         .order_by(func.coalesce(Trade.tx_date, Trade.disclosure_date).desc())
-        .limit(500)
+        .limit(2000)
     )
     trades_result = await db.execute(trades_stmt)
     trades = trades_result.scalars().all()
@@ -340,7 +341,11 @@ async def get_suspicious_trades(
         )
         .where(Trade.tx_type == "purchase")
         .where(Trade.ticker.isnot(None))
-        .where(or_(Trade.tx_date >= since, Trade.disclosure_date >= since))
+        .where(or_(
+            Trade.tx_date >= since,
+            Trade.disclosure_date >= since,
+            Trade.created_at >= since,
+        ))
         .group_by(Trade.ticker)
     )
     cluster_result = await db.execute(cluster_stmt)
@@ -406,7 +411,8 @@ async def get_suspicious_trades(
             score += 15
             flags.append(f"{cluster_count} politicians bought this stock")
         elif cluster_count >= 2:
-            score += 5
+            score += 8
+            flags.append(f"{cluster_count} politicians bought this stock")
 
         # Cross-source: insider also buying (0-20 points)
         if t.ticker in insider_tickers:
@@ -418,30 +424,43 @@ async def get_suspicious_trades(
             score += 15
             flags.append("Hedge fund new position")
 
-        # Trade size (0-15 points)
+        # Trade size (0-15 points) - more granular tiers
         if t.amount_low and t.amount_low >= 500000:
             score += 15
             flags.append(f"Large position: ${t.amount_low:,.0f}+")
+        elif t.amount_low and t.amount_low >= 250000:
+            score += 13
+            flags.append(f"Significant position: ${t.amount_low:,.0f}+")
         elif t.amount_low and t.amount_low >= 100000:
             score += 10
+            flags.append(f"$100K+ position")
         elif t.amount_low and t.amount_low >= 50000:
-            score += 5
+            score += 6
+        elif t.amount_low and t.amount_low >= 15000:
+            score += 3
 
-        # Disclosure delay (0-10 points) - late disclosures more suspicious
+        # Disclosure delay (0-10 points) - more granular tiers
         if t.disclosure_delay_days and t.disclosure_delay_days > 45:
             score += 10
             flags.append(f"Disclosed {t.disclosure_delay_days} days late")
         elif t.disclosure_delay_days and t.disclosure_delay_days > 30:
-            score += 5
+            score += 7
+            flags.append(f"Disclosed {t.disclosure_delay_days} days late")
+        elif t.disclosure_delay_days and t.disclosure_delay_days > 15:
+            score += 3
 
-        # Small/mid cap bonus (not mega cap = more unusual)
+        # Known sector bonus (0-5 points) - trackable sector stocks
         sector = TICKER_SECTORS.get(t.ticker)
-        if sector and t.ticker not in {
-            "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK-B"
-        }:
-            score += 5
+        if sector:
+            # Non-mega-cap in a known sector = more unusual
+            if t.ticker not in {
+                "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK-B"
+            }:
+                score += 5
+            else:
+                score += 2  # Even mega-cap in known sector gets small bonus
 
-        if score >= 10:  # Only include trades with some signal
+        if score >= 3:  # Low threshold - show anything with a signal
             scored_trades.append({
                 "id": f"suspicious-{t.id}",
                 "politician": t.politician,
@@ -472,13 +491,4 @@ async def get_suspicious_trades(
         "trades": scored_trades[:limit],
         "total": len(scored_trades),
         "days_checked": days,
-        "scoring_factors": [
-            "Committee sector overlap (0-30 pts)",
-            "Political cluster - multiple politicians buying (0-25 pts)",
-            "Corporate insiders also buying (0-20 pts)",
-            "Hedge fund new position (0-15 pts)",
-            "Trade size (0-15 pts)",
-            "Disclosure delay (0-10 pts)",
-            "Non-mega-cap bonus (0-5 pts)",
-        ],
     }

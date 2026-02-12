@@ -199,9 +199,10 @@ export default function AlertsPage() {
     { refreshInterval: 60, deps: [hours, page] }
   );
   const { data: summary } = useApiData(() => api.getAlertsSummary(), { refreshInterval: 120 });
+  const suspDays = Math.max(1, Math.ceil(hours / 24));
   const { data: suspiciousData, loading: suspLoading } = useApiData(
-    () => api.getSuspiciousTrades(90),
-    { refreshInterval: 300 }
+    () => api.getSuspiciousTrades(suspDays),
+    { refreshInterval: 300, deps: [hours] }
   );
 
   if (error) return <ErrorState error={error} onRetry={retry} />;
@@ -311,7 +312,7 @@ export default function AlertsPage() {
                 Suspicious Trades
               </CardTitle>
               <p className="text-xs text-muted-foreground">
-                Purchases scored by committee overlap, political clustering, cross-source confirmation, trade size, and disclosure delays
+                Purchases in the last {formatPeriod(hours)} scored by committee overlap, political clustering, cross-source confirmation, trade size, and disclosure delays
               </p>
             </CardHeader>
             <CardContent>
@@ -324,7 +325,7 @@ export default function AlertsPage() {
               ) : suspicious.length === 0 ? (
                 <div className="text-center py-8 text-muted-foreground">
                   <ShieldAlert className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                  <p>No suspicious trades detected in the last 90 days</p>
+                  <p>No suspicious trades detected in the last {formatPeriod(hours)}</p>
                 </div>
               ) : (
                 <div className="space-y-3">

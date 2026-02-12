@@ -467,7 +467,7 @@ export const api = {
     return fetchApi<ActivityFeedResponse>(`/api/v1/alerts/feed${qs}`);
   },
   getSuspiciousTrades: (days?: number) => {
-    const qs = days ? `?days=${days}&limit=100` : "?limit=100";
+    const qs = days ? `?days=${days}&limit=200` : "?limit=200";
     return fetchApi<SuspiciousResponse>(`/api/v1/alerts/suspicious${qs}`);
   },
 };

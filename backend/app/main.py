@@ -12,7 +12,9 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.alerts import router as alerts_router
 from app.api.autopilot import router as autopilot_router
+from app.api.export import router as export_router
 from app.api.hedge_funds import router as hedge_funds_router
 from app.api.insiders import router as insiders_router
 from app.api.leaderboard import router as leaderboard_router
@@ -188,7 +190,7 @@ app = FastAPI(
         "corporate insider trades (Form 4), and prediction market whales (Polymarket/Kalshi). "
         "Built for European investors."
     ),
-    version="0.4.0",
+    version="0.5.0",
     lifespan=lifespan,
 )
 
@@ -210,6 +212,8 @@ app.include_router(signals_router, prefix="/api/v1")
 app.include_router(trump_router, prefix="/api/v1")
 app.include_router(leaderboard_router, prefix="/api/v1")
 app.include_router(optimizer_router, prefix="/api/v1")
+app.include_router(alerts_router, prefix="/api/v1")
+app.include_router(export_router, prefix="/api/v1")
 
 
 @app.get("/")
@@ -230,13 +234,15 @@ async def root():
             "trump": "/api/v1/trump",
             "leaderboard": "/api/v1/leaderboard",
             "optimizer": "/api/v1/optimizer",
+            "alerts": "/api/v1/alerts",
+            "export": "/api/v1/export",
         },
     }
 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "0.4.0", "branch": "claude/investment-tracking-app-phNcX"}
+    return {"status": "ok", "version": "0.5.0"}
 
 
 @app.get("/debug")

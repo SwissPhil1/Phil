@@ -15,10 +15,14 @@ import {
   Eye,
   FlaskConical,
   UserCheck,
+  Bell,
+  Activity,
 } from "lucide-react";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/alerts", label: "Alerts", icon: Bell },
+  { href: "/activity", label: "Activity Feed", icon: Activity },
   { href: "/congress", label: "Congress Trades", icon: Landmark },
   { href: "/insiders", label: "Insider Trades", icon: UserCheck },
   { href: "/hedge-funds", label: "Hedge Funds", icon: TrendingUp },

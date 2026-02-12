@@ -175,6 +175,41 @@ async def scrape_all_portfolios() -> dict:
     }
 
 
+async def get_our_portfolio_data(name: str, category: str, source: str | None) -> dict | None:
+    """Reconstruct portfolio data from our own data sources."""
+    if source is None:
+        return None
+
+    try:
+        if category == "politician":
+            from app.services.portfolio import compute_portfolio_simulation
+            async with async_session() as session:
+                result = await compute_portfolio_simulation(session, source)
+                if result and not result.get("error"):
+                    return {
+                        "source": "SmartFlow Congress Trades",
+                        "total_trades": result.get("total_trades", 0),
+                        "years": result.get("years", 0),
+                        "equal_weight_return": result.get("equal_weight", {}).get("total_return"),
+                        "conviction_return": result.get("conviction_weighted", {}).get("total_return"),
+                    }
+        elif category == "hedge_fund":
+            from sqlalchemy import func, select
+            from app.models.database import HedgeFundHolding
+            async with async_session() as session:
+                count = (await session.execute(
+                    select(func.count()).where(HedgeFundHolding.fund_cik == source)
+                )).scalar() or 0
+                if count > 0:
+                    return {
+                        "source": "SmartFlow 13F Holdings",
+                        "holdings_count": count,
+                    }
+    except Exception as e:
+        logger.debug(f"Failed to get our data for {name}: {e}")
+    return None
+
+
 def get_portfolio_mapping() -> list[dict]:
     """
     Return the mapping between Autopilot portfolios and our data sources.
@@ -186,6 +221,7 @@ def get_portfolio_mapping() -> list[dict]:
             "category": category,
             "our_data_source": _map_source(category, source),
             "replicable": source is not None,
+            "has_portfolio_key": portfolio_key is not None,
             "portfolio_url": (
                 f"https://marketplace.joinautopilot.com/landing/{team_key}/{portfolio_key}"
                 if portfolio_key
@@ -194,6 +230,25 @@ def get_portfolio_mapping() -> list[dict]:
         }
         for team_key, portfolio_key, name, category, source in AUTOPILOT_PORTFOLIOS
     ]
+
+
+async def get_enriched_portfolio_mapping() -> list[dict]:
+    """Get portfolio mapping enriched with our own data where available."""
+    mapping = get_portfolio_mapping()
+    enriched = []
+    for entry in mapping:
+        # Find matching portfolio tuple
+        match = next(
+            (p for p in AUTOPILOT_PORTFOLIOS if p[2] == entry["autopilot_name"]),
+            None,
+        )
+        if match and match[4]:
+            our_data = await get_our_portfolio_data(match[2], match[3], match[4])
+            entry["our_data"] = our_data
+        else:
+            entry["our_data"] = None
+        enriched.append(entry)
+    return enriched
 
 
 def _map_source(category: str, source: str | None) -> str:

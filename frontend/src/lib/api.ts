@@ -279,6 +279,58 @@ export interface PortfolioLeaderboardEntry {
   conviction_weighted: PortfolioStrategyStats & { years: number };
 }
 
+// Alerts
+export interface AlertItem {
+  id: string;
+  source: "congress" | "insider";
+  politician: string;
+  party: string | null;
+  state: string | null;
+  ticker: string;
+  action: string;
+  tx_type: string;
+  amount_low: number | null;
+  amount_high: number | null;
+  tx_date: string | null;
+  disclosure_date: string | null;
+  description: string;
+  return_since: number | null;
+}
+
+export interface AlertsResponse {
+  alerts: AlertItem[];
+  total: number;
+  hours: number;
+}
+
+export interface AlertsSummary {
+  periods: Record<string, { congress_trades: number; insider_trades: number; total: number }>;
+  hot_tickers_24h: { ticker: string; count: number }[];
+}
+
+export interface ActivityItem {
+  id: string;
+  source: "congress" | "insider";
+  actor: string;
+  actor_detail: string;
+  action: string;
+  ticker: string;
+  description: string | null;
+  amount_low: number | null;
+  amount_high: number | null;
+  date: string | null;
+  tx_date: string | null;
+  return_pct: number | null;
+  price_at_trade: number | null;
+  price_current: number | null;
+}
+
+export interface ActivityFeedResponse {
+  activities: ActivityItem[];
+  page: number;
+  page_size: number;
+}
+
 // ─── API Functions ───
 
 export const api = {
@@ -364,4 +416,15 @@ export const api = {
 
   // Most traded tickers
   getMostTraded: () => fetchApi<{ ticker: string; count: number }[]>("/api/v1/tickers/most-traded"),
+
+  // Alerts
+  getRecentAlerts: (hours?: number) => {
+    const qs = hours ? `?hours=${hours}` : "";
+    return fetchApi<AlertsResponse>(`/api/v1/alerts/recent${qs}`);
+  },
+  getAlertsSummary: () => fetchApi<AlertsSummary>("/api/v1/alerts/summary"),
+  getActivityFeed: (params?: Record<string, string>) => {
+    const qs = params ? "?" + new URLSearchParams(params).toString() : "";
+    return fetchApi<ActivityFeedResponse>(`/api/v1/alerts/feed${qs}`);
+  },
 };

@@ -20,17 +20,19 @@ import {
   SheetTitle,
   SheetDescription,
 } from "@/components/ui/sheet";
-import { api, AlertItem, SuspiciousTrade, TickerChartData } from "@/lib/api";
+import { api, AlertItem, SuspiciousTrade, TickerChartData, NavSeriesPoint } from "@/lib/api";
 import { useApiData } from "@/lib/hooks";
 import { ErrorState } from "@/components/error-state";
 import {
   ResponsiveContainer,
   ComposedChart,
   Line,
+  Area,
   XAxis,
   YAxis,
   Tooltip as RechartsTooltip,
   CartesianGrid,
+  ReferenceLine,
 } from "recharts";
 import {
   Bell,
@@ -300,6 +302,7 @@ export default function AlertsPage() {
   const [page, setPage] = useState(1);
   const [suspSort, setSuspSort] = useState<"score" | "date">("score");
   const [simMinScore, setSimMinScore] = useState(50);
+  const [simCapital, setSimCapital] = useState(10000);
   const [chartTrade, setChartTrade] = useState<SuspiciousTrade | null>(null);
   const [chartData, setChartData] = useState<TickerChartData | null>(null);
   const [chartLoading, setChartLoading] = useState(false);
@@ -340,8 +343,8 @@ export default function AlertsPage() {
     { refreshInterval: 300, deps: [hours] }
   );
   const { data: portfolioData, loading: portfolioLoading, error: portfolioError } = useApiData(
-    () => api.getConvictionPortfolio(simMinScore),
-    { refreshInterval: 0, deps: [simMinScore] }
+    () => api.getConvictionPortfolio(simMinScore, undefined, simCapital),
+    { refreshInterval: 0, deps: [simMinScore, simCapital] }
   );
 
   if (error) return <ErrorState error={error} onRetry={retry} />;
@@ -524,27 +527,44 @@ export default function AlertsPage() {
                 Copy-Trade Portfolio Simulator
               </CardTitle>
               <p className="text-xs text-muted-foreground">
-                What if you had invested $10K in every trade above a conviction score threshold — buying when they buy, selling when they sell?
+                Autopilot portfolio: start with fixed capital, buy high-conviction signals, sell when they sell. Cash recycles into new trades.
               </p>
-              <div className="flex items-center gap-2 mt-3">
-                <span className="text-xs text-muted-foreground whitespace-nowrap">Min Score:</span>
-                {[0, 25, 50, 65, 85].map((score) => (
-                  <Button
-                    key={score}
-                    variant={simMinScore === score ? "default" : "outline"}
-                    size="sm"
-                    className="h-7 text-xs px-3"
-                    onClick={() => setSimMinScore(score)}
-                  >
-                    {score === 0 ? "All" : `${score}+`}
-                  </Button>
-                ))}
+              <div className="flex items-center gap-4 mt-3 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground whitespace-nowrap">Capital:</span>
+                  {[10000, 25000, 50000, 100000].map((amount) => (
+                    <Button
+                      key={amount}
+                      variant={simCapital === amount ? "default" : "outline"}
+                      size="sm"
+                      className="h-7 text-xs px-3"
+                      onClick={() => setSimCapital(amount)}
+                    >
+                      ${(amount / 1000).toFixed(0)}K
+                    </Button>
+                  ))}
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground whitespace-nowrap">Min Score:</span>
+                  {[0, 25, 50, 65, 85].map((score) => (
+                    <Button
+                      key={score}
+                      variant={simMinScore === score ? "default" : "outline"}
+                      size="sm"
+                      className="h-7 text-xs px-3"
+                      onClick={() => setSimMinScore(score)}
+                    >
+                      {score === 0 ? "All" : `${score}+`}
+                    </Button>
+                  ))}
+                </div>
               </div>
             </CardHeader>
             <CardContent>
               {portfolioLoading ? (
                 <div className="space-y-3">
-                  {[...Array(3)].map((_, i) => (
+                  <div className="h-64 bg-muted/30 rounded-lg animate-pulse" />
+                  {[...Array(2)].map((_, i) => (
                     <div key={i} className="h-20 bg-muted/30 rounded-lg animate-pulse" />
                   ))}
                 </div>
@@ -571,43 +591,137 @@ export default function AlertsPage() {
                       </div>
                     </div>
                     <div className="bg-muted/20 rounded-lg p-3 border border-border/50">
-                      <div className="text-[11px] text-muted-foreground">P&L</div>
-                      <div className={`text-xl font-bold font-mono ${portfolioData.summary.total_pnl >= 0 ? "text-emerald-400" : "text-red-400"}`}>
-                        {portfolioData.summary.total_pnl >= 0 ? "+" : ""}${(portfolioData.summary.total_pnl / 1000).toFixed(1)}K
+                      <div className="text-[11px] text-muted-foreground">CAGR</div>
+                      <div className={`text-xl font-bold font-mono ${portfolioData.summary.cagr_pct >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                        {portfolioData.summary.cagr_pct >= 0 ? "+" : ""}{portfolioData.summary.cagr_pct.toFixed(1)}%
+                      </div>
+                      <div className="text-[10px] text-muted-foreground">annualized</div>
+                    </div>
+                    <div className="bg-muted/20 rounded-lg p-3 border border-border/50">
+                      <div className="text-[11px] text-muted-foreground">Current Value</div>
+                      <div className="text-xl font-bold font-mono">
+                        ${portfolioData.summary.current_value >= 1000
+                          ? `${(portfolioData.summary.current_value / 1000).toFixed(1)}K`
+                          : portfolioData.summary.current_value.toFixed(0)}
+                      </div>
+                      <div className="text-[10px] text-muted-foreground">
+                        from ${(portfolioData.summary.initial_capital / 1000).toFixed(0)}K
                       </div>
                     </div>
                     <div className="bg-muted/20 rounded-lg p-3 border border-border/50">
                       <div className="text-[11px] text-muted-foreground">Win Rate</div>
                       <div className="text-xl font-bold font-mono">{portfolioData.summary.win_rate.toFixed(0)}%</div>
-                    </div>
-                    <div className="bg-muted/20 rounded-lg p-3 border border-border/50">
-                      <div className="text-[11px] text-muted-foreground">Positions</div>
-                      <div className="text-xl font-bold font-mono">{portfolioData.summary.total_positions}</div>
                       <div className="text-[10px] text-muted-foreground">
-                        {portfolioData.summary.open_positions} open · {portfolioData.summary.closed_positions} closed
+                        {portfolioData.summary.total_positions} trades
                       </div>
                     </div>
                     <div className="bg-muted/20 rounded-lg p-3 border border-border/50">
-                      <div className="text-[11px] text-muted-foreground">Avg Holding</div>
-                      <div className="text-xl font-bold font-mono">
-                        {portfolioData.summary.avg_holding_days ? `${portfolioData.summary.avg_holding_days}d` : "-"}
+                      <div className="text-[11px] text-muted-foreground">Positions</div>
+                      <div className="text-xl font-bold font-mono">{portfolioData.summary.open_positions}</div>
+                      <div className="text-[10px] text-muted-foreground">
+                        {portfolioData.summary.closed_positions} closed
+                        {portfolioData.summary.skipped_no_cash > 0 && ` · ${portfolioData.summary.skipped_no_cash} skipped`}
                       </div>
                     </div>
                   </div>
 
-                  {/* Investment summary bar */}
-                  <div className="flex items-center justify-between text-xs bg-muted/10 rounded-lg px-4 py-2 border border-border/30">
-                    <span>Invested: <span className="font-mono font-semibold">${(portfolioData.summary.total_invested / 1000).toFixed(0)}K</span></span>
-                    <span>Current Value: <span className="font-mono font-semibold">${(portfolioData.summary.total_current_value / 1000).toFixed(0)}K</span></span>
-                    <span>Avg Return: <span className={`font-mono font-semibold ${portfolioData.summary.avg_return_pct >= 0 ? "text-emerald-400" : "text-red-400"}`}>
-                      {portfolioData.summary.avg_return_pct >= 0 ? "+" : ""}{portfolioData.summary.avg_return_pct.toFixed(1)}%
-                    </span></span>
+                  {/* Equity curve chart */}
+                  {portfolioData.nav_series.length > 1 && (() => {
+                    const navChartData = portfolioData.nav_series.map((p: NavSeriesPoint) => {
+                      const d = new Date(p.date);
+                      return {
+                        ...p,
+                        label: `${MONTH_SHORT[d.getMonth()]} '${String(d.getFullYear()).slice(2)}`,
+                      };
+                    });
+                    return (
+                      <div className="bg-muted/10 rounded-lg border border-border/30 p-4">
+                        <div className="text-xs text-muted-foreground mb-2 font-medium">Portfolio Equity Curve</div>
+                        <div className="h-64">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <ComposedChart data={navChartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                              <defs>
+                                <linearGradient id="navFill" x1="0" y1="0" x2="0" y2="1">
+                                  <stop offset="0%" stopColor="#10b981" stopOpacity={0.2} />
+                                  <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
+                                </linearGradient>
+                              </defs>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#333" vertical={false} />
+                              <XAxis
+                                dataKey="label"
+                                tick={{ fontSize: 11, fill: "#666" }}
+                                axisLine={false}
+                                tickLine={false}
+                                interval="preserveStartEnd"
+                              />
+                              <YAxis
+                                tick={{ fontSize: 11, fill: "#666" }}
+                                tickFormatter={(v: number) => `${v > 0 ? "+" : ""}${v.toFixed(0)}%`}
+                                axisLine={false}
+                                tickLine={false}
+                                width={55}
+                              />
+                              <RechartsTooltip
+                                contentStyle={{
+                                  background: "#0f0f1a",
+                                  border: "1px solid #2a2a3e",
+                                  borderRadius: "10px",
+                                  fontSize: "12px",
+                                  boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
+                                }}
+                                content={({ active, payload }) => {
+                                  if (!active || !payload?.length) return null;
+                                  const item = payload[0]?.payload as NavSeriesPoint & { label: string };
+                                  if (!item) return null;
+                                  return (
+                                    <div className="bg-[#0f0f1a] border border-[#2a2a3e] rounded-lg p-3 text-xs shadow-lg">
+                                      <div className="text-muted-foreground mb-1">{item.label}</div>
+                                      <div className={`font-mono font-bold text-sm ${item.return_pct >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                                        {item.return_pct >= 0 ? "+" : ""}{item.return_pct.toFixed(1)}%
+                                      </div>
+                                      <div className="font-mono text-muted-foreground mt-1">
+                                        NAV: ${item.nav.toLocaleString()}
+                                      </div>
+                                      <div className="text-muted-foreground mt-0.5">
+                                        {item.positions} positions · ${item.cash.toLocaleString()} cash
+                                      </div>
+                                    </div>
+                                  );
+                                }}
+                              />
+                              <ReferenceLine y={0} stroke="#666" strokeDasharray="3 3" />
+                              <Area
+                                type="monotone"
+                                dataKey="return_pct"
+                                fill="url(#navFill)"
+                                stroke="transparent"
+                              />
+                              <Line
+                                type="monotone"
+                                dataKey="return_pct"
+                                stroke="#10b981"
+                                strokeWidth={2}
+                                dot={false}
+                                activeDot={{ r: 4, fill: "#10b981" }}
+                              />
+                            </ComposedChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Portfolio details bar */}
+                  <div className="flex items-center justify-between text-xs bg-muted/10 rounded-lg px-4 py-2 border border-border/30 flex-wrap gap-2">
+                    <span>Cash: <span className="font-mono font-semibold">${portfolioData.summary.cash >= 1000 ? `${(portfolioData.summary.cash / 1000).toFixed(1)}K` : portfolioData.summary.cash.toFixed(0)}</span></span>
+                    <span>Avg Hold: <span className="font-mono font-semibold">{portfolioData.summary.avg_holding_days ? `${portfolioData.summary.avg_holding_days}d` : "-"}</span></span>
                     {portfolioData.summary.best_trade_pct != null && (
                       <span>Best: <span className="font-mono font-semibold text-emerald-400">+{portfolioData.summary.best_trade_pct.toFixed(1)}%</span></span>
                     )}
                     {portfolioData.summary.worst_trade_pct != null && (
                       <span>Worst: <span className="font-mono font-semibold text-red-400">{portfolioData.summary.worst_trade_pct.toFixed(1)}%</span></span>
                     )}
+                    <span>Pos Size: <span className="font-mono font-semibold">${(simCapital / 5 / 1000).toFixed(1)}K</span> <span className="text-muted-foreground/70">(20%)</span></span>
                   </div>
 
                   {/* Position table */}

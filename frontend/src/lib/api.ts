@@ -336,6 +336,14 @@ export interface SuspiciousResponse {
   days_checked: number;
 }
 
+export interface NavSeriesPoint {
+  date: string;
+  nav: number;
+  return_pct: number;
+  positions: number;
+  cash: number;
+}
+
 export interface ConvictionPortfolioPosition {
   id: string;
   source: "congress" | "insider";
@@ -357,23 +365,26 @@ export interface ConvictionPortfolioPosition {
 }
 
 export interface ConvictionPortfolioResponse {
+  nav_series: NavSeriesPoint[];
   summary: {
-    total_positions: number;
-    closed_positions: number;
-    open_positions: number;
-    total_invested: number;
-    total_current_value: number;
-    total_pnl: number;
+    initial_capital: number;
+    current_value: number;
     total_return_pct: number;
+    cagr_pct: number;
+    total_positions: number;
+    open_positions: number;
+    closed_positions: number;
     win_rate: number;
-    avg_return_pct: number;
     best_trade_pct: number | null;
     worst_trade_pct: number | null;
     avg_holding_days: number | null;
+    cash: number;
+    skipped_no_cash: number;
   };
   positions: ConvictionPortfolioPosition[];
   min_score: number;
   days: number;
+  initial_capital: number;
 }
 
 // Chart data for ticker price + trade markers
@@ -536,10 +547,11 @@ export const api = {
     const qs = params.toString() ? `?${params.toString()}` : "";
     return fetchApi<TickerChartData>(`/api/v1/tickers/${encodeURIComponent(ticker)}/chart${qs}`);
   },
-  getConvictionPortfolio: (minScore?: number, days?: number) => {
+  getConvictionPortfolio: (minScore?: number, days?: number, initialCapital?: number) => {
     const params = new URLSearchParams();
     if (minScore !== undefined) params.set("min_score", String(minScore));
     if (days) params.set("days", String(days));
+    if (initialCapital) params.set("initial_capital", String(initialCapital));
     const qs = params.toString() ? `?${params.toString()}` : "";
     return fetchApi<ConvictionPortfolioResponse>(`/api/v1/alerts/conviction-portfolio${qs}`);
   },

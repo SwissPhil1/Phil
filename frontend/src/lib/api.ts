@@ -376,6 +376,25 @@ export interface ConvictionPortfolioResponse {
   days: number;
 }
 
+// Chart data for ticker price + trade markers
+export interface ChartTradeMarker {
+  date: string | null;
+  type: "buy" | "sell";
+  politician: string;
+  source: "congress" | "insider";
+  party: string | null;
+  amount_low: number | null;
+  amount_high: number | null;
+  price: number | null;
+}
+
+export interface TickerChartData {
+  ticker: string;
+  prices: { date: string; close: number }[];
+  trades: ChartTradeMarker[];
+  days: number;
+}
+
 export interface AlertsSummary {
   periods: Record<string, { congress_trades: number; insider_trades: number; total: number }>;
   hot_tickers_24h: { ticker: string; count: number }[];
@@ -510,6 +529,12 @@ export const api = {
   getSuspiciousTrades: (days?: number) => {
     const qs = days ? `?days=${days}&limit=200` : "?limit=200";
     return fetchApi<SuspiciousResponse>(`/api/v1/alerts/suspicious${qs}`);
+  },
+  getTickerChart: (ticker: string, days?: number) => {
+    const params = new URLSearchParams();
+    if (days) params.set("days", String(days));
+    const qs = params.toString() ? `?${params.toString()}` : "";
+    return fetchApi<TickerChartData>(`/api/v1/tickers/${encodeURIComponent(ticker)}/chart${qs}`);
   },
   getConvictionPortfolio: (minScore?: number, days?: number) => {
     const params = new URLSearchParams();

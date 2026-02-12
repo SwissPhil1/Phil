@@ -354,6 +354,97 @@ async def get_trades_for_ticker(
     return [_trade_to_response(t) for t in trades]
 
 
+@router.get("/tickers/{ticker}/chart")
+async def get_ticker_chart(
+    ticker: str,
+    days: int = Query(default=365, ge=30, le=1825),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get price history and trade markers for a ticker chart.
+
+    Returns weekly closing prices from Yahoo Finance and all
+    congressional + insider trades for the ticker.
+    """
+    import httpx
+
+    from app.models.database import InsiderTrade
+    from app.services.portfolio import _fetch_weekly_prices
+
+    ticker_upper = ticker.upper()
+    end = datetime.utcnow()
+    start = end - timedelta(days=days)
+
+    # 1. Fetch weekly prices from Yahoo (single API call)
+    try:
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+            prices_raw = await _fetch_weekly_prices(client, ticker_upper, start, end)
+    except Exception as e:
+        logger.warning(f"Price fetch failed for {ticker_upper}: {e}")
+        prices_raw = []
+
+    prices = [
+        {
+            "date": datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d"),
+            "close": round(close, 2),
+        }
+        for ts, close in prices_raw
+    ]
+
+    # 2. Fetch congressional trades for this ticker
+    congress_stmt = (
+        select(Trade)
+        .where(Trade.ticker == ticker_upper)
+        .where(Trade.tx_date >= start)
+        .order_by(Trade.tx_date.asc())
+    )
+    congress_result = await db.execute(congress_stmt)
+    congress_trades = congress_result.scalars().all()
+
+    # 3. Fetch insider trades for this ticker
+    insider_stmt = (
+        select(InsiderTrade)
+        .where(InsiderTrade.ticker == ticker_upper)
+        .where(InsiderTrade.tx_date >= start)
+        .order_by(InsiderTrade.tx_date.asc())
+    )
+    insider_result = await db.execute(insider_stmt)
+    insider_trades = insider_result.scalars().all()
+
+    # 4. Normalize into unified trade marker format
+    trades = []
+    for t in congress_trades:
+        action = "buy" if t.tx_type == "purchase" else "sell"
+        trades.append({
+            "date": t.tx_date.strftime("%Y-%m-%d") if t.tx_date else None,
+            "type": action,
+            "politician": t.politician,
+            "source": "congress",
+            "party": t.party,
+            "amount_low": t.amount_low,
+            "amount_high": t.amount_high,
+            "price": t.price_at_disclosure,
+        })
+    for t in insider_trades:
+        action = "buy" if t.tx_type == "purchase" else "sell"
+        trades.append({
+            "date": t.tx_date.strftime("%Y-%m-%d") if t.tx_date else None,
+            "type": action,
+            "politician": t.insider_name,
+            "source": "insider",
+            "party": None,
+            "amount_low": t.total_value,
+            "amount_high": None,
+            "price": t.price_per_share,
+        })
+
+    return {
+        "ticker": ticker_upper,
+        "prices": prices,
+        "trades": trades,
+        "days": days,
+    }
+
+
 # --- Stats ---
 
 

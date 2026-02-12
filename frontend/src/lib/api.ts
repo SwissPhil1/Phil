@@ -300,7 +300,39 @@ export interface AlertItem {
 export interface AlertsResponse {
   alerts: AlertItem[];
   total: number;
+  page: number;
+  page_size: number;
   hours: number;
+}
+
+export interface SuspiciousTrade {
+  id: string;
+  politician: string;
+  party: string | null;
+  state: string | null;
+  ticker: string;
+  asset_description: string | null;
+  amount_low: number | null;
+  amount_high: number | null;
+  tx_date: string | null;
+  disclosure_date: string | null;
+  disclosure_delay_days: number | null;
+  return_since: number | null;
+  price_at_trade: number | null;
+  price_current: number | null;
+  suspicion_score: number;
+  flags: string[];
+  cluster_count: number;
+  insider_also_buying: boolean;
+  fund_also_holds: boolean;
+  committee_overlap: { committee: string; stock_sector: string; flag: string } | null;
+  sector: string | null;
+}
+
+export interface SuspiciousResponse {
+  trades: SuspiciousTrade[];
+  total: number;
+  days_checked: number;
 }
 
 export interface AlertsSummary {
@@ -421,13 +453,21 @@ export const api = {
   getMostTraded: () => fetchApi<{ ticker: string; count: number }[]>("/api/v1/tickers/most-traded"),
 
   // Alerts
-  getRecentAlerts: (hours?: number) => {
-    const qs = hours ? `?hours=${hours}` : "";
+  getRecentAlerts: (hours?: number, page?: number, pageSize?: number) => {
+    const params = new URLSearchParams();
+    if (hours) params.set("hours", String(hours));
+    if (page) params.set("page", String(page));
+    if (pageSize) params.set("page_size", String(pageSize));
+    const qs = params.toString() ? `?${params.toString()}` : "";
     return fetchApi<AlertsResponse>(`/api/v1/alerts/recent${qs}`);
   },
   getAlertsSummary: () => fetchApi<AlertsSummary>("/api/v1/alerts/summary"),
   getActivityFeed: (params?: Record<string, string>) => {
     const qs = params ? "?" + new URLSearchParams(params).toString() : "";
     return fetchApi<ActivityFeedResponse>(`/api/v1/alerts/feed${qs}`);
+  },
+  getSuspiciousTrades: (days?: number) => {
+    const qs = days ? `?days=${days}&limit=100` : "?limit=100";
+    return fetchApi<SuspiciousResponse>(`/api/v1/alerts/suspicious${qs}`);
   },
 };

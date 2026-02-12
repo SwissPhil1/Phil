@@ -7,9 +7,14 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.database import Trade, InsiderTrade, get_db
+from app.models.database import Trade, InsiderTrade, HedgeFundHolding, PoliticianCommittee, get_db
 from app.models.schemas import AlertConfig, NewTradeAlert
 from app.services.alerts import check_and_generate_alerts
+from app.services.signals import (
+    check_committee_overlap,
+    TICKER_SECTORS,
+    COMMITTEE_SECTORS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,15 +42,35 @@ def _insider_date_filter(since: datetime):
 @router.get("/recent")
 async def get_recent_alerts(
     hours: int = Query(default=24, ge=1, le=8760),
-    limit: int = Query(default=50, ge=1, le=200),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
 ):
     """Get recent trade alerts from the last N hours (default 24h).
 
     Returns trades disclosed, transacted, or ingested recently.
     Includes both congressional trades and insider trades.
+    Supports pagination.
     """
     since = datetime.utcnow() - timedelta(hours=hours)
+
+    # Get total counts first
+    congress_total = (await db.execute(
+        select(func.count()).select_from(Trade)
+        .where(_trade_date_filter(since))
+        .where(Trade.ticker.isnot(None))
+    )).scalar() or 0
+
+    insider_total = (await db.execute(
+        select(func.count()).select_from(InsiderTrade)
+        .where(_insider_date_filter(since))
+        .where(InsiderTrade.ticker.isnot(None))
+    )).scalar() or 0
+
+    total_count = congress_total + insider_total
+
+    # Fetch both sources with generous limits to sort across sources
+    fetch_limit = page * page_size + page_size  # fetch enough to paginate combined
 
     # Congressional trades - match on any available date
     congress_stmt = (
@@ -53,7 +78,7 @@ async def get_recent_alerts(
         .where(_trade_date_filter(since))
         .where(Trade.ticker.isnot(None))
         .order_by(func.coalesce(Trade.disclosure_date, Trade.tx_date, Trade.created_at).desc())
-        .limit(limit)
+        .limit(fetch_limit)
     )
     congress_result = await db.execute(congress_stmt)
     congress_trades = congress_result.scalars().all()
@@ -64,7 +89,7 @@ async def get_recent_alerts(
         .where(_insider_date_filter(since))
         .where(InsiderTrade.ticker.isnot(None))
         .order_by(func.coalesce(InsiderTrade.filing_date, InsiderTrade.tx_date, InsiderTrade.created_at).desc())
-        .limit(limit)
+        .limit(fetch_limit)
     )
     insider_result = await db.execute(insider_stmt)
     insider_trades = insider_result.scalars().all()
@@ -114,7 +139,19 @@ async def get_recent_alerts(
 
     # Sort all alerts by most relevant date
     alerts.sort(key=lambda a: a.get("disclosure_date") or a.get("tx_date") or "", reverse=True)
-    return {"alerts": alerts[:limit], "total": len(alerts), "hours": hours}
+
+    # Paginate
+    start = (page - 1) * page_size
+    end = start + page_size
+    page_alerts = alerts[start:end]
+
+    return {
+        "alerts": page_alerts,
+        "total": total_count,
+        "page": page,
+        "page_size": page_size,
+        "hours": hours,
+    }
 
 
 @router.post("/check")
@@ -257,4 +294,191 @@ async def get_activity_feed(
         "activities": activities[:page_size],
         "page": page,
         "page_size": page_size,
+    }
+
+
+@router.get("/suspicious")
+async def get_suspicious_trades(
+    days: int = Query(default=90, ge=7, le=365),
+    limit: int = Query(default=50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+):
+    """Identify the most suspicious/high-conviction trades.
+
+    Scores recent congressional purchases by:
+    - Committee overlap (trading in sectors their committee oversees)
+    - Trade clustering (multiple politicians buying the same stock)
+    - Cross-source confirmation (insiders or hedge funds also buying)
+    - Trade size (larger amounts = higher conviction)
+    - Disclosure delay (late disclosures = more suspicious)
+
+    Returns trades ranked by suspicion score, highest first.
+    """
+    since = datetime.utcnow() - timedelta(days=days)
+
+    # 1. Get recent congressional purchases
+    trades_stmt = (
+        select(Trade)
+        .where(Trade.tx_type == "purchase")
+        .where(Trade.ticker.isnot(None))
+        .where(or_(
+            Trade.tx_date >= since,
+            Trade.disclosure_date >= since,
+            Trade.created_at >= since,
+        ))
+        .order_by(func.coalesce(Trade.tx_date, Trade.disclosure_date).desc())
+        .limit(500)
+    )
+    trades_result = await db.execute(trades_stmt)
+    trades = trades_result.scalars().all()
+
+    # 2. Pre-compute cluster counts per ticker (how many distinct politicians bought)
+    cluster_stmt = (
+        select(
+            Trade.ticker,
+            func.count(func.distinct(Trade.politician)).label("pol_count"),
+        )
+        .where(Trade.tx_type == "purchase")
+        .where(Trade.ticker.isnot(None))
+        .where(or_(Trade.tx_date >= since, Trade.disclosure_date >= since))
+        .group_by(Trade.ticker)
+    )
+    cluster_result = await db.execute(cluster_stmt)
+    cluster_map = {r.ticker: r.pol_count for r in cluster_result.all()}
+
+    # 3. Pre-compute insider buying tickers
+    insider_stmt = (
+        select(InsiderTrade.ticker)
+        .where(InsiderTrade.tx_type == "purchase")
+        .where(InsiderTrade.ticker.isnot(None))
+        .where(or_(
+            InsiderTrade.filing_date >= since,
+            InsiderTrade.tx_date >= since,
+        ))
+        .distinct()
+    )
+    insider_result = await db.execute(insider_stmt)
+    insider_tickers = {r[0] for r in insider_result.all()}
+
+    # 4. Pre-compute hedge fund held tickers
+    fund_stmt = (
+        select(HedgeFundHolding.ticker)
+        .where(HedgeFundHolding.ticker.isnot(None))
+        .where(HedgeFundHolding.is_new_position == True)
+        .distinct()
+    )
+    fund_result = await db.execute(fund_stmt)
+    fund_tickers = {r[0] for r in fund_result.all()}
+
+    # 5. Pre-load committee assignments per politician
+    comm_stmt = select(PoliticianCommittee)
+    comm_result = await db.execute(comm_stmt)
+    all_committees = comm_result.scalars().all()
+    politician_committees: dict[str, list[str]] = {}
+    for c in all_committees:
+        name = c.politician_name or ""
+        comm_name = c.committee_name or c.committee_id or ""
+        politician_committees.setdefault(name, []).append(comm_name)
+
+    # 6. Score each trade
+    scored_trades = []
+    for t in trades:
+        score = 0
+        flags: list[str] = []
+
+        # Committee overlap (0-30 points)
+        pol_comms = politician_committees.get(t.politician, [])
+        overlap = check_committee_overlap(pol_comms, t.ticker) if pol_comms else None
+        if overlap:
+            if overlap["flag"] == "HIGH":
+                score += 30
+                flags.append(f"Committee overlap: {overlap['committee']} oversees {overlap['stock_sector']}")
+            else:
+                score += 15
+                flags.append(f"Broad oversight: {overlap['committee']}")
+
+        # Cluster signal (0-25 points)
+        cluster_count = cluster_map.get(t.ticker, 1)
+        if cluster_count >= 5:
+            score += 25
+            flags.append(f"{cluster_count} politicians bought this stock")
+        elif cluster_count >= 3:
+            score += 15
+            flags.append(f"{cluster_count} politicians bought this stock")
+        elif cluster_count >= 2:
+            score += 5
+
+        # Cross-source: insider also buying (0-20 points)
+        if t.ticker in insider_tickers:
+            score += 20
+            flags.append("Corporate insiders also buying")
+
+        # Cross-source: hedge fund new position (0-15 points)
+        if t.ticker in fund_tickers:
+            score += 15
+            flags.append("Hedge fund new position")
+
+        # Trade size (0-15 points)
+        if t.amount_low and t.amount_low >= 500000:
+            score += 15
+            flags.append(f"Large position: ${t.amount_low:,.0f}+")
+        elif t.amount_low and t.amount_low >= 100000:
+            score += 10
+        elif t.amount_low and t.amount_low >= 50000:
+            score += 5
+
+        # Disclosure delay (0-10 points) - late disclosures more suspicious
+        if t.disclosure_delay_days and t.disclosure_delay_days > 45:
+            score += 10
+            flags.append(f"Disclosed {t.disclosure_delay_days} days late")
+        elif t.disclosure_delay_days and t.disclosure_delay_days > 30:
+            score += 5
+
+        # Small/mid cap bonus (not mega cap = more unusual)
+        sector = TICKER_SECTORS.get(t.ticker)
+        if sector and t.ticker not in {
+            "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK-B"
+        }:
+            score += 5
+
+        if score >= 10:  # Only include trades with some signal
+            scored_trades.append({
+                "id": f"suspicious-{t.id}",
+                "politician": t.politician,
+                "party": t.party,
+                "state": t.state,
+                "ticker": t.ticker,
+                "asset_description": t.asset_description,
+                "amount_low": t.amount_low,
+                "amount_high": t.amount_high,
+                "tx_date": t.tx_date.isoformat() if t.tx_date else None,
+                "disclosure_date": t.disclosure_date.isoformat() if t.disclosure_date else None,
+                "disclosure_delay_days": t.disclosure_delay_days,
+                "return_since": t.return_since_disclosure,
+                "price_at_trade": t.price_at_disclosure,
+                "price_current": t.price_current,
+                "suspicion_score": score,
+                "flags": flags,
+                "cluster_count": cluster_count,
+                "insider_also_buying": t.ticker in insider_tickers,
+                "fund_also_holds": t.ticker in fund_tickers,
+                "committee_overlap": overlap,
+                "sector": sector,
+            })
+
+    # Sort by suspicion score (highest first)
+    scored_trades.sort(key=lambda x: x["suspicion_score"], reverse=True)
+    return {
+        "trades": scored_trades[:limit],
+        "total": len(scored_trades),
+        "days_checked": days,
+        "scoring_factors": [
+            "Committee sector overlap (0-30 pts)",
+            "Political cluster - multiple politicians buying (0-25 pts)",
+            "Corporate insiders also buying (0-20 pts)",
+            "Hedge fund new position (0-15 pts)",
+            "Trade size (0-15 pts)",
+            "Disclosure delay (0-10 pts)",
+            "Non-mega-cap bonus (0-5 pts)",
+        ],
     }

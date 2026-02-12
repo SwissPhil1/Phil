@@ -29,11 +29,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import (
     Trade, InsiderTrade, HedgeFundHolding,
-    PoliticianCommittee, async_session,
+    PoliticianCommittee, OptimizedWeights, async_session,
 )
 from app.services.signals import (
     check_committee_overlap,
     TICKER_SECTORS, MEGA_CAP, LARGE_CAP,
+    set_active_weights,
 )
 
 logger = logging.getLogger(__name__)
@@ -766,6 +767,75 @@ def cross_validate(
     }
 
 
+# ─── Weights Persistence ───
+
+
+async def save_optimized_weights(
+    weights: WeightConfig,
+    fitness: float = 0.0,
+    hit_rate_90d: float = 0.0,
+    edge_90d: float = 0.0,
+    correlation_90d: float = 0.0,
+    is_robust: bool = False,
+    trades_analyzed: int = 0,
+) -> dict:
+    """Save optimizer-determined weights to DB and update the live scoring cache."""
+    import json
+
+    weights_dict = weights.to_dict()
+
+    async with async_session() as session:
+        row = OptimizedWeights(
+            name="active",
+            weights_json=json.dumps(weights_dict),
+            fitness=fitness,
+            hit_rate_90d=hit_rate_90d,
+            edge_90d=edge_90d,
+            correlation_90d=correlation_90d,
+            is_robust=is_robust,
+            trades_analyzed=trades_analyzed,
+            applied_at=datetime.utcnow(),
+        )
+        session.add(row)
+        await session.commit()
+
+    # Update the live scoring cache immediately
+    set_active_weights(weights_dict)
+    logger.info(f"Applied optimized weights (fitness={fitness:.4f}, robust={is_robust})")
+
+    return {
+        "status": "applied",
+        "weights": weights_dict,
+        "fitness": fitness,
+        "is_robust": is_robust,
+    }
+
+
+async def get_current_applied_weights() -> dict | None:
+    """Get the currently applied weights from DB."""
+    import json
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(OptimizedWeights)
+            .where(OptimizedWeights.name == "active")
+            .order_by(OptimizedWeights.applied_at.desc())
+            .limit(1)
+        )
+        row = result.scalar_one_or_none()
+        if row:
+            return {
+                "weights": json.loads(row.weights_json),
+                "fitness": row.fitness,
+                "hit_rate_90d": row.hit_rate_90d,
+                "edge_90d": row.edge_90d,
+                "is_robust": row.is_robust,
+                "trades_analyzed": row.trades_analyzed,
+                "applied_at": row.applied_at.isoformat() if row.applied_at else None,
+            }
+    return None
+
+
 # ─── Main Optimizer ───
 
 
@@ -860,6 +930,25 @@ async def run_optimization(
             best_robust = vr
             break
 
+    # Step 7: Auto-apply best robust formula if it beats current
+    applied_info = None
+    use_new = (
+        best_robust is not None
+        and best_robust["fitness"] > current_result.fitness * 1.1
+    )
+    if use_new:
+        best_wc = WeightConfig.from_dict(best_robust["weights"])
+        applied_info = await save_optimized_weights(
+            weights=best_wc,
+            fitness=best_robust["fitness"],
+            hit_rate_90d=best_robust.get("hit_rate_90d", 0),
+            edge_90d=best_robust.get("edge_90d", 0),
+            correlation_90d=best_robust.get("correlation_90d", 0),
+            is_robust=True,
+            trades_analyzed=len(trades),
+        )
+        logger.info("Auto-applied best robust formula to live scoring")
+
     elapsed = time.time() - start_time
 
     return {
@@ -904,4 +993,5 @@ async def run_optimization(
                 else "Current formula is already near-optimal or insufficient data to improve."
             ),
         },
+        "applied": applied_info,
     }

@@ -548,7 +548,7 @@ async def get_suspicious_trades(
 @router.get("/conviction-portfolio")
 async def conviction_portfolio_sim(
     min_score: int = Query(default=50, ge=0, le=115),
-    days: int = Query(default=730, ge=30, le=3650),
+    days: int = Query(default=1825, ge=30, le=3650),
     initial_capital: float = Query(default=10000, ge=1000, le=10_000_000),
     db: AsyncSession = Depends(get_db),
 ):

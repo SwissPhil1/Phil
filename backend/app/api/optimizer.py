@@ -2,9 +2,15 @@
 
 import logging
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Body
+from fastapi.responses import JSONResponse
 
-from app.services.optimizer import run_optimization, WeightConfig, evaluate_formula, extract_trade_features, cross_validate
+from app.services.optimizer import (
+    run_optimization, WeightConfig, evaluate_formula,
+    extract_trade_features, cross_validate,
+    save_optimized_weights, get_current_applied_weights,
+)
+from app.services.signals import get_active_weights, get_weights_status
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/optimizer", tags=["optimizer"])
@@ -96,9 +102,12 @@ async def optimizer_status():
     """Check what data is available for optimization."""
     try:
         trades = await extract_trade_features(days=730, max_trades=10)
+        applied = await get_current_applied_weights()
         return {
             "status": "ready" if trades else "no_data",
             "sample_trades": len(trades),
+            "has_applied_weights": applied is not None,
+            "applied_weights": applied,
             "detail": (
                 "Optimizer has trade data with returns ready for analysis"
                 if trades else
@@ -112,3 +121,61 @@ async def optimizer_status():
             "sample_trades": 0,
             "detail": f"Status check failed: {e}",
         }
+
+
+@router.post("/apply")
+async def apply_weights(weights: dict = Body(...)):
+    """
+    Manually apply a specific set of weights to the live scoring system.
+    Accepts the weights dict from an optimizer result (e.g. best_robust_formula.weights).
+    """
+    try:
+        wc = WeightConfig.from_dict(weights)
+
+        # Validate against historical data
+        trades = await extract_trade_features(days=365, max_trades=300)
+        if trades:
+            result = evaluate_formula(trades, wc)
+            cv = cross_validate(trades, wc)
+            fitness = result.fitness
+            is_robust = cv.get("is_robust", False)
+        else:
+            fitness = 0.0
+            is_robust = False
+
+        applied = await save_optimized_weights(
+            weights=wc,
+            fitness=fitness,
+            hit_rate_90d=result.hit_rate_90d if trades else 0,
+            edge_90d=result.edge_90d if trades else 0,
+            correlation_90d=result.correlation_90d if trades else 0,
+            is_robust=is_robust,
+            trades_analyzed=len(trades) if trades else 0,
+        )
+        return applied
+    except Exception as e:
+        logger.error(f"Apply weights failed: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@router.get("/active-weights")
+async def get_active_scoring_weights():
+    """Get the currently active weights used for live scoring."""
+    status = get_weights_status()
+    applied = await get_current_applied_weights()
+    return {
+        **status,
+        "applied_details": applied,
+    }
+
+
+@router.post("/reset-weights")
+async def reset_to_default_weights():
+    """Reset scoring weights back to hardcoded defaults."""
+    from app.services.signals import set_active_weights
+    set_active_weights(None)
+    return {
+        "status": "reset",
+        "detail": "Scoring weights reset to defaults. Optimized weights still stored in DB.",
+        "weights": get_active_weights(),
+    }

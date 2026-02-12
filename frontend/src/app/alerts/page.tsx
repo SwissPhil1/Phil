@@ -303,6 +303,7 @@ export default function AlertsPage() {
   const [suspSort, setSuspSort] = useState<"score" | "date">("score");
   const [simMinScore, setSimMinScore] = useState(50);
   const [simCapital, setSimCapital] = useState(10000);
+  const [simDays, setSimDays] = useState(1825);
   const [chartTrade, setChartTrade] = useState<SuspiciousTrade | null>(null);
   const [chartData, setChartData] = useState<TickerChartData | null>(null);
   const [chartLoading, setChartLoading] = useState(false);
@@ -343,8 +344,8 @@ export default function AlertsPage() {
     { refreshInterval: 300, deps: [hours] }
   );
   const { data: portfolioData, loading: portfolioLoading, error: portfolioError } = useApiData(
-    () => api.getConvictionPortfolio(simMinScore, undefined, simCapital),
-    { refreshInterval: 0, deps: [simMinScore, simCapital] }
+    () => api.getConvictionPortfolio(simMinScore, simDays, simCapital),
+    { refreshInterval: 0, deps: [simMinScore, simCapital, simDays] }
   );
 
   if (error) return <ErrorState error={error} onRetry={retry} />;
@@ -558,6 +559,25 @@ export default function AlertsPage() {
                     </Button>
                   ))}
                 </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground whitespace-nowrap">Period:</span>
+                  {[
+                    { label: "1Y", days: 365 },
+                    { label: "2Y", days: 730 },
+                    { label: "5Y", days: 1825 },
+                    { label: "Max", days: 3650 },
+                  ].map((p) => (
+                    <Button
+                      key={p.days}
+                      variant={simDays === p.days ? "default" : "outline"}
+                      size="sm"
+                      className="h-7 text-xs px-3"
+                      onClick={() => setSimDays(p.days)}
+                    >
+                      {p.label}
+                    </Button>
+                  ))}
+                </div>
               </div>
             </CardHeader>
             <CardContent>
@@ -582,6 +602,12 @@ export default function AlertsPage() {
                 </div>
               ) : (
                 <div className="space-y-4">
+                  {/* Low trade count warning */}
+                  {portfolioData.summary.total_positions > 0 && portfolioData.summary.total_positions < 10 && (
+                    <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg px-4 py-2 text-xs text-amber-400">
+                      Only {portfolioData.summary.total_positions} trades qualify at {simMinScore}+ score — results may be unreliable with so few positions. Try lowering the score threshold or extending the time period.
+                    </div>
+                  )}
                   {/* Summary stats */}
                   <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                     <div className="bg-muted/20 rounded-lg p-3 border border-border/50">

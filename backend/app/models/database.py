@@ -9,6 +9,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    JSON,
 )
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
@@ -341,6 +342,25 @@ class TrumpDonor(Base):
     interests = Column(Text)  # semicolon-separated
 
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# --- Optimized Scoring Weights ---
+
+
+class OptimizedWeights(Base):
+    """Stores optimizer-determined scoring weights for the conviction formula."""
+    __tablename__ = "optimized_weights"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False, default="active", index=True)
+    weights_json = Column(Text, nullable=False)  # JSON-serialized WeightConfig dict
+    fitness = Column(Float)
+    hit_rate_90d = Column(Float)
+    edge_90d = Column(Float)
+    correlation_90d = Column(Float)
+    is_robust = Column(Boolean, default=False)
+    trades_analyzed = Column(Integer)
+    applied_at = Column(DateTime, default=datetime.utcnow)
 
 
 # --- Ticker Price Cache ---

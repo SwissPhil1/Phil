@@ -188,6 +188,12 @@ export interface OptimizerResult {
     improvement_pct: number;
     detail: string;
   };
+  applied: {
+    status: string;
+    weights: Record<string, number>;
+    fitness: number;
+    is_robust: boolean;
+  } | null;
 }
 
 export interface TestWeightsResult {
@@ -514,11 +520,20 @@ export const api = {
     const qs = params ? "?" + new URLSearchParams(params).toString() : "";
     return fetchApi<OptimizerResult>(`/api/v1/optimizer/run${qs}`);
   },
-  getOptimizerStatus: () => fetchApi<{ status: string; sample_trades: number }>("/api/v1/optimizer/status"),
+  getOptimizerStatus: () => fetchApi<{ status: string; sample_trades: number; has_applied_weights?: boolean; applied_weights?: unknown }>("/api/v1/optimizer/status"),
   testCustomWeights: (params: Record<string, string>) => {
     const qs = new URLSearchParams(params).toString();
     return fetchApi<TestWeightsResult>(`/api/v1/optimizer/test-weights?${qs}`);
   },
+  applyWeights: (weights: Record<string, number>) =>
+    fetchApi<{ status: string; weights: Record<string, number>; fitness: number; is_robust: boolean }>(
+      "/api/v1/optimizer/apply",
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(weights) },
+    ),
+  getActiveWeights: () =>
+    fetchApi<{ source: string; weights: Record<string, number>; applied_details: unknown }>("/api/v1/optimizer/active-weights"),
+  resetWeights: () =>
+    fetchApi<{ status: string; weights: Record<string, number> }>("/api/v1/optimizer/reset-weights", { method: "POST" }),
 
   // Most traded tickers
   getMostTraded: () => fetchApi<{ ticker: string; count: number }[]>("/api/v1/tickers/most-traded"),

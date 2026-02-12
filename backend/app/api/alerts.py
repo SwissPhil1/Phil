@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import Trade, InsiderTrade, HedgeFundHolding, PoliticianCommittee, get_db
@@ -389,28 +389,31 @@ async def get_suspicious_trades(
     politician_names = {t.politician for t in congress_trades}
     politician_track_records: dict[str, dict] = {}
     if politician_names:
-        track_stmt = (
-            select(
-                Trade.politician,
-                func.count().label("total"),
-                func.avg(Trade.return_since_disclosure).label("avg_return"),
-                func.sum(
-                    func.case((Trade.return_since_disclosure > 0, 1), else_=0)
-                ).label("wins"),
+        try:
+            track_stmt = (
+                select(
+                    Trade.politician,
+                    func.count().label("total"),
+                    func.avg(Trade.return_since_disclosure).label("avg_return"),
+                    func.sum(
+                        case((Trade.return_since_disclosure > 0, 1), else_=0)
+                    ).label("wins"),
+                )
+                .where(Trade.politician.in_(list(politician_names)))
+                .where(Trade.tx_type == "purchase")
+                .where(Trade.return_since_disclosure.isnot(None))
+                .group_by(Trade.politician)
             )
-            .where(Trade.politician.in_(list(politician_names)))
-            .where(Trade.tx_type == "purchase")
-            .where(Trade.return_since_disclosure.isnot(None))
-            .group_by(Trade.politician)
-        )
-        track_result = await db.execute(track_stmt)
-        for row in track_result.all():
-            if row.total and row.total > 0:
-                politician_track_records[row.politician] = {
-                    "total": row.total,
-                    "avg_return": float(row.avg_return) if row.avg_return else 0,
-                    "win_rate": float(row.wins / row.total * 100),
-                }
+            track_result = await db.execute(track_stmt)
+            for row in track_result.all():
+                if row.total and row.total > 0:
+                    politician_track_records[row.politician] = {
+                        "total": row.total,
+                        "avg_return": float(row.avg_return) if row.avg_return else 0,
+                        "win_rate": float(row.wins / row.total * 100),
+                    }
+        except Exception as e:
+            logger.warning(f"Failed to load track records: {e}")
 
     # 3f. Recent sells per ticker (for contrarian signal)
     sell_stmt = (

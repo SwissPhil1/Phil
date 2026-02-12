@@ -13,7 +13,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { api, AlertItem, SuspiciousTrade } from "@/lib/api";
+import { api, AlertItem, SuspiciousTrade, ConvictionPortfolioResponse } from "@/lib/api";
 import { useApiData } from "@/lib/hooks";
 import { ErrorState } from "@/components/error-state";
 import {
@@ -30,6 +30,10 @@ import {
   Building2,
   Users,
   Briefcase,
+  ArrowUpDown,
+  Wallet,
+  ArrowUp,
+  ArrowDown,
 } from "lucide-react";
 
 function formatAmount(low: number | null, high: number | null): string {
@@ -229,6 +233,8 @@ function SuspiciousRow({ trade }: { trade: SuspiciousTrade }) {
 export default function AlertsPage() {
   const [hours, setHours] = useState(168);
   const [page, setPage] = useState(1);
+  const [suspSort, setSuspSort] = useState<"score" | "date">("score");
+  const [simMinScore, setSimMinScore] = useState(50);
   const pageSize = 100;
 
   const { data: alertsData, loading, error, retry } = useApiData(
@@ -241,6 +247,10 @@ export default function AlertsPage() {
     () => api.getSuspiciousTrades(suspDays),
     { refreshInterval: 300, deps: [hours] }
   );
+  const { data: portfolioData, loading: portfolioLoading, error: portfolioError } = useApiData(
+    () => api.getConvictionPortfolio(simMinScore),
+    { refreshInterval: 0, deps: [simMinScore] }
+  );
 
   if (error) return <ErrorState error={error} onRetry={retry} />;
 
@@ -250,6 +260,13 @@ export default function AlertsPage() {
   const congressAlerts = alerts.filter((a) => a.source === "congress");
   const insiderAlerts = alerts.filter((a) => a.source === "insider");
   const suspicious = suspiciousData?.trades || [];
+
+  const sortedSuspicious = [...suspicious].sort((a, b) => {
+    if (suspSort === "score") return b.conviction_score - a.conviction_score;
+    const dateA = a.tx_date || a.disclosure_date || "";
+    const dateB = b.tx_date || b.disclosure_date || "";
+    return dateB.localeCompare(dateA);
+  });
 
   const formatPeriod = (h: number) =>
     h < 24 ? `${h}h` : h <= 720 ? `${h / 24}d` : h <= 2160 ? `${Math.round(h / 720)}mo` : "1y";
@@ -331,6 +348,10 @@ export default function AlertsPage() {
             <ShieldAlert className="w-3.5 h-3.5" />
             Suspicious ({suspicious.length})
           </TabsTrigger>
+          <TabsTrigger value="portfolio" className="gap-1.5">
+            <Wallet className="w-3.5 h-3.5" />
+            Copy Trade Sim
+          </TabsTrigger>
           <TabsTrigger value="all">All ({totalAlerts})</TabsTrigger>
           <TabsTrigger value="congress">
             Congress ({congressAlerts.length})
@@ -344,10 +365,31 @@ export default function AlertsPage() {
         <TabsContent value="suspicious">
           <Card className="border-amber-500/10">
             <CardHeader className="pb-2">
-              <CardTitle className="text-base flex items-center gap-2">
-                <ShieldAlert className="w-4 h-4 text-amber-400" />
-                Suspicious Trades
-              </CardTitle>
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <ShieldAlert className="w-4 h-4 text-amber-400" />
+                  Suspicious Trades
+                </CardTitle>
+                <div className="flex items-center gap-1">
+                  <ArrowUpDown className="w-3.5 h-3.5 text-muted-foreground" />
+                  <Button
+                    variant={suspSort === "score" ? "default" : "outline"}
+                    size="sm"
+                    className="h-6 text-xs px-2"
+                    onClick={() => setSuspSort("score")}
+                  >
+                    Score
+                  </Button>
+                  <Button
+                    variant={suspSort === "date" ? "default" : "outline"}
+                    size="sm"
+                    className="h-6 text-xs px-2"
+                    onClick={() => setSuspSort("date")}
+                  >
+                    Recent
+                  </Button>
+                </div>
+              </div>
               <p className="text-xs text-muted-foreground">
                 Trades in the last {formatPeriod(hours)} scored by conviction: committee overlap, political clustering, cross-source confirmation, trade size, disclosure timing, and track record
               </p>
@@ -365,16 +407,194 @@ export default function AlertsPage() {
                   <p className="font-medium">Failed to load suspicious trades</p>
                   <p className="text-xs text-muted-foreground mt-1">{suspError}</p>
                 </div>
-              ) : suspicious.length === 0 ? (
+              ) : sortedSuspicious.length === 0 ? (
                 <div className="text-center py-8 text-muted-foreground">
                   <ShieldAlert className="w-8 h-8 mx-auto mb-2 opacity-50" />
                   <p>No suspicious trades detected in the last {formatPeriod(hours)}</p>
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {suspicious.map((trade) => (
+                  {sortedSuspicious.map((trade) => (
                     <SuspiciousRow key={trade.id} trade={trade} />
                   ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Copy Trade Portfolio Simulation */}
+        <TabsContent value="portfolio">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base flex items-center gap-2">
+                <Wallet className="w-4 h-4 text-emerald-400" />
+                Copy-Trade Portfolio Simulator
+              </CardTitle>
+              <p className="text-xs text-muted-foreground">
+                What if you had invested $10K in every trade above a conviction score threshold — buying when they buy, selling when they sell?
+              </p>
+              <div className="flex items-center gap-2 mt-3">
+                <span className="text-xs text-muted-foreground whitespace-nowrap">Min Score:</span>
+                {[0, 25, 50, 65, 85].map((score) => (
+                  <Button
+                    key={score}
+                    variant={simMinScore === score ? "default" : "outline"}
+                    size="sm"
+                    className="h-7 text-xs px-3"
+                    onClick={() => setSimMinScore(score)}
+                  >
+                    {score === 0 ? "All" : `${score}+`}
+                  </Button>
+                ))}
+              </div>
+            </CardHeader>
+            <CardContent>
+              {portfolioLoading ? (
+                <div className="space-y-3">
+                  {[...Array(3)].map((_, i) => (
+                    <div key={i} className="h-20 bg-muted/30 rounded-lg animate-pulse" />
+                  ))}
+                </div>
+              ) : portfolioError ? (
+                <div className="text-center py-8 text-red-400">
+                  <Wallet className="w-8 h-8 mx-auto mb-2 opacity-70" />
+                  <p className="font-medium">Failed to run simulation</p>
+                  <p className="text-xs text-muted-foreground mt-1">{portfolioError}</p>
+                </div>
+              ) : !portfolioData || portfolioData.summary.total_positions === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  <Wallet className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                  <p>No trades with price data meet the {simMinScore}+ conviction threshold</p>
+                  <p className="text-xs mt-1">Try lowering the minimum score</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {/* Summary stats */}
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                    <div className="bg-muted/20 rounded-lg p-3 border border-border/50">
+                      <div className="text-[11px] text-muted-foreground">Total Return</div>
+                      <div className={`text-xl font-bold font-mono ${portfolioData.summary.total_return_pct >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                        {portfolioData.summary.total_return_pct >= 0 ? "+" : ""}{portfolioData.summary.total_return_pct.toFixed(1)}%
+                      </div>
+                    </div>
+                    <div className="bg-muted/20 rounded-lg p-3 border border-border/50">
+                      <div className="text-[11px] text-muted-foreground">P&L</div>
+                      <div className={`text-xl font-bold font-mono ${portfolioData.summary.total_pnl >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                        {portfolioData.summary.total_pnl >= 0 ? "+" : ""}${(portfolioData.summary.total_pnl / 1000).toFixed(1)}K
+                      </div>
+                    </div>
+                    <div className="bg-muted/20 rounded-lg p-3 border border-border/50">
+                      <div className="text-[11px] text-muted-foreground">Win Rate</div>
+                      <div className="text-xl font-bold font-mono">{portfolioData.summary.win_rate.toFixed(0)}%</div>
+                    </div>
+                    <div className="bg-muted/20 rounded-lg p-3 border border-border/50">
+                      <div className="text-[11px] text-muted-foreground">Positions</div>
+                      <div className="text-xl font-bold font-mono">{portfolioData.summary.total_positions}</div>
+                      <div className="text-[10px] text-muted-foreground">
+                        {portfolioData.summary.open_positions} open · {portfolioData.summary.closed_positions} closed
+                      </div>
+                    </div>
+                    <div className="bg-muted/20 rounded-lg p-3 border border-border/50">
+                      <div className="text-[11px] text-muted-foreground">Avg Holding</div>
+                      <div className="text-xl font-bold font-mono">
+                        {portfolioData.summary.avg_holding_days ? `${portfolioData.summary.avg_holding_days}d` : "-"}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Investment summary bar */}
+                  <div className="flex items-center justify-between text-xs bg-muted/10 rounded-lg px-4 py-2 border border-border/30">
+                    <span>Invested: <span className="font-mono font-semibold">${(portfolioData.summary.total_invested / 1000).toFixed(0)}K</span></span>
+                    <span>Current Value: <span className="font-mono font-semibold">${(portfolioData.summary.total_current_value / 1000).toFixed(0)}K</span></span>
+                    <span>Avg Return: <span className={`font-mono font-semibold ${portfolioData.summary.avg_return_pct >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                      {portfolioData.summary.avg_return_pct >= 0 ? "+" : ""}{portfolioData.summary.avg_return_pct.toFixed(1)}%
+                    </span></span>
+                    {portfolioData.summary.best_trade_pct != null && (
+                      <span>Best: <span className="font-mono font-semibold text-emerald-400">+{portfolioData.summary.best_trade_pct.toFixed(1)}%</span></span>
+                    )}
+                    {portfolioData.summary.worst_trade_pct != null && (
+                      <span>Worst: <span className="font-mono font-semibold text-red-400">{portfolioData.summary.worst_trade_pct.toFixed(1)}%</span></span>
+                    )}
+                  </div>
+
+                  {/* Position table */}
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-8"></TableHead>
+                        <TableHead>Ticker</TableHead>
+                        <TableHead>Trader</TableHead>
+                        <TableHead>Score</TableHead>
+                        <TableHead>Entry</TableHead>
+                        <TableHead>Exit</TableHead>
+                        <TableHead>Return</TableHead>
+                        <TableHead>P&L</TableHead>
+                        <TableHead>Status</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {portfolioData.positions.slice(0, 100).map((pos) => {
+                        const ratingCfg = RATING_CONFIG[pos.conviction_rating] || RATING_CONFIG.VERY_LOW;
+                        return (
+                          <TableRow key={pos.id}>
+                            <TableCell>
+                              {pos.source === "congress" ? (
+                                <Landmark className="w-4 h-4 text-blue-400" />
+                              ) : (
+                                <UserCheck className="w-4 h-4 text-purple-400" />
+                              )}
+                            </TableCell>
+                            <TableCell className="font-mono font-semibold">{pos.ticker}</TableCell>
+                            <TableCell>
+                              <div className="text-sm">{pos.politician}</div>
+                              {pos.party && <div className="text-[10px] text-muted-foreground">{pos.party}</div>}
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant="outline" className={`text-[10px] ${ratingCfg.color}`}>
+                                {pos.conviction_score}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-xs">
+                              <div className="font-mono">${pos.entry_price.toFixed(2)}</div>
+                              <div className="text-muted-foreground">{pos.entry_date ? new Date(pos.entry_date).toLocaleDateString() : "-"}</div>
+                            </TableCell>
+                            <TableCell className="text-xs">
+                              <div className="font-mono">${pos.exit_price.toFixed(2)}</div>
+                              <div className="text-muted-foreground">
+                                {pos.exit_date ? new Date(pos.exit_date).toLocaleDateString() : "now"}
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <span className={`font-mono font-semibold text-sm ${pos.return_pct >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                                {pos.return_pct >= 0 ? "+" : ""}{pos.return_pct.toFixed(1)}%
+                              </span>
+                            </TableCell>
+                            <TableCell>
+                              <span className={`font-mono text-sm ${pos.pnl >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                                {pos.pnl >= 0 ? "+" : ""}${pos.pnl.toLocaleString()}
+                              </span>
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant="outline" className={`text-[10px] ${
+                                pos.status === "holding"
+                                  ? "bg-blue-500/10 text-blue-400 border-blue-500/20"
+                                  : "bg-slate-500/10 text-slate-400 border-slate-500/20"
+                              }`}>
+                                {pos.status === "holding" ? "Holding" : "Closed"}
+                                {pos.holding_days != null && ` · ${pos.holding_days}d`}
+                              </Badge>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                  {portfolioData.positions.length > 100 && (
+                    <p className="text-xs text-muted-foreground text-center mt-2">
+                      Showing top 100 of {portfolioData.positions.length} positions
+                    </p>
+                  )}
                 </div>
               )}
             </CardContent>

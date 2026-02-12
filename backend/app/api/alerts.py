@@ -538,3 +538,358 @@ async def get_suspicious_trades(
         "total": len(scored_trades),
         "days_checked": days,
     }
+
+
+@router.get("/conviction-portfolio")
+async def conviction_portfolio_sim(
+    min_score: int = Query(default=50, ge=0, le=115),
+    days: int = Query(default=730, ge=30, le=1825),
+    db: AsyncSession = Depends(get_db),
+):
+    """Simulate a copy-trade portfolio: buy every trade above a conviction score
+    threshold, sell when the original trader sells.
+
+    Uses stored DB prices (no external API calls). Equal-weight $10,000 per position.
+    """
+    since = datetime.utcnow() - timedelta(days=days)
+    POSITION_SIZE = 10_000.0
+
+    # ── 1. Fetch congressional trades (buys + sells for exit matching) ──
+    congress_stmt = (
+        select(Trade)
+        .where(Trade.ticker.isnot(None))
+        .where(Trade.tx_date >= since)
+        .order_by(Trade.tx_date.asc())
+        .limit(10000)
+    )
+    congress_result = await db.execute(congress_stmt)
+    all_congress = congress_result.scalars().all()
+
+    congress_buys = [
+        t for t in all_congress
+        if t.tx_type == "purchase" and t.price_at_disclosure and t.price_at_disclosure > 0
+    ]
+
+    # Index congressional sales for exit matching
+    congress_sales: dict[tuple, list] = {}
+    for t in all_congress:
+        if t.tx_type in ("sale", "sale_full", "sale_partial") and t.tx_date:
+            key = (t.politician.lower(), t.ticker.upper())
+            congress_sales.setdefault(key, []).append(t)
+
+    # ── 2. Fetch insider trades (buys + sells) ──
+    insider_stmt = (
+        select(InsiderTrade)
+        .where(InsiderTrade.ticker.isnot(None))
+        .where(InsiderTrade.tx_date >= since)
+        .order_by(InsiderTrade.tx_date.asc())
+        .limit(10000)
+    )
+    insider_result = await db.execute(insider_stmt)
+    all_insiders = insider_result.scalars().all()
+
+    insider_buys = [
+        t for t in all_insiders
+        if t.tx_type == "purchase" and t.price_per_share and t.price_per_share > 0
+    ]
+
+    insider_sales: dict[tuple, list] = {}
+    for t in all_insiders:
+        if t.tx_type in ("sale", "sale_full", "sale_partial", "sell") and t.tx_date:
+            key = (t.insider_name.lower(), t.ticker.upper())
+            insider_sales.setdefault(key, []).append(t)
+
+    # ── 3. Pre-compute batch scoring data ──
+    cluster_stmt = (
+        select(Trade.ticker, func.count(func.distinct(Trade.politician)).label("pol_count"))
+        .where(Trade.ticker.isnot(None))
+        .where(Trade.tx_date >= since)
+        .group_by(Trade.ticker)
+    )
+    cluster_result = await db.execute(cluster_stmt)
+    cluster_map = {r.ticker: r.pol_count for r in cluster_result.all()}
+
+    insider_buying_stmt = (
+        select(InsiderTrade.ticker)
+        .where(InsiderTrade.tx_type == "purchase")
+        .where(InsiderTrade.ticker.isnot(None))
+        .where(InsiderTrade.tx_date >= since)
+        .distinct()
+    )
+    insider_buying_result = await db.execute(insider_buying_stmt)
+    insider_buying_tickers = {r[0] for r in insider_buying_result.all()}
+
+    fund_stmt = (
+        select(HedgeFundHolding.ticker)
+        .where(HedgeFundHolding.ticker.isnot(None))
+        .where(HedgeFundHolding.is_new_position == True)
+        .distinct()
+    )
+    fund_result = await db.execute(fund_stmt)
+    fund_tickers = {r[0] for r in fund_result.all()}
+
+    comm_result = await db.execute(select(PoliticianCommittee))
+    all_committees = comm_result.scalars().all()
+    politician_committees: dict[str, list[str]] = {}
+    for c in all_committees:
+        name = c.politician_name or ""
+        comm_name = c.committee_name or c.committee_id or ""
+        politician_committees.setdefault(name, []).append(comm_name)
+
+    politician_names = {t.politician for t in congress_buys}
+    politician_track_records: dict[str, dict] = {}
+    if politician_names:
+        try:
+            track_stmt = (
+                select(
+                    Trade.politician,
+                    func.count().label("total"),
+                    func.avg(Trade.return_since_disclosure).label("avg_return"),
+                    func.sum(
+                        case((Trade.return_since_disclosure > 0, 1), else_=0)
+                    ).label("wins"),
+                )
+                .where(Trade.politician.in_(list(politician_names)))
+                .where(Trade.tx_type == "purchase")
+                .where(Trade.return_since_disclosure.isnot(None))
+                .group_by(Trade.politician)
+            )
+            track_result = await db.execute(track_stmt)
+            for row in track_result.all():
+                if row.total and row.total > 0:
+                    politician_track_records[row.politician] = {
+                        "total": row.total,
+                        "avg_return": float(row.avg_return) if row.avg_return else 0,
+                        "win_rate": float(row.wins / row.total * 100),
+                    }
+        except Exception as e:
+            logger.warning(f"Failed to load track records for portfolio sim: {e}")
+
+    sell_stmt = (
+        select(Trade.ticker, func.count(func.distinct(Trade.politician)).label("sell_count"))
+        .where(Trade.ticker.isnot(None))
+        .where(Trade.tx_type.in_(["sale", "sale_full", "sale_partial"]))
+        .where(Trade.tx_date >= since)
+        .group_by(Trade.ticker)
+    )
+    sell_result = await db.execute(sell_stmt)
+    recent_sells_map = {r.ticker: r.sell_count for r in sell_result.all()}
+
+    # ── 4. Score each buy and simulate positions ──
+    positions = []
+
+    # Congressional buys
+    for t in congress_buys:
+        delay = (
+            (t.disclosure_date - t.tx_date).days
+            if t.disclosure_date and t.tx_date else None
+        )
+        trade_dict = {
+            "ticker": t.ticker,
+            "tx_type": t.tx_type,
+            "amount_low": t.amount_low,
+            "disclosure_delay_days": delay,
+        }
+        result = score_trade_conviction(
+            trade=trade_dict,
+            committees=politician_committees.get(t.politician),
+            cluster_count=cluster_map.get(t.ticker, 0),
+            insider_also_buying=t.ticker in insider_buying_tickers,
+            fund_also_holds=t.ticker in fund_tickers,
+            politician_track_record=politician_track_records.get(t.politician),
+            recent_sells_count=recent_sells_map.get(t.ticker, 0),
+        )
+        if result["score"] < min_score:
+            continue
+
+        entry_price = t.price_at_disclosure
+        shares = POSITION_SIZE / entry_price
+
+        # Find exit: first sale of same ticker by same politician after buy
+        key = (t.politician.lower(), t.ticker.upper())
+        exit_trade = None
+        for sale in congress_sales.get(key, []):
+            if sale.tx_date and t.tx_date and sale.tx_date > t.tx_date:
+                exit_trade = sale
+                break
+
+        if exit_trade and exit_trade.price_at_disclosure and exit_trade.price_at_disclosure > 0:
+            exit_price = exit_trade.price_at_disclosure
+            return_pct = (exit_price - entry_price) / entry_price * 100
+            current_value = shares * exit_price
+            holding_days = (
+                (exit_trade.tx_date - t.tx_date).days
+                if exit_trade.tx_date and t.tx_date else None
+            )
+            status = "closed"
+            exit_date = exit_trade.tx_date.isoformat() if exit_trade.tx_date else None
+        elif t.price_current and t.price_current > 0:
+            exit_price = t.price_current
+            return_pct = (
+                t.return_since_disclosure
+                if t.return_since_disclosure is not None
+                else (exit_price - entry_price) / entry_price * 100
+            )
+            current_value = shares * exit_price
+            holding_days = (datetime.utcnow() - t.tx_date).days if t.tx_date else None
+            status = "holding"
+            exit_date = None
+        else:
+            continue
+
+        positions.append({
+            "id": f"c-{t.id}",
+            "source": "congress",
+            "politician": t.politician,
+            "party": t.party,
+            "ticker": t.ticker,
+            "conviction_score": result["score"],
+            "conviction_rating": result["rating"],
+            "entry_date": t.tx_date.isoformat() if t.tx_date else None,
+            "entry_price": round(entry_price, 2),
+            "exit_date": exit_date,
+            "exit_price": round(exit_price, 2),
+            "return_pct": round(return_pct, 2),
+            "invested": round(POSITION_SIZE, 0),
+            "current_value": round(current_value, 0),
+            "pnl": round(current_value - POSITION_SIZE, 0),
+            "holding_days": holding_days,
+            "status": status,
+        })
+
+    # Insider buys
+    for t in insider_buys:
+        delay = (
+            (t.filing_date - t.tx_date).days
+            if t.filing_date and t.tx_date else None
+        )
+        trade_dict = {
+            "ticker": t.ticker,
+            "tx_type": t.tx_type,
+            "amount_low": t.total_value,
+            "disclosure_delay_days": delay,
+        }
+        result = score_trade_conviction(
+            trade=trade_dict,
+            committees=None,
+            cluster_count=cluster_map.get(t.ticker, 0),
+            insider_also_buying=t.ticker in insider_buying_tickers,
+            fund_also_holds=t.ticker in fund_tickers,
+            politician_track_record=None,
+            recent_sells_count=recent_sells_map.get(t.ticker, 0),
+        )
+        if result["score"] < min_score:
+            continue
+
+        entry_price = t.price_per_share
+        shares = POSITION_SIZE / entry_price
+
+        # Find exit: first sale of same ticker by same insider after buy
+        key = (t.insider_name.lower(), t.ticker.upper())
+        exit_trade = None
+        for sale in insider_sales.get(key, []):
+            if sale.tx_date and t.tx_date and sale.tx_date > t.tx_date:
+                exit_trade = sale
+                break
+
+        if exit_trade and exit_trade.price_per_share and exit_trade.price_per_share > 0:
+            exit_price = exit_trade.price_per_share
+            return_pct = (exit_price - entry_price) / entry_price * 100
+            current_value = shares * exit_price
+            holding_days = (
+                (exit_trade.tx_date - t.tx_date).days
+                if exit_trade.tx_date and t.tx_date else None
+            )
+            status = "closed"
+            exit_date = exit_trade.tx_date.isoformat() if exit_trade.tx_date else None
+        elif t.price_current and t.price_current > 0:
+            exit_price = t.price_current
+            return_pct = (
+                t.return_since_filing
+                if t.return_since_filing is not None
+                else (exit_price - entry_price) / entry_price * 100
+            )
+            current_value = shares * exit_price
+            holding_days = (datetime.utcnow() - t.tx_date).days if t.tx_date else None
+            status = "holding"
+            exit_date = None
+        else:
+            continue
+
+        positions.append({
+            "id": f"i-{t.id}",
+            "source": "insider",
+            "politician": t.insider_name,
+            "party": None,
+            "ticker": t.ticker,
+            "conviction_score": result["score"],
+            "conviction_rating": result["rating"],
+            "entry_date": t.tx_date.isoformat() if t.tx_date else None,
+            "entry_price": round(entry_price, 2),
+            "exit_date": exit_date,
+            "exit_price": round(exit_price, 2),
+            "return_pct": round(return_pct, 2),
+            "invested": round(POSITION_SIZE, 0),
+            "current_value": round(current_value, 0),
+            "pnl": round(current_value - POSITION_SIZE, 0),
+            "holding_days": holding_days,
+            "status": status,
+        })
+
+    # ── 5. Portfolio summary ──
+    if not positions:
+        return {
+            "summary": {
+                "total_positions": 0,
+                "closed_positions": 0,
+                "open_positions": 0,
+                "total_invested": 0,
+                "total_current_value": 0,
+                "total_pnl": 0,
+                "total_return_pct": 0,
+                "win_rate": 0,
+                "avg_return_pct": 0,
+                "best_trade_pct": None,
+                "worst_trade_pct": None,
+                "avg_holding_days": None,
+            },
+            "positions": [],
+            "min_score": min_score,
+            "days": days,
+        }
+
+    total_invested = sum(p["invested"] for p in positions)
+    total_value = sum(p["current_value"] for p in positions)
+    total_pnl = total_value - total_invested
+    total_return_pct = (total_pnl / total_invested * 100) if total_invested > 0 else 0
+
+    winning = [p for p in positions if p["return_pct"] > 0]
+    win_rate = (len(winning) / len(positions) * 100) if positions else 0
+    avg_return = sum(p["return_pct"] for p in positions) / len(positions)
+
+    closed = [p for p in positions if p["status"] == "closed"]
+    holding = [p for p in positions if p["status"] == "holding"]
+    avg_holding = (
+        sum(p["holding_days"] or 0 for p in positions) / len(positions)
+        if positions else 0
+    )
+
+    return {
+        "summary": {
+            "total_positions": len(positions),
+            "closed_positions": len(closed),
+            "open_positions": len(holding),
+            "total_invested": round(total_invested, 0),
+            "total_current_value": round(total_value, 0),
+            "total_pnl": round(total_pnl, 0),
+            "total_return_pct": round(total_return_pct, 2),
+            "win_rate": round(win_rate, 1),
+            "avg_return_pct": round(avg_return, 2),
+            "best_trade_pct": round(max(p["return_pct"] for p in positions), 2),
+            "worst_trade_pct": round(min(p["return_pct"] for p in positions), 2),
+            "avg_holding_days": round(avg_holding, 0),
+        },
+        "positions": sorted(positions, key=lambda p: p["return_pct"], reverse=True),
+        "min_score": min_score,
+        "days": days,
+    }

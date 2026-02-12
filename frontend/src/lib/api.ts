@@ -336,6 +336,46 @@ export interface SuspiciousResponse {
   days_checked: number;
 }
 
+export interface ConvictionPortfolioPosition {
+  id: string;
+  source: "congress" | "insider";
+  politician: string;
+  party: string | null;
+  ticker: string;
+  conviction_score: number;
+  conviction_rating: "VERY_HIGH" | "HIGH" | "MEDIUM" | "LOW" | "VERY_LOW";
+  entry_date: string | null;
+  entry_price: number;
+  exit_date: string | null;
+  exit_price: number;
+  return_pct: number;
+  invested: number;
+  current_value: number;
+  pnl: number;
+  holding_days: number | null;
+  status: "closed" | "holding";
+}
+
+export interface ConvictionPortfolioResponse {
+  summary: {
+    total_positions: number;
+    closed_positions: number;
+    open_positions: number;
+    total_invested: number;
+    total_current_value: number;
+    total_pnl: number;
+    total_return_pct: number;
+    win_rate: number;
+    avg_return_pct: number;
+    best_trade_pct: number | null;
+    worst_trade_pct: number | null;
+    avg_holding_days: number | null;
+  };
+  positions: ConvictionPortfolioPosition[];
+  min_score: number;
+  days: number;
+}
+
 export interface AlertsSummary {
   periods: Record<string, { congress_trades: number; insider_trades: number; total: number }>;
   hot_tickers_24h: { ticker: string; count: number }[];
@@ -470,5 +510,12 @@ export const api = {
   getSuspiciousTrades: (days?: number) => {
     const qs = days ? `?days=${days}&limit=200` : "?limit=200";
     return fetchApi<SuspiciousResponse>(`/api/v1/alerts/suspicious${qs}`);
+  },
+  getConvictionPortfolio: (minScore?: number, days?: number) => {
+    const params = new URLSearchParams();
+    if (minScore !== undefined) params.set("min_score", String(minScore));
+    if (days) params.set("days", String(days));
+    const qs = params.toString() ? `?${params.toString()}` : "";
+    return fetchApi<ConvictionPortfolioResponse>(`/api/v1/alerts/conviction-portfolio${qs}`);
   },
 };

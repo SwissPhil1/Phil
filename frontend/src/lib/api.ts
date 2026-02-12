@@ -345,7 +345,10 @@ export const api = {
   },
 
   // Politicians
-  getPoliticians: () => fetchApi<Politician[]>("/api/v1/politicians"),
+  getPoliticians: (params?: Record<string, string>) => {
+    const qs = params ? "?" + new URLSearchParams(params).toString() : "";
+    return fetchApi<Politician[]>(`/api/v1/politicians${qs}`);
+  },
   getPolitician: (name: string) =>
     fetchApi<Politician & { recent_trades: Trade[]; total_buys?: number; total_sells?: number }>(`/api/v1/politicians/${encodeURIComponent(name)}`),
   getPoliticianCommittees: (name: string) =>

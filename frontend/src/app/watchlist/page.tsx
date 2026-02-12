@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, type Trade, type Politician } from "@/lib/api";
-import { useWatchlist } from "@/lib/hooks";
+import { useWatchlist, useApiData } from "@/lib/hooks";
 import { useMultiApiData } from "@/lib/hooks";
 import { ErrorState, RefreshIndicator } from "@/components/error-state";
 import {
@@ -55,13 +55,21 @@ export default function WatchlistPage() {
     trades: Trade[];
   }>(
     {
-      politicians: () => api.getPoliticians(),
+      politicians: () => api.getPoliticians({ limit: "200" }),
       trades: () => api.getRecentTrades(),
     },
     { refreshInterval: 60 }
   );
 
-  const allPoliticians = data.politicians ?? [];
+  // Server-side search for politician add panel
+  const searchActive = addMode === "politician" && search.trim().length >= 2;
+  const { data: searchPoliticians } = useApiData<Politician[]>(
+    () => api.getPoliticians({ search: search.trim(), limit: "50" }),
+    { enabled: searchActive, deps: [search] }
+  );
+
+  const basePoliticians = data.politicians ?? [];
+  const allPoliticians = searchActive && searchPoliticians ? searchPoliticians : basePoliticians;
   const allTrades = data.trades ?? [];
 
   // Filter trades for watched politicians and tickers

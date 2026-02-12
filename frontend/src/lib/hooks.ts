@@ -9,6 +9,8 @@ interface UseApiDataOptions {
   refreshInterval?: number;
   /** Whether to fetch on mount. Default true. */
   enabled?: boolean;
+  /** Re-fetch when these values change (serialized with JSON.stringify). */
+  deps?: unknown[];
 }
 
 interface UseApiDataResult<T> {
@@ -56,7 +58,10 @@ export function useApiData<T>(
     }
   }, [data]);
 
-  // Initial fetch
+  // Serialized deps key for triggering re-fetches
+  const depsKey = options.deps ? JSON.stringify(options.deps) : "";
+
+  // Initial fetch + re-fetch when deps change
   useEffect(() => {
     mountedRef.current = true;
     if (enabled) {
@@ -66,7 +71,7 @@ export function useApiData<T>(
       mountedRef.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled]);
+  }, [enabled, depsKey]);
 
   // Auto-refresh
   useEffect(() => {

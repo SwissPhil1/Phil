@@ -87,8 +87,8 @@ async def get_insider_buys(
 
     return [
         {
-            "insider": t.insider_name,
-            "title": t.insider_title,
+            "insider_name": t.insider_name,
+            "insider_title": t.insider_title,
             "company": t.issuer_name,
             "ticker": t.ticker,
             "tx_date": t.tx_date,

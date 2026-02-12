@@ -26,6 +26,7 @@ from app.models.database import (
     Trade, Politician, InsiderTrade, HedgeFundHolding,
     PoliticianCommittee, async_session,
 )
+from app.config import DATABASE_URL
 
 logger = logging.getLogger(__name__)
 
@@ -180,12 +181,20 @@ async def detect_trade_clusters(
     """
     since = datetime.utcnow() - timedelta(days=days)
 
+    # Use dialect-appropriate string aggregation
+    _is_pg = "postgresql" in DATABASE_URL or "postgres" in DATABASE_URL
+    if _is_pg:
+        from sqlalchemy import literal_column
+        politicians_agg = func.string_agg(Trade.politician.distinct(), literal_column("','")).label("politicians")
+    else:
+        politicians_agg = func.group_concat(Trade.politician.distinct()).label("politicians")
+
     stmt = (
         select(
             Trade.ticker,
             Trade.tx_type,
             func.count(func.distinct(Trade.politician)).label("politician_count"),
-            func.group_concat(func.distinct(Trade.politician)).label("politicians"),
+            politicians_agg,
             func.min(Trade.tx_date).label("first_trade"),
             func.max(Trade.tx_date).label("last_trade"),
         )
@@ -563,9 +572,22 @@ def score_trade_conviction(
 
 async def generate_all_signals() -> dict:
     """Generate all smart signals across data sources."""
-    async with async_session() as session:
-        clusters = await detect_trade_clusters(session)
-        cross_signals = await detect_cross_source_signals(session)
+    clusters = []
+    cross_signals = []
+
+    try:
+        async with async_session() as session:
+            try:
+                clusters = await detect_trade_clusters(session)
+            except Exception as e:
+                logger.warning(f"Failed to detect trade clusters: {e}")
+
+            try:
+                cross_signals = await detect_cross_source_signals(session)
+            except Exception as e:
+                logger.warning(f"Failed to detect cross-source signals: {e}")
+    except Exception as e:
+        logger.error(f"Failed to create DB session for signals: {e}")
 
     return {
         "timestamp": datetime.utcnow().isoformat(),

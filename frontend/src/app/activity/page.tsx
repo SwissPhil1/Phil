@@ -99,7 +99,7 @@ export default function ActivityFeedPage() {
 
   const { data, loading, error, retry } = useApiData(
     () => api.getActivityFeed(params),
-    { refreshInterval: 60 }
+    { refreshInterval: 60, deps: [page, sourceFilter, tickerFilter] }
   );
 
   if (error) return <ErrorState error={error} onRetry={retry} />;

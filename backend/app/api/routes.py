@@ -126,14 +126,17 @@ async def get_recent_trades(
 async def get_politicians(
     chamber: str | None = None,
     party: str | None = None,
+    search: str | None = Query(default=None, description="Search by politician name"),
     sort_by: str = Query(default="total_trades", pattern="^(total_trades|avg_return|win_rate)$"),
     min_trades: int = Query(default=1, ge=1),
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=200, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
 ):
     """List politicians with their trading stats."""
     stmt = select(Politician).where(Politician.total_trades >= min_trades)
 
+    if search:
+        stmt = stmt.where(Politician.name.ilike(f"%{search}%"))
     if chamber:
         stmt = stmt.where(Politician.chamber == chamber.lower())
     if party:

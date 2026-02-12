@@ -54,12 +54,20 @@ export default function BacktesterPage() {
   const [investment, setInvestment] = useState(10000);
   const [strategy, setStrategy] = useState<"eq" | "conv">("eq");
 
-  // Load all politicians for the picker
+  // Load politicians with server-side search
+  const searchParams = useMemo(() => {
+    const params: Record<string, string> = { limit: "200" };
+    const q = search.trim();
+    if (q.length >= 2) params.search = q;
+    return params;
+  }, [search]);
+
   const { data: politicians, loading, error, retry } = useApiData<Politician[]>(
-    () => api.getPoliticians(),
+    () => api.getPoliticians(searchParams),
+    { deps: [searchParams.search || ""] }
   );
 
-  // Filter politicians by search
+  // Client-side filter for additional refinement
   const filtered = useMemo(() => {
     if (!politicians) return [];
     const q = search.toLowerCase().trim();

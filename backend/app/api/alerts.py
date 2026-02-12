@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import Trade, InsiderTrade, get_db
@@ -16,25 +16,43 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/alerts", tags=["Alerts"])
 
 
+def _trade_date_filter(since: datetime):
+    """Match trades where ANY date (disclosure, tx, or created) is recent."""
+    return or_(
+        Trade.disclosure_date >= since,
+        Trade.tx_date >= since,
+        Trade.created_at >= since,
+    )
+
+
+def _insider_date_filter(since: datetime):
+    """Match insider trades where ANY date (filing, tx, or created) is recent."""
+    return or_(
+        InsiderTrade.filing_date >= since,
+        InsiderTrade.tx_date >= since,
+        InsiderTrade.created_at >= since,
+    )
+
+
 @router.get("/recent")
 async def get_recent_alerts(
-    hours: int = Query(default=24, ge=1, le=168),
+    hours: int = Query(default=24, ge=1, le=8760),
     limit: int = Query(default=50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
 ):
     """Get recent trade alerts from the last N hours (default 24h).
 
-    Returns trades disclosed recently, sorted by disclosure date.
+    Returns trades disclosed, transacted, or ingested recently.
     Includes both congressional trades and insider trades.
     """
     since = datetime.utcnow() - timedelta(hours=hours)
 
-    # Congressional trades
+    # Congressional trades - match on any available date
     congress_stmt = (
         select(Trade)
-        .where(Trade.disclosure_date >= since)
+        .where(_trade_date_filter(since))
         .where(Trade.ticker.isnot(None))
-        .order_by(Trade.disclosure_date.desc())
+        .order_by(func.coalesce(Trade.disclosure_date, Trade.tx_date, Trade.created_at).desc())
         .limit(limit)
     )
     congress_result = await db.execute(congress_stmt)
@@ -43,9 +61,9 @@ async def get_recent_alerts(
     # Insider trades
     insider_stmt = (
         select(InsiderTrade)
-        .where(InsiderTrade.filing_date >= since)
+        .where(_insider_date_filter(since))
         .where(InsiderTrade.ticker.isnot(None))
-        .order_by(InsiderTrade.filing_date.desc())
+        .order_by(func.coalesce(InsiderTrade.filing_date, InsiderTrade.tx_date, InsiderTrade.created_at).desc())
         .limit(limit)
     )
     insider_result = await db.execute(insider_stmt)
@@ -94,8 +112,8 @@ async def get_recent_alerts(
             "return_since": t.return_since_filing,
         })
 
-    # Sort all alerts by disclosure date
-    alerts.sort(key=lambda a: a.get("disclosure_date") or "", reverse=True)
+    # Sort all alerts by most relevant date
+    alerts.sort(key=lambda a: a.get("disclosure_date") or a.get("tx_date") or "", reverse=True)
     return {"alerts": alerts[:limit], "total": len(alerts), "hours": hours}
 
 
@@ -122,13 +140,13 @@ async def alerts_summary(db: AsyncSession = Depends(get_db)):
         since = now - delta
         congress_count = (await db.execute(
             select(func.count()).select_from(Trade)
-            .where(Trade.disclosure_date >= since)
+            .where(_trade_date_filter(since))
             .where(Trade.ticker.isnot(None))
         )).scalar() or 0
 
         insider_count = (await db.execute(
             select(func.count()).select_from(InsiderTrade)
-            .where(InsiderTrade.filing_date >= since)
+            .where(_insider_date_filter(since))
             .where(InsiderTrade.ticker.isnot(None))
         )).scalar() or 0
 
@@ -138,11 +156,11 @@ async def alerts_summary(db: AsyncSession = Depends(get_db)):
             "total": congress_count + insider_count,
         }
 
-    # Most active tickers in last 24h
+    # Most active tickers in last 24h (by any date)
     since_24h = now - timedelta(hours=24)
     hot_tickers = await db.execute(
         select(Trade.ticker, func.count().label("count"))
-        .where(Trade.disclosure_date >= since_24h)
+        .where(_trade_date_filter(since_24h))
         .where(Trade.ticker.isnot(None))
         .group_by(Trade.ticker)
         .order_by(func.count().desc())
@@ -180,7 +198,9 @@ async def get_activity_feed(
         )
         if ticker:
             stmt = stmt.where(Trade.ticker == ticker.upper())
-        stmt = stmt.order_by(Trade.disclosure_date.desc()).offset(offset).limit(page_size)
+        stmt = stmt.order_by(
+            func.coalesce(Trade.disclosure_date, Trade.tx_date, Trade.created_at).desc()
+        ).offset(offset).limit(page_size)
         result = await db.execute(stmt)
         for t in result.scalars().all():
             action = "bought" if t.tx_type == "purchase" else "sold"
@@ -194,7 +214,7 @@ async def get_activity_feed(
                 "description": t.asset_description,
                 "amount_low": t.amount_low,
                 "amount_high": t.amount_high,
-                "date": t.disclosure_date.isoformat() if t.disclosure_date else None,
+                "date": (t.disclosure_date or t.tx_date or t.created_at).isoformat() if (t.disclosure_date or t.tx_date or t.created_at) else None,
                 "tx_date": t.tx_date.isoformat() if t.tx_date else None,
                 "return_pct": t.return_since_disclosure,
                 "price_at_trade": t.price_at_disclosure,
@@ -208,7 +228,9 @@ async def get_activity_feed(
         )
         if ticker:
             stmt = stmt.where(InsiderTrade.ticker == ticker.upper())
-        stmt = stmt.order_by(InsiderTrade.filing_date.desc()).offset(offset).limit(page_size)
+        stmt = stmt.order_by(
+            func.coalesce(InsiderTrade.filing_date, InsiderTrade.tx_date, InsiderTrade.created_at).desc()
+        ).offset(offset).limit(page_size)
         result = await db.execute(stmt)
         for t in result.scalars().all():
             action = "bought" if t.tx_type == "purchase" else "sold"
@@ -222,7 +244,7 @@ async def get_activity_feed(
                 "description": t.issuer_name,
                 "amount_low": t.total_value,
                 "amount_high": None,
-                "date": t.filing_date.isoformat() if t.filing_date else None,
+                "date": (t.filing_date or t.tx_date or t.created_at).isoformat() if (t.filing_date or t.tx_date or t.created_at) else None,
                 "tx_date": t.tx_date.isoformat() if t.tx_date else None,
                 "return_pct": t.return_since_filing,
                 "price_at_trade": t.price_per_share,

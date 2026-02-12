@@ -197,9 +197,22 @@ async def run_backtest(
     ),
 ):
     """Backtest the conviction scoring system against real trade outcomes."""
-    return await backtest_conviction_scores(
-        days=days,
-        forward_days=forward_days,
-        max_trades=max_trades,
-        return_mode=return_mode,
-    )
+    try:
+        return await backtest_conviction_scores(
+            days=days,
+            forward_days=forward_days,
+            max_trades=max_trades,
+            return_mode=return_mode,
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Backtest failed: {e}")
+        return {
+            "backtest_params": {"days": days, "forward_days": forward_days, "max_trades": max_trades},
+            "total_trades_checked": 0,
+            "trades_with_returns": 0,
+            "exits_found": 0,
+            "still_holding": 0,
+            "score_bucket_analysis": {},
+            "score_validation": {"error": f"Backtest unavailable: {str(e)[:100]}"},
+        }

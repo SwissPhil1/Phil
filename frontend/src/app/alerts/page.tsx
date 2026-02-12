@@ -91,10 +91,10 @@ function AlertRow({ alert }: { alert: AlertItem }) {
 }
 
 export default function AlertsPage() {
-  const [hours, setHours] = useState(24);
+  const [hours, setHours] = useState(168);
   const { data: alertsData, loading, error, retry } = useApiData(
     () => api.getRecentAlerts(hours),
-    { refreshInterval: 60 }
+    { refreshInterval: 60, deps: [hours] }
   );
   const { data: summary } = useApiData(() => api.getAlertsSummary(), { refreshInterval: 120 });
 
@@ -117,14 +117,14 @@ export default function AlertsPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          {[6, 24, 48, 168].map((h) => (
+          {[24, 168, 720, 2160, 8760].map((h) => (
             <Button
               key={h}
               variant={hours === h ? "default" : "outline"}
               size="sm"
               onClick={() => setHours(h)}
             >
-              {h < 24 ? `${h}h` : `${h / 24}d`}
+              {h < 24 ? `${h}h` : h <= 720 ? `${h / 24}d` : h <= 2160 ? `${Math.round(h / 720)}mo` : "1y"}
             </Button>
           ))}
         </div>

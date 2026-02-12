@@ -12,6 +12,7 @@ from app.models.schemas import AlertConfig, NewTradeAlert
 from app.services.alerts import check_and_generate_alerts
 from app.services.signals import (
     check_committee_overlap,
+    score_trade_conviction,
     TICKER_SECTORS,
     COMMITTEE_SECTORS,
 )
@@ -299,68 +300,72 @@ async def get_activity_feed(
 
 @router.get("/suspicious")
 async def get_suspicious_trades(
-    days: int = Query(default=90, ge=7, le=365),
-    limit: int = Query(default=50, ge=1, le=200),
+    days: int = Query(default=90, ge=1, le=730),
+    limit: int = Query(default=100, ge=1, le=500),
+    min_score: int = Query(default=10, ge=0, le=115),
     db: AsyncSession = Depends(get_db),
 ):
-    """Identify the most suspicious/high-conviction trades.
+    """Identify the most suspicious/high-conviction trades using conviction scoring.
 
-    Scores recent congressional purchases by:
-    - Committee overlap (trading in sectors their committee oversees)
-    - Trade clustering (multiple politicians buying the same stock)
-    - Cross-source confirmation (insiders or hedge funds also buying)
-    - Trade size (larger amounts = higher conviction)
-    - Disclosure delay (late disclosures = more suspicious)
+    Scores ALL recent trades (congressional + insider) using the same conviction
+    scoring system from signals.py with 9 factors:
+    - Position size, committee overlap, disclosure speed, political clustering,
+      cross-source confirmation, historical accuracy, contrarian signal,
+      size anomaly, small-cap committee bonus.
 
-    Returns trades ranked by suspicion score, highest first.
+    Returns trades ranked by conviction score, highest first.
     """
     since = datetime.utcnow() - timedelta(days=days)
 
-    # 1. Get recent congressional purchases
-    trades_stmt = (
+    # 1. Fetch congressional trades (ALL tx_types, not just purchases)
+    congress_stmt = (
         select(Trade)
-        .where(Trade.tx_type == "purchase")
         .where(Trade.ticker.isnot(None))
-        .where(or_(
-            Trade.tx_date >= since,
-            Trade.disclosure_date >= since,
-            Trade.created_at >= since,
-        ))
+        .where(_trade_date_filter(since))
         .order_by(func.coalesce(Trade.tx_date, Trade.disclosure_date).desc())
-        .limit(500)
+        .limit(2000)
     )
-    trades_result = await db.execute(trades_stmt)
-    trades = trades_result.scalars().all()
+    congress_result = await db.execute(congress_stmt)
+    congress_trades = congress_result.scalars().all()
 
-    # 2. Pre-compute cluster counts per ticker (how many distinct politicians bought)
+    # 2. Fetch insider trades
+    insider_stmt = (
+        select(InsiderTrade)
+        .where(InsiderTrade.ticker.isnot(None))
+        .where(_insider_date_filter(since))
+        .order_by(func.coalesce(InsiderTrade.filing_date, InsiderTrade.tx_date).desc())
+        .limit(2000)
+    )
+    insider_result = await db.execute(insider_stmt)
+    insider_trades_list = insider_result.scalars().all()
+
+    # 3. Pre-compute batch data for scoring
+
+    # 3a. Cluster map: ticker -> distinct politician count (all tx_types)
     cluster_stmt = (
         select(
             Trade.ticker,
             func.count(func.distinct(Trade.politician)).label("pol_count"),
         )
-        .where(Trade.tx_type == "purchase")
         .where(Trade.ticker.isnot(None))
-        .where(or_(Trade.tx_date >= since, Trade.disclosure_date >= since))
+        .where(_trade_date_filter(since))
         .group_by(Trade.ticker)
     )
     cluster_result = await db.execute(cluster_stmt)
     cluster_map = {r.ticker: r.pol_count for r in cluster_result.all()}
 
-    # 3. Pre-compute insider buying tickers
-    insider_stmt = (
+    # 3b. Insider buying tickers (for cross-source signal)
+    insider_buying_stmt = (
         select(InsiderTrade.ticker)
         .where(InsiderTrade.tx_type == "purchase")
         .where(InsiderTrade.ticker.isnot(None))
-        .where(or_(
-            InsiderTrade.filing_date >= since,
-            InsiderTrade.tx_date >= since,
-        ))
+        .where(_insider_date_filter(since))
         .distinct()
     )
-    insider_result = await db.execute(insider_stmt)
-    insider_tickers = {r[0] for r in insider_result.all()}
+    insider_buying_result = await db.execute(insider_buying_stmt)
+    insider_buying_tickers = {r[0] for r in insider_buying_result.all()}
 
-    # 4. Pre-compute hedge fund held tickers
+    # 3c. Fund new-position tickers
     fund_stmt = (
         select(HedgeFundHolding.ticker)
         .where(HedgeFundHolding.ticker.isnot(None))
@@ -370,7 +375,7 @@ async def get_suspicious_trades(
     fund_result = await db.execute(fund_stmt)
     fund_tickers = {r[0] for r in fund_result.all()}
 
-    # 5. Pre-load committee assignments per politician
+    # 3d. Committee assignments per politician
     comm_stmt = select(PoliticianCommittee)
     comm_result = await db.execute(comm_stmt)
     all_committees = comm_result.scalars().all()
@@ -380,70 +385,78 @@ async def get_suspicious_trades(
         comm_name = c.committee_name or c.committee_id or ""
         politician_committees.setdefault(name, []).append(comm_name)
 
-    # 6. Score each trade
+    # 3e. Batch track records (single query instead of N)
+    politician_names = {t.politician for t in congress_trades}
+    politician_track_records: dict[str, dict] = {}
+    if politician_names:
+        track_stmt = (
+            select(
+                Trade.politician,
+                func.count().label("total"),
+                func.avg(Trade.return_since_disclosure).label("avg_return"),
+                func.sum(
+                    func.case((Trade.return_since_disclosure > 0, 1), else_=0)
+                ).label("wins"),
+            )
+            .where(Trade.politician.in_(list(politician_names)))
+            .where(Trade.tx_type == "purchase")
+            .where(Trade.return_since_disclosure.isnot(None))
+            .group_by(Trade.politician)
+        )
+        track_result = await db.execute(track_stmt)
+        for row in track_result.all():
+            if row.total and row.total > 0:
+                politician_track_records[row.politician] = {
+                    "total": row.total,
+                    "avg_return": float(row.avg_return) if row.avg_return else 0,
+                    "win_rate": float(row.wins / row.total * 100),
+                }
+
+    # 3f. Recent sells per ticker (for contrarian signal)
+    sell_stmt = (
+        select(
+            Trade.ticker,
+            func.count(func.distinct(Trade.politician)).label("sell_count"),
+        )
+        .where(Trade.ticker.isnot(None))
+        .where(Trade.tx_type.in_(["sale", "sale_full", "sale_partial"]))
+        .where(_trade_date_filter(since))
+        .group_by(Trade.ticker)
+    )
+    sell_result = await db.execute(sell_stmt)
+    recent_sells_map = {r.ticker: r.sell_count for r in sell_result.all()}
+
+    # 4. Score each trade using the conviction scoring system
+
     scored_trades = []
-    for t in trades:
-        score = 0
-        flags: list[str] = []
 
-        # Committee overlap (0-30 points)
-        pol_comms = politician_committees.get(t.politician, [])
-        overlap = check_committee_overlap(pol_comms, t.ticker) if pol_comms else None
-        if overlap:
-            if overlap["flag"] == "HIGH":
-                score += 30
-                flags.append(f"Committee overlap: {overlap['committee']} oversees {overlap['stock_sector']}")
-            else:
-                score += 15
-                flags.append(f"Broad oversight: {overlap['committee']}")
+    # Score congressional trades
+    for t in congress_trades:
+        delay = (
+            (t.disclosure_date - t.tx_date).days
+            if t.disclosure_date and t.tx_date else None
+        )
+        trade_dict = {
+            "ticker": t.ticker,
+            "tx_type": t.tx_type,
+            "amount_low": t.amount_low,
+            "disclosure_delay_days": delay,
+        }
+        result = score_trade_conviction(
+            trade=trade_dict,
+            committees=politician_committees.get(t.politician) or None,
+            cluster_count=cluster_map.get(t.ticker, 0),
+            insider_also_buying=t.ticker in insider_buying_tickers,
+            fund_also_holds=t.ticker in fund_tickers,
+            politician_track_record=politician_track_records.get(t.politician),
+            recent_sells_count=recent_sells_map.get(t.ticker, 0),
+        )
 
-        # Cluster signal (0-25 points)
-        cluster_count = cluster_map.get(t.ticker, 1)
-        if cluster_count >= 5:
-            score += 25
-            flags.append(f"{cluster_count} politicians bought this stock")
-        elif cluster_count >= 3:
-            score += 15
-            flags.append(f"{cluster_count} politicians bought this stock")
-        elif cluster_count >= 2:
-            score += 5
-
-        # Cross-source: insider also buying (0-20 points)
-        if t.ticker in insider_tickers:
-            score += 20
-            flags.append("Corporate insiders also buying")
-
-        # Cross-source: hedge fund new position (0-15 points)
-        if t.ticker in fund_tickers:
-            score += 15
-            flags.append("Hedge fund new position")
-
-        # Trade size (0-15 points)
-        if t.amount_low and t.amount_low >= 500000:
-            score += 15
-            flags.append(f"Large position: ${t.amount_low:,.0f}+")
-        elif t.amount_low and t.amount_low >= 100000:
-            score += 10
-        elif t.amount_low and t.amount_low >= 50000:
-            score += 5
-
-        # Disclosure delay (0-10 points) - late disclosures more suspicious
-        if t.disclosure_delay_days and t.disclosure_delay_days > 45:
-            score += 10
-            flags.append(f"Disclosed {t.disclosure_delay_days} days late")
-        elif t.disclosure_delay_days and t.disclosure_delay_days > 30:
-            score += 5
-
-        # Small/mid cap bonus (not mega cap = more unusual)
-        sector = TICKER_SECTORS.get(t.ticker)
-        if sector and t.ticker not in {
-            "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK-B"
-        }:
-            score += 5
-
-        if score >= 10:  # Only include trades with some signal
+        if result["score"] >= min_score:
+            action = "bought" if t.tx_type == "purchase" else "sold"
             scored_trades.append({
-                "id": f"suspicious-{t.id}",
+                "id": f"congress-{t.id}",
+                "source": "congress",
                 "politician": t.politician,
                 "party": t.party,
                 "state": t.state,
@@ -453,32 +466,72 @@ async def get_suspicious_trades(
                 "amount_high": t.amount_high,
                 "tx_date": t.tx_date.isoformat() if t.tx_date else None,
                 "disclosure_date": t.disclosure_date.isoformat() if t.disclosure_date else None,
-                "disclosure_delay_days": t.disclosure_delay_days,
+                "disclosure_delay_days": delay,
+                "tx_type": t.tx_type,
+                "action": action,
                 "return_since": t.return_since_disclosure,
-                "price_at_trade": t.price_at_disclosure,
-                "price_current": t.price_current,
-                "suspicion_score": score,
-                "flags": flags,
-                "cluster_count": cluster_count,
-                "insider_also_buying": t.ticker in insider_tickers,
+                "conviction_score": result["score"],
+                "conviction_rating": result["rating"],
+                "factors": result["factors"],
+                "committee_overlap": result["committee_overlap"],
+                "cluster_count": cluster_map.get(t.ticker, 0),
+                "insider_also_buying": t.ticker in insider_buying_tickers,
                 "fund_also_holds": t.ticker in fund_tickers,
-                "committee_overlap": overlap,
-                "sector": sector,
             })
 
-    # Sort by suspicion score (highest first)
-    scored_trades.sort(key=lambda x: x["suspicion_score"], reverse=True)
+    # Score insider trades
+    for t in insider_trades_list:
+        delay = (
+            (t.filing_date - t.tx_date).days
+            if t.filing_date and t.tx_date else None
+        )
+        trade_dict = {
+            "ticker": t.ticker,
+            "tx_type": t.tx_type,
+            "amount_low": t.total_value,
+            "disclosure_delay_days": delay,
+        }
+        result = score_trade_conviction(
+            trade=trade_dict,
+            committees=None,
+            cluster_count=cluster_map.get(t.ticker, 0),
+            insider_also_buying=t.ticker in insider_buying_tickers,
+            fund_also_holds=t.ticker in fund_tickers,
+            politician_track_record=None,
+            recent_sells_count=recent_sells_map.get(t.ticker, 0),
+        )
+
+        if result["score"] >= min_score:
+            action = "bought" if t.tx_type == "purchase" else "sold"
+            scored_trades.append({
+                "id": f"insider-{t.id}",
+                "source": "insider",
+                "politician": t.insider_name,
+                "party": None,
+                "state": None,
+                "ticker": t.ticker,
+                "asset_description": t.issuer_name,
+                "amount_low": t.total_value,
+                "amount_high": None,
+                "tx_date": t.tx_date.isoformat() if t.tx_date else None,
+                "disclosure_date": t.filing_date.isoformat() if t.filing_date else None,
+                "disclosure_delay_days": delay,
+                "tx_type": t.tx_type,
+                "action": action,
+                "return_since": t.return_since_filing,
+                "conviction_score": result["score"],
+                "conviction_rating": result["rating"],
+                "factors": result["factors"],
+                "committee_overlap": result["committee_overlap"],
+                "cluster_count": cluster_map.get(t.ticker, 0),
+                "insider_also_buying": t.ticker in insider_buying_tickers,
+                "fund_also_holds": t.ticker in fund_tickers,
+            })
+
+    # Sort by conviction score (highest first)
+    scored_trades.sort(key=lambda x: x["conviction_score"], reverse=True)
     return {
         "trades": scored_trades[:limit],
         "total": len(scored_trades),
         "days_checked": days,
-        "scoring_factors": [
-            "Committee sector overlap (0-30 pts)",
-            "Political cluster - multiple politicians buying (0-25 pts)",
-            "Corporate insiders also buying (0-20 pts)",
-            "Hedge fund new position (0-15 pts)",
-            "Trade size (0-15 pts)",
-            "Disclosure delay (0-10 pts)",
-            "Non-mega-cap bonus (0-5 pts)",
-        ],
     }

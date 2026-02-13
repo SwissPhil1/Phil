@@ -28,20 +28,18 @@ router = APIRouter(prefix="/alerts", tags=["Alerts"])
 
 
 def _trade_date_filter(since: datetime):
-    """Match trades where ANY date (disclosure, tx, or created) is recent."""
+    """Match trades where disclosure or tx date is recent."""
     return or_(
         Trade.disclosure_date >= since,
         Trade.tx_date >= since,
-        Trade.created_at >= since,
     )
 
 
 def _insider_date_filter(since: datetime):
-    """Match insider trades where ANY date (filing, tx, or created) is recent."""
+    """Match insider trades where filing or tx date is recent."""
     return or_(
         InsiderTrade.filing_date >= since,
         InsiderTrade.tx_date >= since,
-        InsiderTrade.created_at >= since,
     )
 
 
@@ -154,6 +152,8 @@ async def get_recent_alerts(
     return {
         "alerts": page_alerts,
         "total": total_count,
+        "congress_total": congress_total,
+        "insider_total": insider_total,
         "page": page,
         "page_size": page_size,
         "hours": hours,

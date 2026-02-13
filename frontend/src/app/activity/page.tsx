@@ -1,12 +1,14 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { api, ActivityItem } from "@/lib/api";
 import { useApiData } from "@/lib/hooks";
 import { ErrorState } from "@/components/error-state";
+import { useTickerChart, TickerChartSheet } from "@/components/ticker-chart-sheet";
 import {
   Activity,
   TrendingUp,
@@ -31,7 +33,7 @@ function formatMoney(val: number | null): string {
   return `$${val.toFixed(0)}`;
 }
 
-function ActivityCard({ item }: { item: ActivityItem }) {
+function ActivityCard({ item, onTickerClick }: { item: ActivityItem; onTickerClick?: (ticker: string, actor: string) => void }) {
   const isBuy = item.action === "bought";
   return (
     <div className="flex items-start gap-3 p-3 border-b border-border/40 last:border-0 hover:bg-muted/20 transition-colors">
@@ -48,7 +50,11 @@ function ActivityCard({ item }: { item: ActivityItem }) {
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <span className="font-medium text-sm truncate">{item.actor}</span>
+          {item.source === "congress" && item.actor ? (
+            <Link href={`/politician/${encodeURIComponent(item.actor)}`} className="font-medium text-sm truncate hover:underline hover:text-primary transition-colors">{item.actor}</Link>
+          ) : (
+            <span className="font-medium text-sm truncate">{item.actor}</span>
+          )}
           <span className="text-xs text-muted-foreground">{item.actor_detail}</span>
         </div>
         <div className="flex items-center gap-2 mt-0.5">
@@ -63,7 +69,7 @@ function ActivityCard({ item }: { item: ActivityItem }) {
             {isBuy ? <TrendingUp className="w-3 h-3 mr-0.5" /> : <TrendingDown className="w-3 h-3 mr-0.5" />}
             {item.action}
           </Badge>
-          <span className="font-mono text-sm font-semibold">{item.ticker}</span>
+          <button onClick={() => onTickerClick?.(item.ticker, item.actor)} className="font-mono text-sm font-semibold hover:text-primary hover:underline transition-colors cursor-pointer">{item.ticker}</button>
           {item.amount_low && (
             <span className="text-xs text-muted-foreground">{formatMoney(item.amount_low)}</span>
           )}
@@ -89,6 +95,7 @@ function ActivityCard({ item }: { item: ActivityItem }) {
 }
 
 export default function ActivityFeedPage() {
+  const chart = useTickerChart();
   const [page, setPage] = useState(1);
   const [sourceFilter, setSourceFilter] = useState<string | null>(null);
   const [tickerFilter, setTickerFilter] = useState("");
@@ -174,7 +181,7 @@ export default function ActivityFeedPage() {
           ) : (
             <div>
               {activities.map((item) => (
-                <ActivityCard key={item.id} item={item} />
+                <ActivityCard key={item.id} item={item} onTickerClick={(ticker, actor) => chart.openChart(ticker, actor)} />
               ))}
             </div>
           )}
@@ -203,6 +210,7 @@ export default function ActivityFeedPage() {
           <ChevronRight className="w-4 h-4 ml-1" />
         </Button>
       </div>
+      <TickerChartSheet {...chart} />
     </div>
   );
 }

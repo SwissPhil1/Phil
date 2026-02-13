@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -7,6 +8,7 @@ import { api, type Signal, type CrossSourceSignal, type BacktestResult } from "@
 import { Zap, Target, BarChart3, ArrowRight, Info } from "lucide-react";
 import { useMultiApiData } from "@/lib/hooks";
 import { ErrorState, RefreshIndicator } from "@/components/error-state";
+import { useTickerChart, TickerChartSheet } from "@/components/ticker-chart-sheet";
 
 function SignalBadge({ strength }: { strength: string }) {
   const colors: Record<string, string> = {
@@ -29,6 +31,7 @@ type SignalsData = {
 };
 
 export default function SignalsPage() {
+  const chart = useTickerChart();
   const { data, loading, errors, hasError, retry, refreshIn } = useMultiApiData<{
     signals: SignalsData;
     backtest: BacktestResult;
@@ -118,7 +121,7 @@ export default function SignalsPage() {
                 <div key={i} className="p-4 rounded-lg bg-muted/30 border border-border/50 space-y-2">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <span className="font-mono-data font-bold">{cluster.ticker}</span>
+                      <button onClick={() => chart.openChart(cluster.ticker)} className="font-mono-data font-bold hover:text-primary hover:underline transition-colors cursor-pointer">{cluster.ticker}</button>
                       <Badge
                         variant="outline"
                         className={cluster.action === "BUYING" ? "text-green-400 border-green-500/30 text-[10px]" : "text-red-400 border-red-500/30 text-[10px]"}
@@ -133,7 +136,7 @@ export default function SignalsPage() {
                   </div>
                   <div className="flex flex-wrap gap-1">
                     {cluster.politicians.map((p) => (
-                      <span key={p} className="text-xs bg-secondary px-2 py-0.5 rounded">{p}</span>
+                      <Link key={p} href={`/politician/${encodeURIComponent(p)}`} className="text-xs bg-secondary px-2 py-0.5 rounded hover:bg-primary/20 hover:text-primary transition-colors">{p}</Link>
                     ))}
                   </div>
                 </div>
@@ -159,7 +162,7 @@ export default function SignalsPage() {
                 <div key={i} className="p-4 rounded-lg bg-muted/30 border border-border/50">
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2">
-                      <span className="font-mono-data font-bold text-lg">{signal.ticker}</span>
+                      <button onClick={() => chart.openChart(signal.ticker)} className="font-mono-data font-bold text-lg hover:text-primary hover:underline transition-colors cursor-pointer">{signal.ticker}</button>
                       <span className="text-xs text-muted-foreground">{signal.sector}</span>
                     </div>
                     <SignalBadge strength={signal.signal_strength} />
@@ -245,6 +248,7 @@ export default function SignalsPage() {
           </CardContent>
         </Card>
       )}
+      <TickerChartSheet {...chart} />
     </div>
   );
 }

@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, type Trade, type Politician, type PortfolioSimulation, type PortfolioNavPoint } from "@/lib/api";
+import { useTickerChart, TickerChartSheet } from "@/components/ticker-chart-sheet";
 import {
   ArrowLeft,
   ArrowUpRight,
@@ -361,6 +362,7 @@ function detectConflicts(
 // ─── Component ───
 
 export default function PoliticianPage() {
+  const tickerChart = useTickerChart();
   const params = useParams();
   const name = decodeURIComponent(params.name as string);
   const [politician, setPolitician] = useState<PoliticianDetail | null>(null);
@@ -1062,7 +1064,8 @@ export default function PoliticianPage() {
             return (
               <div
                 key={h.ticker}
-                className="rounded-xl border border-border bg-card p-3 text-center"
+                className="rounded-xl border border-border bg-card p-3 text-center cursor-pointer hover:border-primary/50 transition-colors"
+                onClick={() => tickerChart.openChart(h.ticker, name)}
               >
                 <div className="font-mono text-sm font-bold">{h.ticker}</div>
                 {hasReturn ? (
@@ -1112,9 +1115,9 @@ export default function PoliticianPage() {
                       </div>
                       <div>
                         <div className="flex items-center gap-2">
-                          <span className="font-mono text-sm font-bold">
+                          <button onClick={() => tickerChart.openChart(h.ticker, name)} className="font-mono text-sm font-bold hover:text-primary hover:underline transition-colors cursor-pointer">
                             {h.ticker}
-                          </span>
+                          </button>
                           {h.isHolding ? (
                             <Badge
                               variant="outline"
@@ -1331,9 +1334,9 @@ export default function PoliticianPage() {
                         {/* Content */}
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-mono text-sm font-bold">
+                            <button onClick={() => tickerChart.openChart(trade.ticker, name)} className="font-mono text-sm font-bold hover:text-primary hover:underline transition-colors cursor-pointer">
                               {trade.ticker}
-                            </span>
+                            </button>
                             <span
                               className={`text-xs font-medium ${isBuy ? "text-emerald-400" : "text-red-400"}`}
                             >
@@ -1429,6 +1432,7 @@ export default function PoliticianPage() {
           )}
         </CardContent>
       </Card>
+      <TickerChartSheet {...tickerChart} />
     </div>
   );
 }

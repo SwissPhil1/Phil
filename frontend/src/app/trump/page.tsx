@@ -7,10 +7,12 @@ import { api } from "@/lib/api";
 import { Target, Users, Building2, DollarSign, AlertTriangle } from "lucide-react";
 import { useMultiApiData } from "@/lib/hooks";
 import { ErrorState, RefreshIndicator } from "@/components/error-state";
+import { useTickerChart, TickerChartSheet } from "@/components/ticker-chart-sheet";
 
 type TrumpOverview = { total_insiders: number; total_companies: number; total_donors: number; categories: Record<string, number> };
 
 export default function TrumpPage() {
+  const chart = useTickerChart();
   const { data, loading, errors, hasError, retry, refreshIn } = useMultiApiData<{
     overview: TrumpOverview;
     insiders: any[];
@@ -137,9 +139,9 @@ export default function TrumpPage() {
                       {insider.tickers && (Array.isArray(insider.tickers) ? insider.tickers.length > 0 : insider.tickers) && (
                         <div className="flex flex-wrap gap-1 mt-2">
                           {(Array.isArray(insider.tickers) ? insider.tickers : String(insider.tickers).split(",")).map((t: string) => (
-                            <span key={t} className="text-[10px] font-mono-data bg-secondary px-1.5 py-0.5 rounded">
+                            <button key={t} onClick={() => chart.openChart(String(t).trim())} className="text-[10px] font-mono-data bg-secondary px-1.5 py-0.5 rounded hover:bg-primary/20 hover:text-primary transition-colors cursor-pointer">
                               {String(t).trim()}
-                            </span>
+                            </button>
                           ))}
                         </div>
                       )}
@@ -167,7 +169,7 @@ export default function TrumpPage() {
                         <div className="flex items-center justify-between mb-1">
                           <span className="font-medium text-sm">{conflict.insider || conflict.name || `Conflict ${i + 1}`}</span>
                           {conflict.ticker && (
-                            <span className="font-mono-data text-xs font-medium">{conflict.ticker}</span>
+                            <button onClick={() => chart.openChart(conflict.ticker)} className="font-mono-data text-xs font-medium hover:text-primary hover:underline transition-colors cursor-pointer">{conflict.ticker}</button>
                           )}
                         </div>
                         {conflict.conflict_type && (
@@ -189,6 +191,7 @@ export default function TrumpPage() {
           )}
         </>
       )}
+      <TickerChartSheet {...chart} />
     </div>
   );
 }

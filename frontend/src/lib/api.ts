@@ -533,6 +533,17 @@ export interface ActivityFeedResponse {
   page_size: number;
 }
 
+// AI Search
+export interface AISearchResult {
+  query: string;
+  sql: string;
+  columns: string[];
+  results: Record<string, unknown>[];
+  total: number;
+  summary: string;
+  error?: string;
+}
+
 // ─── API Functions ───
 
 export const api = {
@@ -661,6 +672,10 @@ export const api = {
     const qs = params.toString() ? `?${params.toString()}` : "";
     return fetchApi<TickerChartData>(`/api/v1/tickers/${encodeURIComponent(ticker)}/chart${qs}`);
   },
+  // AI Search
+  aiSearch: (query: string) =>
+    fetchApi<AISearchResult>(`/api/v1/ai/search?q=${encodeURIComponent(query)}`),
+
   getConvictionPortfolio: (minScore?: number, days?: number, initialCapital?: number, maxPositions?: number) => {
     const params = new URLSearchParams();
     if (minScore !== undefined) params.set("min_score", String(minScore));

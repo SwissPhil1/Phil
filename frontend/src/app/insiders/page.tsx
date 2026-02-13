@@ -6,8 +6,10 @@ import { api } from "@/lib/api";
 import { ArrowUpRight } from "lucide-react";
 import { useApiData } from "@/lib/hooks";
 import { ErrorState, RefreshIndicator } from "@/components/error-state";
+import { useTickerChart, TickerChartSheet } from "@/components/ticker-chart-sheet";
 
 export default function InsidersPage() {
+  const chart = useTickerChart();
   const { data: rawBuys, loading, error, retry, refreshIn } = useApiData<any[]>(
     () => api.getInsiderBuys().then((data) => (Array.isArray(data) ? data : [])),
     { refreshInterval: 120 }
@@ -63,7 +65,9 @@ export default function InsidersPage() {
                     <tr key={i} className="border-b border-border/30 hover:bg-muted/30">
                       <td className="py-2 pr-3 font-medium">{trade.insider_name}</td>
                       <td className="py-2 px-3 text-xs text-muted-foreground">{trade.insider_title || "-"}</td>
-                      <td className="py-2 px-3 font-mono-data font-medium">{trade.ticker}</td>
+                      <td className="py-2 px-3 font-mono-data font-medium">
+                        <button onClick={() => chart.openChart(trade.ticker)} className="hover:text-primary hover:underline transition-colors cursor-pointer">{trade.ticker}</button>
+                      </td>
                       <td className="py-2 px-3 text-right font-mono-data">{trade.shares?.toLocaleString() || "-"}</td>
                       <td className="py-2 px-3 text-right font-mono-data">
                         {trade.total_value ? `$${(trade.total_value / 1000).toFixed(0)}K` : "-"}
@@ -80,6 +84,7 @@ export default function InsidersPage() {
         </CardContent>
       </Card>
       )}
+      <TickerChartSheet {...chart} />
     </div>
   );
 }

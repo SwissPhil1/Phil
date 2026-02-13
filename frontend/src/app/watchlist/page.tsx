@@ -10,6 +10,7 @@ import { api, type Trade, type Politician } from "@/lib/api";
 import { useWatchlist, useApiData } from "@/lib/hooks";
 import { useMultiApiData } from "@/lib/hooks";
 import { ErrorState, RefreshIndicator } from "@/components/error-state";
+import { useTickerChart, TickerChartSheet } from "@/components/ticker-chart-sheet";
 import {
   Eye,
   Plus,
@@ -45,6 +46,7 @@ function formatAmount(low: number, high: number) {
 }
 
 export default function WatchlistPage() {
+  const chart = useTickerChart();
   const { items, politicians: watchedPoliticians, tickers: watchedTickers, add, remove, isWatched } = useWatchlist();
   const [addMode, setAddMode] = useState<"politician" | "ticker" | null>(null);
   const [search, setSearch] = useState("");
@@ -393,7 +395,7 @@ export default function WatchlistPage() {
                           >
                             {trade.politician}
                           </Link>
-                          <span className="font-mono-data text-xs font-medium">{trade.ticker}</span>
+                          <button onClick={() => chart.openChart(trade.ticker, trade.politician, trade.asset_description ?? undefined)} className="font-mono-data text-xs font-medium hover:text-primary hover:underline transition-colors cursor-pointer">{trade.ticker}</button>
                         </div>
                         <div className="text-[10px] text-muted-foreground mt-0.5">
                           {trade.tx_type === "purchase" ? "Bought" : "Sold"}
@@ -411,6 +413,7 @@ export default function WatchlistPage() {
           </Card>
         </div>
       )}
+      <TickerChartSheet {...chart} />
     </div>
   );
 }

@@ -6,6 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorState, RefreshIndicator } from "@/components/error-state";
+import { useTickerChart, TickerChartSheet } from "@/components/ticker-chart-sheet";
 import { api, type Trade } from "@/lib/api";
 import { ArrowUpRight, ArrowDownRight, Info, Search, Loader2 } from "lucide-react";
 
@@ -34,6 +35,7 @@ function formatAmount(low: number, high: number) {
 }
 
 export default function CongressPage() {
+  const chart = useTickerChart();
   const [trades, setTrades] = useState<Trade[]>([]);
   const [loading, setLoading] = useState(true);
   const [searching, setSearching] = useState(false);
@@ -265,7 +267,7 @@ export default function CongressPage() {
                           )}
                         </div>
                         <div className="flex items-center gap-2 mt-0.5">
-                          <span className="font-mono-data text-xs font-medium text-foreground">{trade.ticker}</span>
+                          <button onClick={() => chart.openChart(trade.ticker, trade.politician, trade.asset_description ?? undefined)} className="font-mono-data text-xs font-medium text-foreground hover:text-primary hover:underline transition-colors cursor-pointer">{trade.ticker}</button>
                           <span className="text-xs text-muted-foreground">
                             {trade.tx_type === "purchase" ? "Bought" : "Sold"}
                           </span>
@@ -299,6 +301,7 @@ export default function CongressPage() {
           )}
         </>
       )}
+      <TickerChartSheet {...chart} />
     </div>
   );
 }

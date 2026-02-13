@@ -17,6 +17,7 @@ import {
   UserCheck,
   Bell,
   Activity,
+  Sparkles,
 } from "lucide-react";
 
 const navItems = [
@@ -32,6 +33,7 @@ const navItems = [
   { href: "/signals", label: "Signals", icon: Zap },
   { href: "/backtester", label: "Backtester", icon: FlaskConical },
   { href: "/watchlist", label: "Watchlist", icon: Eye },
+  { href: "/search", label: "AI Search", icon: Sparkles },
   { href: "/optimizer", label: "Optimizer", icon: Brain },
   { href: "/settings", label: "Settings", icon: Settings },
 ];

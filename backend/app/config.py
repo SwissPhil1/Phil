@@ -38,5 +38,8 @@ INGESTION_INTERVAL_MINUTES = int(os.getenv("INGESTION_INTERVAL_MINUTES", "60"))
 # API settings
 API_PAGE_SIZE = int(os.getenv("API_PAGE_SIZE", "50"))
 
+# AI Search (Anthropic Claude)
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+
 # Years to ingest (current + previous)
 INGESTION_YEARS = [2024, 2025, 2026]

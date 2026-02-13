@@ -12,6 +12,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.ai_search import router as ai_search_router
 from app.api.alerts import router as alerts_router
 from app.api.autopilot import router as autopilot_router
 from app.api.export import router as export_router
@@ -220,6 +221,7 @@ app.include_router(trump_router, prefix="/api/v1")
 app.include_router(leaderboard_router, prefix="/api/v1")
 app.include_router(optimizer_router, prefix="/api/v1")
 app.include_router(alerts_router, prefix="/api/v1")
+app.include_router(ai_search_router, prefix="/api/v1")
 app.include_router(export_router, prefix="/api/v1")
 
 
@@ -242,6 +244,7 @@ async def root():
             "leaderboard": "/api/v1/leaderboard",
             "optimizer": "/api/v1/optimizer",
             "alerts": "/api/v1/alerts",
+            "ai_search": "/api/v1/ai/search",
             "export": "/api/v1/export",
         },
     }

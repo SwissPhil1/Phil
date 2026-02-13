@@ -208,7 +208,9 @@ def score_trade_with_weights(
         else:
             score += weights.small_cap_committee_max * 0.5  # Broad oversight on small cap
 
-    # Normalize to 0-100 scale (matches signals.py normalization)
+    # Normalize to 0-100 scale using sqrt curve (matches signals.py)
+    # Sqrt spreads scores across the full range even though trades typically
+    # only trigger 2-4 of 10+ possible factors.
     max_possible = (
         weights.position_size_max
         + weights.committee_overlap_max
@@ -223,7 +225,8 @@ def score_trade_with_weights(
         + weights.leadership_role_max
     )
     if max_possible > 0:
-        return round(min(max(score / max_possible * 100, 0), 100), 1)
+        raw_pct = min(max(score, 0), max_possible) / max_possible
+        return round(math.sqrt(raw_pct) * 100, 1)
     return 0
 
 

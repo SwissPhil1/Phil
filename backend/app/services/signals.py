@@ -637,18 +637,24 @@ def score_trade_conviction(
             "detail": f"Buying while {recent_sells_count} others selling (contrarian conviction)"
         })
 
-    # ─── Normalize to 0-100 scale ───
-    # This ensures thresholds (e.g. 65+) mean the same thing regardless of
-    # what weights the optimizer applies. Without this, reduced weights compress
-    # the score range and make higher thresholds unreachable.
+    # ─── Normalize to 0-100 scale using sqrt curve ───
+    # Linear normalization compressed scores to 15-50 because trades rarely
+    # trigger more than 3-4 of 10 factors. Sqrt mapping spreads scores across
+    # the full 0-100 range: sqrt(raw_pct) * 100.
+    #   ~25% of max (2-3 factors) → score 50
+    #   ~42% of max (4 factors)   → score 65
+    #   ~72% of max (5+ factors)  → score 85
     max_possible = (
         psm + com + scm + dsm + clm + csim + csfm + tcb + trm + ctm
     )
     if max_possible > 0:
-        scale = 100 / max_possible
-        score = round(score * scale, 1)
-        for f in factors:
-            f["points"] = round(f["points"] * scale, 1)
+        raw_pct = min(max(score, 0), max_possible) / max_possible
+        score = round(math.sqrt(raw_pct) * 100, 1)
+        # Scale factor points proportionally so they still sum to the score
+        raw_sum = sum(f["points"] for f in factors)
+        if raw_sum > 0:
+            for f in factors:
+                f["points"] = round(f["points"] / raw_sum * score, 1)
     score = min(max(score, 0), 100)
 
     if score >= 85:

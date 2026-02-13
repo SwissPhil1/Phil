@@ -94,7 +94,7 @@ async def ai_search(query: str, db: AsyncSession) -> dict[str, Any]:
     """Convert a natural language query to SQL, execute it, and return results."""
     if not ANTHROPIC_API_KEY:
         return {
-            "error": "ANTHROPIC_API_KEY not configured. Set it in your environment variables.",
+            "error": "Inv_API_Key not configured. Set it in your environment variables.",
             "query": query,
             "sql": None,
             "results": [],

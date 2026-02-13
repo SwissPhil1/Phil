@@ -397,6 +397,8 @@ export interface AlertItem {
 export interface AlertsResponse {
   alerts: AlertItem[];
   total: number;
+  congress_total: number;
+  insider_total: number;
   page: number;
   page_size: number;
   hours: number;

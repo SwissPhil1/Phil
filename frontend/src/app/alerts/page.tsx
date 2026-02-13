@@ -299,6 +299,8 @@ export default function AlertsPage() {
 
   const alerts = alertsData?.alerts || [];
   const totalAlerts = alertsData?.total || 0;
+  const congressTotal = alertsData?.congress_total ?? 0;
+  const insiderTotal = alertsData?.insider_total ?? 0;
   const totalPages = Math.ceil(totalAlerts / pageSize);
   const congressAlerts = alerts.filter((a) => a.source === "congress");
   const insiderAlerts = alerts.filter((a) => a.source === "insider");
@@ -397,10 +399,10 @@ export default function AlertsPage() {
           </TabsTrigger>
           <TabsTrigger value="all">All ({totalAlerts})</TabsTrigger>
           <TabsTrigger value="congress">
-            Congress ({congressAlerts.length})
+            Congress ({congressTotal.toLocaleString()})
           </TabsTrigger>
           <TabsTrigger value="insider">
-            Insiders ({insiderAlerts.length})
+            Insiders ({insiderTotal.toLocaleString()})
           </TabsTrigger>
         </TabsList>
 

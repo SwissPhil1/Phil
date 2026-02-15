@@ -610,18 +610,20 @@ async def conviction_portfolio_sim(
     days: int = Query(default=1825, ge=30, le=3650),
     initial_capital: float = Query(default=10000, ge=1000, le=10_000_000),
     max_positions: int = Query(default=20, ge=1, le=200),
+    stop_loss_pct: float = Query(default=-15, ge=-50, le=0),
+    take_profit_pct: float = Query(default=50, ge=10, le=500),
+    max_holding_days: int = Query(default=180, ge=30, le=730),
+    conviction_sizing: bool = Query(default=True),
     db: AsyncSession = Depends(get_db),
 ):
     """Simulate a fixed-capital copy-trade portfolio.
 
-    Starts with initial_capital, allocates capital / max_positions per position.
-    Buys when a high-conviction trade signal fires, sells when the original
-    trader sells. Cash from sells funds future buys (compounding). Trades are
-    skipped when cash is insufficient or max concurrent positions reached.
-    Returns a weekly NAV series for equity curve charting.
-
-    Uses stored DB prices (TickerPrice cache + Trade.price_at_disclosure) —
-    no external API calls during the request.
+    Improvements over naive approach:
+    - Buys at DISCLOSURE DATE (not tx_date) — you can't copy what you don't know
+    - Conviction-weighted sizing: higher score → bigger allocation
+    - Stop-loss and take-profit exits
+    - Max holding period auto-close (frees capital for new signals)
+    - Per-ticker consolidation (multiple politicians buying same stock = 1 position)
     """
     since = datetime.utcnow() - timedelta(days=days)
     now = datetime.utcnow()
@@ -859,15 +861,21 @@ async def conviction_portfolio_sim(
     insider_officer_tickers = {r[0] for r in officer_result_q.all()}
 
     # ── 4. Build unified chronological trade events ──
+    # KEY FIX: Use disclosure_date for buys (you can't copy what you don't know)
     events: list[dict] = []
     skipped_no_cash = 0
     skipped_max_pos = 0
+    skipped_duplicate = 0
 
     # Score and add congress buys + all sells
     for t in all_congress:
-        if not t.tx_date or not t.ticker:
+        if not t.ticker:
             continue
         if t.tx_type == "purchase":
+            # Buy at DISCLOSURE date (when public learns about it), not tx_date
+            buy_date = t.disclosure_date or t.tx_date
+            if not buy_date:
+                continue
             delay = (
                 (t.disclosure_date - t.tx_date).days
                 if t.disclosure_date and t.tx_date else None
@@ -896,13 +904,13 @@ async def conviction_portfolio_sim(
             )
             if result["score"] >= min_score:
                 events.append({
-                    "type": "buy", "date": t.tx_date,
+                    "type": "buy", "date": buy_date,
                     "ticker": t.ticker.upper(), "pol_key": t.politician.lower(),
                     "politician": t.politician, "party": t.party,
                     "source": "congress", "score": result["score"],
                     "rating": result["rating"], "trade_id": t.id,
                 })
-        elif t.tx_type in ("sale", "sale_full", "sale_partial"):
+        elif t.tx_type in ("sale", "sale_full", "sale_partial") and t.tx_date:
             events.append({
                 "type": "sell", "date": t.tx_date,
                 "ticker": t.ticker.upper(), "pol_key": t.politician.lower(),
@@ -913,9 +921,12 @@ async def conviction_portfolio_sim(
 
     # Score and add insider buys + all sells
     for t in all_insiders:
-        if not t.tx_date or not t.ticker:
+        if not t.ticker:
             continue
         if t.tx_type == "purchase":
+            buy_date = t.filing_date or t.tx_date
+            if not buy_date:
+                continue
             delay = (
                 (t.filing_date - t.tx_date).days
                 if t.filing_date and t.tx_date else None
@@ -937,14 +948,14 @@ async def conviction_portfolio_sim(
             )
             if result["score"] >= min_score:
                 events.append({
-                    "type": "buy", "date": t.tx_date,
+                    "type": "buy", "date": buy_date,
                     "ticker": t.ticker.upper(),
                     "pol_key": (t.insider_name or "").lower(),
                     "politician": t.insider_name, "party": None,
                     "source": "insider", "score": result["score"],
                     "rating": result["rating"], "trade_id": t.id,
                 })
-        elif t.tx_type in ("sale", "sale_full", "sale_partial", "sell"):
+        elif t.tx_type in ("sale", "sale_full", "sale_partial", "sell") and t.tx_date:
             events.append({
                 "type": "sell", "date": t.tx_date,
                 "ticker": t.ticker.upper(),
@@ -956,10 +967,43 @@ async def conviction_portfolio_sim(
 
     events.sort(key=lambda e: e["date"])
 
-    # ── 5. Fixed-capital simulation ──
+    # ── 5. Conviction-sized simulation with risk management ──
     cash = float(initial_capital)
-    positions: dict[tuple, dict] = {}  # (source, pol_key, ticker) -> position
+    base_position_size = initial_capital / max_positions
+    # Per-ticker positions (consolidate multiple politicians buying same ticker)
+    positions: dict[str, dict] = {}  # ticker -> position
     closed_positions: list[dict] = []
+
+    def _conviction_multiplier(score: int) -> float:
+        """Higher conviction → bigger position."""
+        if not conviction_sizing:
+            return 1.0
+        if score >= 90:
+            return 2.0
+        elif score >= 80:
+            return 1.5
+        elif score >= 65:
+            return 1.0
+        else:
+            return 0.6
+
+    def _close_position(ticker: str, price: float, date: datetime, reason: str):
+        """Close a position and return cash."""
+        nonlocal cash
+        pos = positions[ticker]
+        exit_value = pos["shares"] * price
+        cash += exit_value
+        closed_positions.append({
+            **pos,
+            "exit_price": price,
+            "exit_date": date,
+            "current_value": exit_value,
+            "return_pct": (price - pos["entry_price"]) / pos["entry_price"] * 100,
+            "pnl": exit_value - pos["cost"],
+            "holding_days": (date - pos["entry_date"]).days,
+            "status": reason,
+        })
+        del positions[ticker]
 
     first_date = events[0]["date"] if events else since
     weeks: list[datetime] = []
@@ -977,54 +1021,68 @@ async def conviction_portfolio_sim(
         # Process all events up to this week
         while event_idx < len(events) and events[event_idx]["date"] <= week_date:
             ev = events[event_idx]
-            key = (ev["source"], ev["pol_key"], ev["ticker"])
+            ticker = ev["ticker"]
 
             if ev["type"] == "buy":
-                if key not in positions:
-                    if len(positions) >= max_positions:
-                        skipped_max_pos += 1
-                    elif cash >= position_size:
-                        price = get_price(ev["ticker"], ev["date"])
-                        if price and price > 0:
-                            alloc = min(position_size, cash)
+                if ticker in positions:
+                    # Already hold this ticker — update score if higher
+                    if ev["score"] > positions[ticker]["score"]:
+                        positions[ticker]["score"] = ev["score"]
+                        positions[ticker]["rating"] = ev["rating"]
+                    skipped_duplicate += 1
+                elif len(positions) >= max_positions:
+                    skipped_max_pos += 1
+                else:
+                    price = get_price(ticker, ev["date"])
+                    if price and price > 0:
+                        mult = _conviction_multiplier(ev["score"])
+                        alloc = min(base_position_size * mult, cash)
+                        if alloc >= base_position_size * 0.3:  # min viable allocation
                             shares = alloc / price
                             cash -= alloc
-                            positions[key] = {
+                            positions[ticker] = {
                                 "shares": shares, "cost": alloc,
                                 "entry_price": price, "entry_date": ev["date"],
-                                "ticker": ev["ticker"],
+                                "ticker": ticker,
                                 "politician": ev["politician"],
                                 "party": ev["party"], "source": ev["source"],
                                 "score": ev["score"], "rating": ev["rating"],
                                 "trade_id": ev["trade_id"],
                             }
-                    else:
-                        skipped_no_cash += 1
+                        else:
+                            skipped_no_cash += 1
 
             elif ev["type"] == "sell":
-                if key in positions:
-                    pos = positions[key]
-                    price = get_price(ev["ticker"], ev["date"])
+                if ticker in positions:
+                    price = get_price(ticker, ev["date"])
                     if price and price > 0:
-                        exit_value = pos["shares"] * price
-                        cash += exit_value
-                        closed_positions.append({
-                            **pos,
-                            "exit_price": price,
-                            "exit_date": ev["date"],
-                            "current_value": exit_value,
-                            "return_pct": (price - pos["entry_price"]) / pos["entry_price"] * 100,
-                            "pnl": exit_value - pos["cost"],
-                            "holding_days": (ev["date"] - pos["entry_date"]).days,
-                            "status": "closed",
-                        })
-                        del positions[key]
+                        _close_position(ticker, price, ev["date"], "sold")
 
             event_idx += 1
 
+        # Weekly risk checks: stop-loss, take-profit, max holding period
+        tickers_to_close: list[tuple[str, float, str]] = []  # (ticker, price, reason)
+        for ticker, pos in positions.items():
+            price = get_price(ticker, week_date)
+            if not price or price <= 0:
+                continue
+            ret_pct = (price - pos["entry_price"]) / pos["entry_price"] * 100
+            holding_d = (week_date - pos["entry_date"]).days
+
+            if ret_pct <= stop_loss_pct:
+                tickers_to_close.append((ticker, price, "stop_loss"))
+            elif ret_pct >= take_profit_pct:
+                tickers_to_close.append((ticker, price, "take_profit"))
+            elif holding_d >= max_holding_days:
+                tickers_to_close.append((ticker, price, "max_hold"))
+
+        for ticker, price, reason in tickers_to_close:
+            if ticker in positions:
+                _close_position(ticker, price, week_date, reason)
+
         # Weekly NAV snapshot
         holdings_value = 0.0
-        for _key, pos in positions.items():
+        for _ticker, pos in positions.items():
             p = get_price(pos["ticker"], week_date)
             holdings_value += pos["shares"] * p if p and p > 0 else pos["cost"]
 
@@ -1040,7 +1098,7 @@ async def conviction_portfolio_sim(
 
     # ── 6. Mark-to-market open positions ──
     open_list: list[dict] = []
-    for _key, pos in positions.items():
+    for _ticker, pos in positions.items():
         price = get_price(pos["ticker"], now)
         if price and price > 0:
             current_value = pos["shares"] * price
@@ -1117,6 +1175,12 @@ async def conviction_portfolio_sim(
             "status": p["status"],
         })
 
+    # Exit reason breakdown
+    exit_reasons = {}
+    for p in closed_positions:
+        reason = p.get("status", "closed")
+        exit_reasons[reason] = exit_reasons.get(reason, 0) + 1
+
     return {
         "nav_series": nav_series,
         "summary": {
@@ -1134,10 +1198,16 @@ async def conviction_portfolio_sim(
             "cash": round(cash, 2),
             "skipped_no_cash": skipped_no_cash,
             "skipped_max_positions": skipped_max_pos,
+            "skipped_duplicate": skipped_duplicate,
+            "exit_reasons": exit_reasons,
         },
         "positions": formatted,
         "min_score": min_score,
         "days": days,
         "initial_capital": initial_capital,
         "max_positions": max_positions,
+        "stop_loss_pct": stop_loss_pct,
+        "take_profit_pct": take_profit_pct,
+        "max_holding_days": max_holding_days,
+        "conviction_sizing": conviction_sizing,
     }

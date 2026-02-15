@@ -15,7 +15,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 
 import httpx
-from sqlalchemy import case, func, or_, select, update
+from sqlalchemy import Numeric, case, cast, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import (
@@ -372,7 +372,10 @@ async def refresh_current_prices(session: AsyncSession):
             .values(
                 price_current=current_price,
                 return_since_disclosure=func.round(
-                    ((current_price - Trade.price_at_disclosure) / Trade.price_at_disclosure) * 100,
+                    cast(
+                        ((current_price - Trade.price_at_disclosure) / Trade.price_at_disclosure) * 100,
+                        Numeric,
+                    ),
                     2,
                 ),
             )

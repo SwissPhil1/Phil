@@ -140,7 +140,7 @@ export function TickerChartSheet({
         </SheetHeader>
 
         {/* Period toggle */}
-        <div className="flex gap-1 px-4">
+        <div className="relative z-10 flex gap-1 px-4">
           {[
             { label: "3M", days: 90 },
             { label: "6M", days: 180 },
@@ -149,9 +149,10 @@ export function TickerChartSheet({
             { label: "ALL", days: 1825 },
           ].map((p) => (
             <button
+              type="button"
               key={p.label}
               onClick={() => setChartDays(p.days)}
-              className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+              className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors cursor-pointer ${
                 chartDays === p.days
                   ? "bg-primary text-primary-foreground"
                   : "text-muted-foreground hover:text-foreground hover:bg-muted"
@@ -164,10 +165,11 @@ export function TickerChartSheet({
 
         {/* Politician filter toggle */}
         {target?.politician && (
-          <div className="flex gap-1 px-4">
+          <div className="relative z-10 flex gap-1 px-4">
             <button
+              type="button"
               onClick={() => setChartFilter("politician")}
-              className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+              className={`px-3 py-1 rounded-md text-xs font-medium transition-colors cursor-pointer ${
                 chartFilter === "politician"
                   ? "bg-purple-500/20 text-purple-400 border border-purple-500/30"
                   : "text-muted-foreground hover:text-foreground hover:bg-muted border border-transparent"
@@ -176,8 +178,9 @@ export function TickerChartSheet({
               {target.politician} only
             </button>
             <button
+              type="button"
               onClick={() => setChartFilter("all")}
-              className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+              className={`px-3 py-1 rounded-md text-xs font-medium transition-colors cursor-pointer ${
                 chartFilter === "all"
                   ? "bg-blue-500/20 text-blue-400 border border-blue-500/30"
                   : "text-muted-foreground hover:text-foreground hover:bg-muted border border-transparent"
@@ -202,7 +205,7 @@ export function TickerChartSheet({
                 chartFilter === "politician" && target?.politician ? target.politician : null,
               );
               return (
-                <div className="h-64">
+                <div className="h-64 relative overflow-hidden">
                   <ResponsiveContainer width="100%" height="100%">
                     <ComposedChart data={cData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#333" vertical={false} />

@@ -417,6 +417,26 @@ class KalshiMarket(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+# --- Saved AI Search Segments ---
+
+
+class SavedSegment(Base):
+    """Saved AI search queries that auto-refresh with latest data."""
+    __tablename__ = "saved_segments"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(300), nullable=False)
+    query = Column(Text, nullable=False)           # Original natural language query
+    sql = Column(Text, nullable=False)             # Generated SQL to re-execute
+    columns_json = Column(Text)                    # JSON: column names
+    results_json = Column(Text)                    # JSON: cached result rows
+    result_count = Column(Integer, default=0)
+    summary = Column(Text)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    refreshed_at = Column(DateTime, default=datetime.utcnow)
+
+
 # Dialect-aware insert for upserts (on_conflict_do_nothing / on_conflict_do_update)
 # Both PostgreSQL and SQLite dialects support the same API.
 if "postgresql" in DATABASE_URL or "postgres" in DATABASE_URL:

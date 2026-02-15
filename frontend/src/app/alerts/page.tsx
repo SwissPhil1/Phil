@@ -277,6 +277,10 @@ export default function AlertsPage() {
   const [simCapital, setSimCapital] = useState(10000);
   const [simDays, setSimDays] = useState(1825);
   const [simMaxPositions, setSimMaxPositions] = useState(20);
+  const [simStopLoss, setSimStopLoss] = useState(-15);
+  const [simTakeProfit, setSimTakeProfit] = useState(50);
+  const [simMaxHold, setSimMaxHold] = useState(180);
+  const [simConvSizing, setSimConvSizing] = useState(true);
   const chart = useTickerChart();
   const pageSize = 100;
 
@@ -291,8 +295,8 @@ export default function AlertsPage() {
     { refreshInterval: 300, deps: [hours] }
   );
   const { data: portfolioData, loading: portfolioLoading, error: portfolioError } = useApiData(
-    () => api.getConvictionPortfolio(simMinScore, simDays, simCapital, simMaxPositions),
-    { refreshInterval: 0, deps: [simMinScore, simCapital, simDays, simMaxPositions] }
+    () => api.getConvictionPortfolio(simMinScore, simDays, simCapital, simMaxPositions, simStopLoss, simTakeProfit, simMaxHold, simConvSizing),
+    { refreshInterval: 0, deps: [simMinScore, simCapital, simDays, simMaxPositions, simStopLoss, simTakeProfit, simMaxHold, simConvSizing] }
   );
 
   if (error) return <ErrorState error={error} onRetry={retry} />;
@@ -542,6 +546,61 @@ export default function AlertsPage() {
                   ))}
                 </div>
               </div>
+              <div className="flex items-center gap-4 mt-2 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground whitespace-nowrap">Stop Loss:</span>
+                  {[-10, -15, -20, -30].map((sl) => (
+                    <Button
+                      key={sl}
+                      variant={simStopLoss === sl ? "default" : "outline"}
+                      size="sm"
+                      className="h-7 text-xs px-3"
+                      onClick={() => setSimStopLoss(sl)}
+                    >
+                      {sl}%
+                    </Button>
+                  ))}
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground whitespace-nowrap">Take Profit:</span>
+                  {[25, 50, 100, 200].map((tp) => (
+                    <Button
+                      key={tp}
+                      variant={simTakeProfit === tp ? "default" : "outline"}
+                      size="sm"
+                      className="h-7 text-xs px-3"
+                      onClick={() => setSimTakeProfit(tp)}
+                    >
+                      +{tp}%
+                    </Button>
+                  ))}
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground whitespace-nowrap">Max Hold:</span>
+                  {[90, 180, 365].map((d) => (
+                    <Button
+                      key={d}
+                      variant={simMaxHold === d ? "default" : "outline"}
+                      size="sm"
+                      className="h-7 text-xs px-3"
+                      onClick={() => setSimMaxHold(d)}
+                    >
+                      {d}d
+                    </Button>
+                  ))}
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground whitespace-nowrap">Conv. Sizing:</span>
+                  <Button
+                    variant={simConvSizing ? "default" : "outline"}
+                    size="sm"
+                    className="h-7 text-xs px-3"
+                    onClick={() => setSimConvSizing(!simConvSizing)}
+                  >
+                    {simConvSizing ? "ON" : "OFF"}
+                  </Button>
+                </div>
+              </div>
             </CardHeader>
             <CardContent>
               {portfolioLoading ? (
@@ -606,11 +665,19 @@ export default function AlertsPage() {
                     </div>
                     <div className="bg-muted/20 rounded-lg p-3 border border-border/50">
                       <div className="text-[11px] text-muted-foreground">Positions</div>
-                      <div className="text-xl font-bold font-mono">{portfolioData.summary.open_positions}</div>
+                      <div className="text-xl font-bold font-mono">{portfolioData.summary.open_positions} open</div>
                       <div className="text-[10px] text-muted-foreground">
                         {portfolioData.summary.closed_positions} closed
                         {(portfolioData.summary.skipped_no_cash > 0 || (portfolioData.summary.skipped_max_positions ?? 0) > 0) && ` · ${portfolioData.summary.skipped_no_cash + (portfolioData.summary.skipped_max_positions ?? 0)} skipped`}
                       </div>
+                      {portfolioData.summary.exit_reasons && (
+                        <div className="text-[10px] text-muted-foreground mt-0.5">
+                          {Object.entries(portfolioData.summary.exit_reasons as Record<string, number>).map(([reason, count]) => {
+                            const labels: Record<string, string> = { sold: "Sold", stop_loss: "SL", take_profit: "TP", max_hold: "Max" };
+                            return `${labels[reason] || reason}: ${count}`;
+                          }).join(" · ")}
+                        </div>
+                      )}
                     </div>
                   </div>
 

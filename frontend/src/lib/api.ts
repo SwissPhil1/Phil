@@ -480,12 +480,18 @@ export interface ConvictionPortfolioResponse {
     cash: number;
     skipped_no_cash: number;
     skipped_max_positions: number;
+    skipped_duplicate: number;
+    exit_reasons?: Record<string, number>;
   };
   positions: ConvictionPortfolioPosition[];
   min_score: number;
   days: number;
   initial_capital: number;
   max_positions: number;
+  stop_loss_pct?: number;
+  take_profit_pct?: number;
+  max_holding_days?: number;
+  conviction_sizing?: boolean;
 }
 
 // Chart data for ticker price + trade markers
@@ -701,12 +707,16 @@ export const api = {
   refreshSegment: (id: number) =>
     fetchApi<SavedSegment>(`/api/v1/segments/${id}/refresh`, { method: "POST" }),
 
-  getConvictionPortfolio: (minScore?: number, days?: number, initialCapital?: number, maxPositions?: number) => {
+  getConvictionPortfolio: (minScore?: number, days?: number, initialCapital?: number, maxPositions?: number, stopLoss?: number, takeProfit?: number, maxHoldingDays?: number, convictionSizing?: boolean) => {
     const params = new URLSearchParams();
     if (minScore !== undefined) params.set("min_score", String(minScore));
     if (days) params.set("days", String(days));
     if (initialCapital) params.set("initial_capital", String(initialCapital));
     if (maxPositions) params.set("max_positions", String(maxPositions));
+    if (stopLoss !== undefined) params.set("stop_loss_pct", String(stopLoss));
+    if (takeProfit !== undefined) params.set("take_profit_pct", String(takeProfit));
+    if (maxHoldingDays !== undefined) params.set("max_holding_days", String(maxHoldingDays));
+    if (convictionSizing !== undefined) params.set("conviction_sizing", String(convictionSizing));
     const qs = params.toString() ? `?${params.toString()}` : "";
     return fetchApi<ConvictionPortfolioResponse>(`/api/v1/alerts/conviction-portfolio${qs}`);
   },

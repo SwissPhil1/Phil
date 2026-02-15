@@ -16,6 +16,7 @@ from app.api.ai_search import router as ai_search_router
 from app.api.alerts import router as alerts_router
 from app.api.autopilot import router as autopilot_router
 from app.api.export import router as export_router
+from app.api.segments import router as segments_router
 from app.api.hedge_funds import router as hedge_funds_router
 from app.api.insiders import router as insiders_router
 from app.api.leaderboard import router as leaderboard_router
@@ -223,6 +224,7 @@ app.include_router(optimizer_router, prefix="/api/v1")
 app.include_router(alerts_router, prefix="/api/v1")
 app.include_router(ai_search_router, prefix="/api/v1")
 app.include_router(export_router, prefix="/api/v1")
+app.include_router(segments_router, prefix="/api/v1")
 
 
 @app.get("/")

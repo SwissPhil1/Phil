@@ -546,6 +546,20 @@ export interface AISearchResult {
   error?: string;
 }
 
+// Saved Segments
+export interface SavedSegment {
+  id: number;
+  name: string;
+  query: string;
+  sql: string;
+  columns: string[];
+  results: Record<string, unknown>[];
+  result_count: number;
+  summary: string | null;
+  created_at: string;
+  refreshed_at: string;
+}
+
 // ─── API Functions ───
 
 export const api = {
@@ -677,6 +691,15 @@ export const api = {
   // AI Search
   aiSearch: (query: string) =>
     fetchApi<AISearchResult>(`/api/v1/ai/search?q=${encodeURIComponent(query)}`),
+
+  // Saved Segments
+  getSegments: () => fetchApi<SavedSegment[]>("/api/v1/segments"),
+  createSegment: (data: { name: string; query: string; sql: string; columns: string[]; results: Record<string, unknown>[]; summary?: string }) =>
+    fetchApi<SavedSegment>("/api/v1/segments", { method: "POST", body: JSON.stringify(data) }),
+  deleteSegment: (id: number) =>
+    fetchApi<{ status: string }>(`/api/v1/segments/${id}`, { method: "DELETE" }),
+  refreshSegment: (id: number) =>
+    fetchApi<SavedSegment>(`/api/v1/segments/${id}/refresh`, { method: "POST" }),
 
   getConvictionPortfolio: (minScore?: number, days?: number, initialCapital?: number, maxPositions?: number) => {
     const params = new URLSearchParams();

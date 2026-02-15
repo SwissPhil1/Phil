@@ -434,6 +434,56 @@ async def get_suspicious_trades(
     sell_result = await db.execute(sell_stmt)
     recent_sells_map = {r.ticker: r.sell_count for r in sell_result.all()}
 
+    # 3g. Leadership roles per politician
+    lead_result = await db.execute(
+        select(PoliticianCommittee.politician_name, PoliticianCommittee.role)
+        .where(PoliticianCommittee.role.isnot(None))
+        .where(PoliticianCommittee.role != "Member")
+    )
+    leadership_map: dict[str, str] = {}
+    for r in lead_result.all():
+        existing = leadership_map.get(r.politician_name, "")
+        if "Chair" in (r.role or "") and "Chair" not in existing:
+            leadership_map[r.politician_name] = r.role
+        elif "Ranking" in (r.role or "") and not existing:
+            leadership_map[r.politician_name] = r.role
+
+    # 3h. Repeated buyer counts (politician+ticker)
+    repeat_result = await db.execute(
+        select(Trade.politician, Trade.ticker, func.count().label("buy_count"))
+        .where(Trade.tx_type == "purchase")
+        .where(Trade.ticker.isnot(None))
+        .where(_trade_date_filter(since))
+        .group_by(Trade.politician, Trade.ticker)
+    )
+    repeated_buyers = {(r.politician, r.ticker): r.buy_count for r in repeat_result.all()}
+
+    # 3i. Median trade amounts per politician
+    amount_result = await db.execute(
+        select(Trade.politician, Trade.amount_low)
+        .where(Trade.tx_type == "purchase")
+        .where(Trade.amount_low.isnot(None))
+        .where(Trade.amount_low > 0)
+    )
+    pol_amounts: dict[str, list[float]] = defaultdict(list)
+    for row in amount_result.all():
+        pol_amounts[row.politician].append(row.amount_low)
+    median_amounts: dict[str, float] = {}
+    for pol, amounts in pol_amounts.items():
+        sorted_amounts = sorted(amounts)
+        median_amounts[pol] = sorted_amounts[len(sorted_amounts) // 2]
+
+    # 3j. C-suite insider tickers (officer-level buys)
+    officer_result = await db.execute(
+        select(InsiderTrade.ticker)
+        .where(InsiderTrade.tx_type == "purchase")
+        .where(InsiderTrade.ticker.isnot(None))
+        .where(InsiderTrade.is_officer == True)
+        .where(_insider_date_filter(since))
+        .distinct()
+    )
+    insider_officer_tickers = {r[0] for r in officer_result.all()}
+
     # 4. Score each trade using the conviction scoring system
 
     scored_trades = []
@@ -458,6 +508,14 @@ async def get_suspicious_trades(
             fund_also_holds=t.ticker in fund_tickers,
             politician_track_record=politician_track_records.get(t.politician),
             recent_sells_count=recent_sells_map.get(t.ticker, 0),
+            leadership_role=leadership_map.get(t.politician),
+            repeated_buy_count=repeated_buyers.get((t.politician, t.ticker), 0),
+            relative_size_ratio=(
+                (t.amount_low or 0) / median_amounts[t.politician]
+                if t.politician in median_amounts and median_amounts[t.politician] > 0 and (t.amount_low or 0) > 0
+                else None
+            ),
+            insider_is_officer=t.ticker in insider_officer_tickers,
         )
 
         if result["score"] >= min_score:
@@ -507,6 +565,7 @@ async def get_suspicious_trades(
             fund_also_holds=t.ticker in fund_tickers,
             politician_track_record=None,
             recent_sells_count=recent_sells_map.get(t.ticker, 0),
+            insider_is_officer=t.ticker in insider_officer_tickers,
         )
 
         if result["score"] >= min_score:
@@ -749,6 +808,56 @@ async def conviction_portfolio_sim(
     sell_result_q = await db.execute(sell_stmt)
     recent_sells_map = {r.ticker: r.sell_count for r in sell_result_q.all()}
 
+    # Leadership roles
+    lead_result_q = await db.execute(
+        select(PoliticianCommittee.politician_name, PoliticianCommittee.role)
+        .where(PoliticianCommittee.role.isnot(None))
+        .where(PoliticianCommittee.role != "Member")
+    )
+    leadership_map: dict[str, str] = {}
+    for r in lead_result_q.all():
+        existing = leadership_map.get(r.politician_name, "")
+        if "Chair" in (r.role or "") and "Chair" not in existing:
+            leadership_map[r.politician_name] = r.role
+        elif "Ranking" in (r.role or "") and not existing:
+            leadership_map[r.politician_name] = r.role
+
+    # Repeated buyer counts
+    repeat_result_q = await db.execute(
+        select(Trade.politician, Trade.ticker, func.count().label("buy_count"))
+        .where(Trade.tx_type == "purchase")
+        .where(Trade.ticker.isnot(None))
+        .where(Trade.tx_date >= since)
+        .group_by(Trade.politician, Trade.ticker)
+    )
+    repeated_buyers = {(r.politician, r.ticker): r.buy_count for r in repeat_result_q.all()}
+
+    # Median trade amounts
+    amount_result_q = await db.execute(
+        select(Trade.politician, Trade.amount_low)
+        .where(Trade.tx_type == "purchase")
+        .where(Trade.amount_low.isnot(None))
+        .where(Trade.amount_low > 0)
+    )
+    pol_amounts: dict[str, list[float]] = defaultdict(list)
+    for row in amount_result_q.all():
+        pol_amounts[row.politician].append(row.amount_low)
+    median_amounts: dict[str, float] = {}
+    for pol, amounts in pol_amounts.items():
+        sorted_amounts = sorted(amounts)
+        median_amounts[pol] = sorted_amounts[len(sorted_amounts) // 2]
+
+    # C-suite insider tickers
+    officer_result_q = await db.execute(
+        select(InsiderTrade.ticker)
+        .where(InsiderTrade.tx_type == "purchase")
+        .where(InsiderTrade.ticker.isnot(None))
+        .where(InsiderTrade.is_officer == True)
+        .where(InsiderTrade.tx_date >= since)
+        .distinct()
+    )
+    insider_officer_tickers = {r[0] for r in officer_result_q.all()}
+
     # ── 4. Build unified chronological trade events ──
     events: list[dict] = []
     skipped_no_cash = 0
@@ -776,6 +885,14 @@ async def conviction_portfolio_sim(
                 fund_also_holds=t.ticker in fund_tickers,
                 politician_track_record=politician_track_records.get(t.politician),
                 recent_sells_count=recent_sells_map.get(t.ticker, 0),
+                leadership_role=leadership_map.get(t.politician),
+                repeated_buy_count=repeated_buyers.get((t.politician, t.ticker), 0),
+                relative_size_ratio=(
+                    (t.amount_low or 0) / median_amounts[t.politician]
+                    if t.politician in median_amounts and median_amounts[t.politician] > 0 and (t.amount_low or 0) > 0
+                    else None
+                ),
+                insider_is_officer=t.ticker in insider_officer_tickers,
             )
             if result["score"] >= min_score:
                 events.append({
@@ -816,6 +933,7 @@ async def conviction_portfolio_sim(
                 fund_also_holds=t.ticker in fund_tickers,
                 politician_track_record=None,
                 recent_sells_count=recent_sells_map.get(t.ticker, 0),
+                insider_is_officer=t.ticker in insider_officer_tickers,
             )
             if result["score"] >= min_score:
                 events.append({

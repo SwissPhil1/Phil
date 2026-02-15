@@ -24,6 +24,10 @@ export default function OptimizerPage() {
     { key: "track_record_max", label: "Track Record", default: 15, max: 30, desc: "Politician's historical win rate & avg return" },
     { key: "contrarian_max", label: "Contrarian Signal", default: 10, max: 25, desc: "Buying while others are selling" },
     { key: "small_cap_committee_max", label: "Small-Cap Committee", default: 15, max: 30, desc: "Small/mid-cap + committee overlap (very suspicious)" },
+    { key: "leadership_role_max", label: "Leadership Role", default: 20, max: 40, desc: "Committee chairs / ranking members (CEPR: 45pp alpha)" },
+    { key: "repeated_buyer_max", label: "Repeated Buyer", default: 15, max: 30, desc: "Same politician buying same ticker multiple times" },
+    { key: "relative_position_size_max", label: "Relative Position Size", default: 15, max: 30, desc: "Trade size vs politician's normal trade size" },
+    { key: "insider_role_bonus_max", label: "C-Suite Insider Bonus", default: 10, max: 25, desc: "Officer-level insiders also buying (CEO, CFO)" },
   ] as const;
 
   const defaultWeights = Object.fromEntries(WEIGHT_FACTORS.map(f => [f.key, f.default]));
@@ -147,7 +151,7 @@ export default function OptimizerPage() {
     try {
       const data = await api.runOptimizer({
         lookback_days: "730",
-        max_trades: "500",
+        max_trades: "5000",
         generations: "3",
         top_n: "10",
       });
@@ -288,7 +292,7 @@ export default function OptimizerPage() {
               </div>
               <div className="p-4 rounded-lg bg-muted/30 space-y-2">
                 <div className="text-foreground font-medium">2. Weight Search</div>
-                <p>Tests 700+ weight combinations using grid search + evolutionary optimization over 3 generations</p>
+                <p>Tests 1000+ weight combinations using grid search + evolutionary optimization over 3 generations</p>
               </div>
               <div className="p-4 rounded-lg bg-muted/30 space-y-2">
                 <div className="text-foreground font-medium">3. Validation</div>
@@ -296,7 +300,7 @@ export default function OptimizerPage() {
               </div>
             </div>
             <p className="text-xs">
-              Factors optimized: position size, committee overlap, disclosure speed, political cluster, cross-source confirmation, track record, contrarian signal, small-cap committee bonus, mega-cap discount
+              Factors optimized: position size, committee overlap, disclosure speed, political cluster, cross-source confirmation, track record, contrarian signal, small-cap committee bonus, leadership role, repeated buyer, relative position size, C-suite insider bonus
             </p>
           </CardContent>
         </Card>
@@ -384,7 +388,7 @@ export default function OptimizerPage() {
                 </>
               )}
             </Button>
-            <span className="text-xs text-muted-foreground">Tests against ~300 historical trades with actual returns</span>
+            <span className="text-xs text-muted-foreground">Tests against up to 5,000 historical trades with actual returns</span>
             {testResult && testResult.cross_validation.is_robust && (
               <Button
                 onClick={applyCustomWeights}

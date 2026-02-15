@@ -80,6 +80,9 @@ class WeightConfig:
     contrarian_max: float = 10.0
     leadership_role_max: float = 20.0  # CEPR study: strongest predictor of informed trading
     small_cap_committee_max: float = 15.0  # Bonus: small/mid-cap + committee overlap = very suspicious
+    repeated_buyer_max: float = 15.0  # Same politician buying same ticker repeatedly
+    relative_position_size_max: float = 15.0  # Trade size vs politician's median
+    insider_role_bonus_max: float = 10.0  # C-suite insiders also buying bonus
 
     # Thresholds
     cluster_mega_cap_discount: float = 0.4  # Multiplier for mega-cap cluster score
@@ -199,18 +202,35 @@ def score_trade_with_weights(
             score += weights.leadership_role_max * 0.40  # Other leadership roles
 
     # Factor 9: Small-Cap Committee Bonus
-    # A politician buying a small/mid-cap stock in the sector their committee oversees
-    # is far more suspicious than the same trade in a mega-cap (less coverage, more info asymmetry)
     is_small_cap = not trade_features.get("is_mega_cap", False) and not trade_features.get("is_large_cap", False)
     if is_small_cap and trade_features.get("has_committee_overlap"):
         if trade_features.get("committee_flag") == "HIGH":
-            score += weights.small_cap_committee_max  # Direct sector match on small cap
+            score += weights.small_cap_committee_max
         else:
-            score += weights.small_cap_committee_max * 0.5  # Broad oversight on small cap
+            score += weights.small_cap_committee_max * 0.5
+
+    # Factor 10: Repeated Buyer
+    repeated_buys = trade_features.get("repeated_buy_count", 0)
+    if repeated_buys >= 3:
+        score += weights.repeated_buyer_max
+    elif repeated_buys == 2:
+        score += weights.repeated_buyer_max * 0.5
+
+    # Factor 11: Relative Position Size
+    rel_ratio = trade_features.get("relative_size_ratio")
+    if rel_ratio is not None and rel_ratio >= 1.5:
+        if rel_ratio >= 3.0:
+            score += weights.relative_position_size_max
+        elif rel_ratio >= 2.0:
+            score += weights.relative_position_size_max * 0.67
+        else:
+            score += weights.relative_position_size_max * 0.33
+
+    # Factor 12: C-Suite Insider Bonus
+    if trade_features.get("insider_also_buying") and trade_features.get("insider_is_officer"):
+        score += weights.insider_role_bonus_max
 
     # Normalize to 0-100 scale using sqrt curve (matches signals.py)
-    # Sqrt spreads scores across the full range even though trades typically
-    # only trigger 2-4 of 10+ possible factors.
     max_possible = (
         weights.position_size_max
         + weights.committee_overlap_max
@@ -223,6 +243,9 @@ def score_trade_with_weights(
         + weights.track_record_max
         + weights.contrarian_max
         + weights.leadership_role_max
+        + weights.repeated_buyer_max
+        + weights.relative_position_size_max
+        + weights.insider_role_bonus_max
     )
     if max_possible > 0:
         raw_pct = min(max(score, 0), max_possible) / max_possible
@@ -233,7 +256,7 @@ def score_trade_with_weights(
 # ─── Trade Feature Extraction ───
 
 
-async def extract_trade_features(days: int = 730, max_trades: int = 500) -> list[dict]:
+async def extract_trade_features(days: int = 730, max_trades: int = 5000) -> list[dict]:
     """
     Extract features for all historical purchase trades, along with their
     actual returns. Uses stored DB prices (price_at_disclosure + return_since_disclosure)
@@ -390,6 +413,50 @@ async def extract_trade_features(days: int = 730, max_trades: int = 500) -> list
             elif "Ranking" in (r.role or "") and not existing:
                 leadership_map[r.politician_name] = r.role
 
+        # Repeated buyer counts: politician+ticker buy frequency
+        repeated_buyer_result = await session.execute(
+            select(
+                Trade.politician,
+                Trade.ticker,
+                func.count().label("buy_count"),
+            )
+            .where(Trade.tx_type == "purchase")
+            .where(Trade.ticker.isnot(None))
+            .where(or_(Trade.tx_date >= since, Trade.disclosure_date >= since))
+            .group_by(Trade.politician, Trade.ticker)
+        )
+        repeated_buyers: dict[tuple[str, str], int] = {}
+        for row in repeated_buyer_result.all():
+            repeated_buyers[(row.politician, row.ticker)] = row.buy_count
+
+        # Median trade amount per politician (for relative size ratio)
+        amount_result = await session.execute(
+            select(Trade.politician, Trade.amount_low)
+            .where(Trade.tx_type == "purchase")
+            .where(Trade.amount_low.isnot(None))
+            .where(Trade.amount_low > 0)
+        )
+        pol_amounts: dict[str, list[float]] = defaultdict(list)
+        for row in amount_result.all():
+            pol_amounts[row.politician].append(row.amount_low)
+        median_amounts: dict[str, float] = {}
+        for pol, amounts in pol_amounts.items():
+            sorted_amounts = sorted(amounts)
+            median_amounts[pol] = sorted_amounts[len(sorted_amounts) // 2]
+
+        # C-suite insider buying tickers (officer-level)
+        insider_officer_buying: set[str] = set()
+        officer_result = await session.execute(
+            select(InsiderTrade.ticker)
+            .where(InsiderTrade.filing_date >= since)
+            .where(InsiderTrade.tx_type == "purchase")
+            .where(InsiderTrade.ticker.isnot(None))
+            .where(InsiderTrade.is_officer == True)
+            .distinct()
+        )
+        for row in officer_result.all():
+            insider_officer_buying.add(row[0])
+
     # Build feature vectors with returns from stored DB data
     features_list = []
 
@@ -425,6 +492,15 @@ async def extract_trade_features(days: int = 730, max_trades: int = 500) -> list
                     leadership = role
                     break
 
+        # New factor data
+        median_amt = median_amounts.get(trade.politician)
+        trade_amount = trade.amount_low or 0
+        rel_ratio = (
+            trade_amount / median_amt
+            if median_amt and median_amt > 0 and trade_amount > 0
+            else None
+        )
+
         features = {
             # Identifiers
             "politician": trade.politician,
@@ -432,7 +508,7 @@ async def extract_trade_features(days: int = 730, max_trades: int = 500) -> list
             "tx_date": trade_date,
             "party": trade.party,
             # Scoring features
-            "amount_low": trade.amount_low or 0,
+            "amount_low": trade_amount,
             "has_committee_overlap": overlap is not None,
             "committee_flag": overlap["flag"] if overlap else None,
             "disclosure_delay_days": delay,
@@ -446,23 +522,30 @@ async def extract_trade_features(days: int = 730, max_trades: int = 500) -> list
             "total_past_trades": tr.get("total", 0),
             "is_contrarian": (trade.tx_type == "purchase" and recent_sells >= 3),
             "leadership_role": leadership,
+            "repeated_buy_count": repeated_buyers.get((trade.politician, ticker), 0),
+            "relative_size_ratio": rel_ratio,
+            "insider_is_officer": ticker in insider_officer_buying,
         }
 
         # Use stored returns from DB (no yfinance needed!)
         entry_price = trade.price_at_disclosure
-        current_price = trade.price_current
         ret = trade.return_since_disclosure
 
         if entry_price and entry_price > 0 and ret is not None:
             features["price_at_trade"] = entry_price
-
-            # return_since_disclosure serves as our "current" return
-            # Estimate forward returns based on holding period
             days_held = (datetime.utcnow() - trade_date).days
-            if days_held >= 30:
-                features["return_30d"] = ret * min(30 / days_held, 1.0)  # Proportional estimate
-            if days_held >= 90:
+
+            # Use ACTUAL stored 30d/90d prices when available
+            if trade.price_30d_after and trade.price_30d_after > 0:
+                features["return_30d"] = ((trade.price_30d_after - entry_price) / entry_price) * 100
+            elif days_held >= 30:
+                features["return_30d"] = ret * min(30 / days_held, 1.0)
+
+            if trade.price_90d_after and trade.price_90d_after > 0:
+                features["return_90d"] = ((trade.price_90d_after - entry_price) / entry_price) * 100
+            elif days_held >= 90:
                 features["return_90d"] = ret * min(90 / days_held, 1.0)
+
             if days_held >= 180:
                 features["return_180d"] = ret * min(180 / days_held, 1.0)
             # Full holding period return
@@ -663,6 +746,9 @@ def _generate_weight_grid(n_steps: int = 5) -> list[WeightConfig]:
         "contrarian_max": [5, 10, 15],
         "leadership_role_max": [10, 15, 20, 25, 30],
         "small_cap_committee_max": [0, 5, 10, 15, 20, 25],
+        "repeated_buyer_max": [0, 5, 10, 15, 20],
+        "relative_position_size_max": [0, 5, 10, 15, 20],
+        "insider_role_bonus_max": [0, 5, 10, 15],
     }
 
     # Full grid would be too large, so sample strategically
@@ -690,6 +776,9 @@ def _generate_weight_grid(n_steps: int = 5) -> list[WeightConfig]:
             contrarian_max=random.choice(ranges["contrarian_max"]),
             leadership_role_max=random.choice(ranges["leadership_role_max"]),
             small_cap_committee_max=random.choice(ranges["small_cap_committee_max"]),
+            repeated_buyer_max=random.choice(ranges["repeated_buyer_max"]),
+            relative_position_size_max=random.choice(ranges["relative_position_size_max"]),
+            insider_role_bonus_max=random.choice(ranges["insider_role_bonus_max"]),
             cluster_mega_cap_discount=random.choice([0.2, 0.3, 0.4, 0.5, 0.6]),
             late_disclosure_days=random.choice([30, 45, 60]),
             min_cluster_size=random.choice([2, 3, 4]),
@@ -714,6 +803,7 @@ def _evolve_weights(
         "position_size_max", "committee_overlap_max", "disclosure_speed_max",
         "cluster_max", "cross_source_insider_max", "cross_source_fund_max",
         "track_record_max", "contrarian_max", "leadership_role_max", "small_cap_committee_max",
+        "repeated_buyer_max", "relative_position_size_max", "insider_role_bonus_max",
         "triple_confirmation_bonus", "cluster_mega_cap_discount", "late_disclosure_days", "min_cluster_size",
     ]
 
@@ -940,7 +1030,7 @@ async def get_last_optimizer_results() -> dict:
 
 async def run_optimization(
     lookback_days: int = 730,
-    max_trades: int = 500,
+    max_trades: int = 5000,
     generations: int = 3,
     top_n: int = 10,
 ) -> dict:
@@ -1167,7 +1257,7 @@ async def run_deep_optimization(top_n: int = 10) -> dict:
     logger.info("Starting deep optimization: max data, train/holdout split, multi-period validation")
 
     # Step 1: Extract maximum data
-    all_trades = await extract_trade_features(days=2500, max_trades=5000)
+    all_trades = await extract_trade_features(days=3650, max_trades=20000)
     if not all_trades or len(all_trades) < 50:
         return {
             "error": f"Not enough trades for deep optimization (found {len(all_trades) if all_trades else 0}, need 50+)",
@@ -1292,8 +1382,8 @@ async def run_deep_optimization(top_n: int = 10) -> dict:
     output = {
         "mode": "deep",
         "optimization_params": {
-            "lookback_days": 2500,
-            "max_trades": 5000,
+            "lookback_days": 3650,
+            "max_trades": 20000,
             "generations": 5,
             "total_configs_tested": sum(g["configs_tested"] for g in generation_history),
             "elapsed_seconds": round(elapsed, 1),

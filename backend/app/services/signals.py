@@ -44,6 +44,10 @@ DEFAULT_WEIGHTS = {
     "track_record_max": 15.0,
     "contrarian_max": 10.0,
     "small_cap_committee_max": 15.0,
+    "leadership_role_max": 20.0,
+    "repeated_buyer_max": 15.0,
+    "relative_position_size_max": 15.0,
+    "insider_role_bonus_max": 10.0,
     "cluster_mega_cap_discount": 0.4,
     "late_disclosure_days": 45,
     "min_cluster_size": 3,
@@ -420,6 +424,10 @@ def score_trade_conviction(
     fund_also_holds: bool = False,
     politician_track_record: dict | None = None,
     recent_sells_count: int = 0,
+    leadership_role: str | None = None,
+    repeated_buy_count: int = 0,
+    relative_size_ratio: float | None = None,
+    insider_is_officer: bool = False,
 ) -> dict:
     """
     Score a single trade on conviction (0-150+).
@@ -453,6 +461,10 @@ def score_trade_conviction(
     trm = w["track_record_max"]
     ctm = w["contrarian_max"]
     scm = w["small_cap_committee_max"]
+    lrm = w.get("leadership_role_max", 20.0)
+    rbm = w.get("repeated_buyer_max", 15.0)
+    rpm = w.get("relative_position_size_max", 15.0)
+    irb = w.get("insider_role_bonus_max", 10.0)
     cmcd = w["cluster_mega_cap_discount"]
     ldd = w["late_disclosure_days"]
     mcs = w["min_cluster_size"]
@@ -637,6 +649,62 @@ def score_trade_conviction(
             "detail": f"Buying while {recent_sells_count} others selling (contrarian conviction)"
         })
 
+    # ─── Factor 8: Leadership Role (CEPR study: committee chairs get 45pp alpha) ───
+    if leadership_role:
+        role_lower = leadership_role.lower()
+        if "chair" in role_lower and "vice" not in role_lower:
+            pts = lrm
+            detail = f"Committee Chair ({leadership_role})"
+        elif "ranking" in role_lower:
+            pts = round(lrm * 0.85, 1)
+            detail = f"Ranking Member ({leadership_role})"
+        elif "vice" in role_lower:
+            pts = round(lrm * 0.65, 1)
+            detail = f"Vice Chair ({leadership_role})"
+        else:
+            pts = round(lrm * 0.40, 1)
+            detail = f"Leadership role ({leadership_role})"
+        score += pts
+        factors.append({"factor": "leadership_role", "points": pts, "detail": detail})
+
+    # ─── Factor 9: Repeated Buyer ───
+    if repeated_buy_count >= 3:
+        pts = rbm
+        score += pts
+        factors.append({
+            "factor": "repeated_buyer", "points": pts,
+            "detail": f"Strong repeat conviction: {repeated_buy_count} buys of {ticker}"
+        })
+    elif repeated_buy_count == 2:
+        pts = round(rbm * 0.5, 1)
+        score += pts
+        factors.append({
+            "factor": "repeated_buyer", "points": pts,
+            "detail": f"Repeat buyer: 2 buys of {ticker}"
+        })
+
+    # ─── Factor 10: Relative Position Size ───
+    if relative_size_ratio is not None and relative_size_ratio >= 1.5:
+        if relative_size_ratio >= 3.0:
+            pts = rpm
+            detail = f"Unusually large trade ({relative_size_ratio:.1f}x their median)"
+        elif relative_size_ratio >= 2.0:
+            pts = round(rpm * 0.67, 1)
+            detail = f"Above-average trade ({relative_size_ratio:.1f}x their median)"
+        else:
+            pts = round(rpm * 0.33, 1)
+            detail = f"Slightly above average ({relative_size_ratio:.1f}x their median)"
+        score += pts
+        factors.append({"factor": "relative_position_size", "points": pts, "detail": detail})
+
+    # ─── Factor 11: C-Suite Insider Bonus ───
+    if insider_also_buying and insider_is_officer:
+        score += irb
+        factors.append({
+            "factor": "insider_role_bonus", "points": irb,
+            "detail": "C-suite insider also buying (CEO/CFO/officer-level)"
+        })
+
     # ─── Normalize to 0-100 scale using sqrt curve ───
     # Linear normalization compressed scores to 15-50 because trades rarely
     # trigger more than 3-4 of 10 factors. Sqrt mapping spreads scores across
@@ -646,6 +714,7 @@ def score_trade_conviction(
     #   ~72% of max (5+ factors)  → score 85
     max_possible = (
         psm + com + scm + dsm + clm + csim + csfm + tcb + trm + ctm
+        + lrm + rbm + rpm + irb
     )
     if max_possible > 0:
         raw_pct = min(max(score, 0), max_possible) / max_possible

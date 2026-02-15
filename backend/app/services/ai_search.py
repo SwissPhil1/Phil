@@ -78,11 +78,11 @@ Given a natural language question, generate a single safe SQL SELECT query.
 RULES:
 1. ONLY generate SELECT statements. Never INSERT, UPDATE, DELETE, DROP, ALTER, or any DDL/DML.
 2. Always LIMIT results to at most 100 rows.
-3. Use standard SQL compatible with both SQLite and PostgreSQL.
+3. Use standard SQL compatible with PostgreSQL.
 4. For text matching use LIKE with % wildcards (case-insensitive: use LOWER()).
 5. Return useful columns — include names, tickers, dates, amounts, returns when relevant.
-6. For date filtering, use tx_date or disclosure_date with date comparisons.
-7. Round float results to 1 decimal place.
+6. For date filtering use PostgreSQL syntax: CURRENT_DATE - INTERVAL '1 year', CURRENT_DATE - INTERVAL '30 days', etc. NEVER use date('now', ...) which is SQLite-only.
+7. When rounding floats, ALWAYS cast to numeric first: ROUND(column::NUMERIC, 1). Never call ROUND() directly on a float/double precision column.
 8. When asked about "win rate" or "best performers", use the politicians table.
 9. When asked about committee overlap or conflicts of interest, JOIN trades with politician_committees.
 10. Order results by the most relevant metric (returns, trade count, etc.) DESC.

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.database import Trade, InsiderTrade, HedgeFundHolding, get_db, async_session
+from app.models.database import Trade, InsiderTrade, HedgeFundHolding, PoliticianCommittee, get_db, async_session
 from app.services.committees import get_committee_members, get_politician_committees, run_committee_ingestion
 from app.services.signals import (
     check_committee_overlap,
@@ -135,6 +135,65 @@ async def score_a_trade(
         )
         recent_sells = sell_result.scalar() or 0
 
+        # Leadership role
+        leadership_role = None
+        if politician:
+            lead_result = await session.execute(
+                select(PoliticianCommittee.role)
+                .where(PoliticianCommittee.politician_name.ilike(f"%{politician}%"))
+                .where(PoliticianCommittee.role.isnot(None))
+                .where(PoliticianCommittee.role != "Member")
+            )
+            for r in lead_result.all():
+                role = r[0]
+                if "Chair" in (role or ""):
+                    leadership_role = role
+                    break
+                elif "Ranking" in (role or ""):
+                    leadership_role = role
+
+        # Repeated buyer count
+        repeated_buy_count = 0
+        if politician:
+            repeat_result = await session.execute(
+                select(func.count())
+                .select_from(Trade)
+                .where(Trade.politician.ilike(f"%{politician}%"))
+                .where(Trade.ticker == ticker)
+                .where(Trade.tx_type == "purchase")
+                .where(Trade.tx_date >= since)
+            )
+            repeated_buy_count = repeat_result.scalar() or 0
+
+        # Median amount + relative size
+        relative_ratio = None
+        if politician:
+            med_result = await session.execute(
+                select(Trade.amount_low)
+                .where(Trade.politician.ilike(f"%{politician}%"))
+                .where(Trade.tx_type == "purchase")
+                .where(Trade.amount_low.isnot(None))
+                .where(Trade.amount_low > 0)
+            )
+            amounts = sorted([r[0] for r in med_result.all()])
+            median_amount = amounts[len(amounts) // 2] if amounts else None
+            amount = trade.get("amount_low", 0) or 0
+            if median_amount and median_amount > 0 and amount > 0:
+                relative_ratio = amount / median_amount
+
+        # C-suite insider check
+        insider_is_officer = False
+        if insider_buying:
+            officer_result = await session.execute(
+                select(func.count())
+                .select_from(InsiderTrade)
+                .where(InsiderTrade.ticker == ticker)
+                .where(InsiderTrade.tx_type == "purchase")
+                .where(InsiderTrade.is_officer == True)
+                .where(InsiderTrade.filing_date >= since)
+            )
+            insider_is_officer = (officer_result.scalar() or 0) > 0
+
     result = score_trade_conviction(
         trade,
         committees=committees,
@@ -143,6 +202,10 @@ async def score_a_trade(
         fund_also_holds=fund_holds,
         politician_track_record=track_record,
         recent_sells_count=recent_sells,
+        leadership_role=leadership_role,
+        repeated_buy_count=repeated_buy_count,
+        relative_size_ratio=relative_ratio,
+        insider_is_officer=insider_is_officer,
     )
     result["ticker"] = ticker
     result["politician"] = politician

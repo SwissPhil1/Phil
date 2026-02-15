@@ -19,7 +19,7 @@ router = APIRouter(prefix="/optimizer", tags=["optimizer"])
 @router.get("/run")
 async def run_optimizer(
     lookback_days: int = Query(730, description="How far back to look for trade data"),
-    max_trades: int = Query(500, description="Maximum trades to analyze"),
+    max_trades: int = Query(5000, description="Maximum trades to analyze"),
     generations: int = Query(3, description="Number of evolutionary generations"),
     top_n: int = Query(10, description="Number of top formulas to return"),
 ):

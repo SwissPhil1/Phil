@@ -302,30 +302,34 @@ async def extract_trade_features(days: int = 730, max_trades: int = 5000) -> lis
         for r in comm_result.all():
             committee_map[r.politician_name].append(r.committee_name)
 
-        # Track records (single query)
+        # Track records (single batch query)
         track_records: dict[str, dict] = {}
-        for name in politician_names:
+        if politician_names:
             tr_result = await session.execute(
                 select(
+                    Trade.politician,
                     func.count().label("total"),
                     func.avg(Trade.return_since_disclosure).label("avg_return"),
                     func.sum(
                         case((Trade.return_since_disclosure > 0, 1), else_=0)
                     ).label("wins"),
                 )
-                .where(Trade.politician == name)
+                .where(Trade.politician.in_(politician_names))
                 .where(Trade.tx_type == "purchase")
                 .where(Trade.return_since_disclosure.isnot(None))
+                .group_by(Trade.politician)
             )
-            row = tr_result.one_or_none()
-            if row and row.total and row.total > 0:
-                track_records[name] = {
-                    "total": row.total,
-                    "avg_return": float(row.avg_return) if row.avg_return else 0,
-                    "win_rate": float(row.wins / row.total * 100),
-                }
-            else:
-                track_records[name] = {"total": 0, "avg_return": 0, "win_rate": 0}
+            for row in tr_result.all():
+                if row.total and row.total > 0:
+                    track_records[row.politician] = {
+                        "total": row.total,
+                        "avg_return": float(row.avg_return) if row.avg_return else 0,
+                        "win_rate": float(row.wins / row.total * 100),
+                    }
+            # Fill in zeros for politicians not found
+            for name in politician_names:
+                if name not in track_records:
+                    track_records[name] = {"total": 0, "avg_return": 0, "win_rate": 0}
 
         # Cluster counts
         cluster_counts: dict[str, int] = {}
@@ -432,6 +436,7 @@ async def extract_trade_features(days: int = 730, max_trades: int = 5000) -> lis
         # Median trade amount per politician (for relative size ratio)
         amount_result = await session.execute(
             select(Trade.politician, Trade.amount_low)
+            .where(Trade.politician.in_(politician_names))
             .where(Trade.tx_type == "purchase")
             .where(Trade.amount_low.isnot(None))
             .where(Trade.amount_low > 0)
@@ -1257,7 +1262,7 @@ async def run_deep_optimization(top_n: int = 10) -> dict:
     logger.info("Starting deep optimization: max data, train/holdout split, multi-period validation")
 
     # Step 1: Extract maximum data
-    all_trades = await extract_trade_features(days=3650, max_trades=20000)
+    all_trades = await extract_trade_features(days=3650, max_trades=10000)
     if not all_trades or len(all_trades) < 50:
         return {
             "error": f"Not enough trades for deep optimization (found {len(all_trades) if all_trades else 0}, need 50+)",
@@ -1383,7 +1388,7 @@ async def run_deep_optimization(top_n: int = 10) -> dict:
         "mode": "deep",
         "optimization_params": {
             "lookback_days": 3650,
-            "max_trades": 20000,
+            "max_trades": 10000,
             "generations": 5,
             "total_configs_tested": sum(g["configs_tested"] for g in generation_history),
             "elapsed_seconds": round(elapsed, 1),

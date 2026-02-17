@@ -39,9 +39,21 @@ def _trade_to_response(t: Trade) -> TradeResponse:
         price_current=t.price_current,
         return_since_disclosure=t.return_since_disclosure,
         disclosure_delay_days=(
-            (t.disclosure_date - t.tx_date).days
-            if t.disclosure_date and t.tx_date else None
+            t.disclosure_delay_days
+            if t.disclosure_delay_days is not None
+            else (
+                (t.disclosure_date - t.tx_date).days
+                if t.disclosure_date and t.tx_date else None
+            )
         ),
+        suspicion_score=t.suspicion_score,
+        cluster_flag=t.cluster_flag or False,
+        return_30d=t.return_30d,
+        return_90d=t.return_90d,
+        excess_return_90d=t.excess_return_90d,
+        realized_return=t.realized_return,
+        hold_days=t.hold_days,
+        sell_price=t.sell_price,
     )
 
 router = APIRouter()
@@ -482,6 +494,259 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
     )
 
 
+# --- Suspicious Trades ---
+
+
+@router.get("/trades/suspicious", response_model=list[TradeResponse])
+async def get_suspicious_trades(
+    min_score: float = Query(default=50, ge=0, le=100),
+    days: int = Query(default=90, ge=1, le=3650),
+    chamber: str | None = None,
+    party: str | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get trades ranked by suspicion score.
+
+    Returns purchases sorted by suspicion_score descending.
+    This is the automated version of what Autopilot's team does manually
+    every morning — flagging suspicious trades.
+    """
+    since = datetime.utcnow() - timedelta(days=days)
+    stmt = (
+        select(Trade)
+        .where(
+            Trade.ticker.isnot(None),
+            Trade.tx_type == "purchase",
+            Trade.suspicion_score.isnot(None),
+            Trade.suspicion_score >= min_score,
+            Trade.disclosure_date >= since,
+        )
+    )
+    if chamber:
+        stmt = stmt.where(Trade.chamber == chamber.lower())
+    if party:
+        stmt = stmt.where(Trade.party == party.upper())
+
+    stmt = stmt.order_by(Trade.suspicion_score.desc()).limit(limit)
+    result = await db.execute(stmt)
+    trades = result.scalars().all()
+    return [_trade_to_response(t) for t in trades]
+
+
+@router.get("/trades/clusters")
+async def get_cluster_trades(
+    days: int = Query(default=90, ge=1, le=3650),
+    limit: int = Query(default=50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get cluster trades — tickers bought by 3+ politicians within 7 days.
+
+    Groups by ticker and shows which politicians participated in each cluster.
+    """
+    since = datetime.utcnow() - timedelta(days=days)
+    stmt = (
+        select(Trade)
+        .where(
+            Trade.cluster_flag.is_(True),
+            Trade.disclosure_date >= since,
+        )
+        .order_by(Trade.tx_date.desc())
+        .limit(limit * 3)  # Get extra to group
+    )
+    result = await db.execute(stmt)
+    trades = result.scalars().all()
+
+    # Group by ticker + approximate date window
+    from collections import defaultdict
+    clusters: dict[str, list] = defaultdict(list)
+    for t in trades:
+        # Use week as cluster key
+        week_key = t.tx_date.strftime("%Y-W%W") if t.tx_date else "unknown"
+        key = f"{t.ticker}_{week_key}"
+        clusters[key].append({
+            "id": t.id,
+            "politician": t.politician,
+            "party": t.party,
+            "tx_date": t.tx_date.isoformat() if t.tx_date else None,
+            "amount_low": t.amount_low,
+            "amount_high": t.amount_high,
+            "suspicion_score": t.suspicion_score,
+            "return_since_disclosure": t.return_since_disclosure,
+        })
+
+    # Return top clusters by number of politicians
+    sorted_clusters = sorted(
+        [
+            {
+                "ticker": key.split("_")[0],
+                "week": key.split("_")[1] if "_" in key else "",
+                "politicians": len(set(t["politician"] for t in trades_list)),
+                "trades": trades_list,
+            }
+            for key, trades_list in clusters.items()
+        ],
+        key=lambda c: c["politicians"],
+        reverse=True,
+    )
+
+    return sorted_clusters[:limit]
+
+
+@router.get("/scoring/validation")
+async def get_score_validation(db: AsyncSession = Depends(get_db)):
+    """Run the scoring validation analysis.
+
+    Returns per-signal correlation with 90-day excess returns,
+    statistical significance, and recommended weight adjustments.
+    """
+    from app.services.validation import validate_signals
+    return await validate_signals(db)
+
+
+@router.get("/scoring/stats")
+async def get_scoring_stats(db: AsyncSession = Depends(get_db)):
+    """Get scoring coverage statistics."""
+    total_purchases = (await db.execute(
+        select(func.count()).select_from(Trade).where(
+            Trade.ticker.isnot(None),
+            Trade.tx_type == "purchase",
+        )
+    )).scalar() or 0
+
+    scored = (await db.execute(
+        select(func.count()).select_from(Trade).where(
+            Trade.suspicion_score.isnot(None),
+        )
+    )).scalar() or 0
+
+    with_forward_prices = (await db.execute(
+        select(func.count()).select_from(Trade).where(
+            Trade.return_90d.isnot(None),
+        )
+    )).scalar() or 0
+
+    with_excess = (await db.execute(
+        select(func.count()).select_from(Trade).where(
+            Trade.excess_return_90d.isnot(None),
+        )
+    )).scalar() or 0
+
+    clustered = (await db.execute(
+        select(func.count()).select_from(Trade).where(
+            Trade.cluster_flag.is_(True),
+        )
+    )).scalar() or 0
+
+    avg_score = (await db.execute(
+        select(func.avg(Trade.suspicion_score)).where(
+            Trade.suspicion_score.isnot(None),
+        )
+    )).scalar()
+
+    # Score distribution
+    high_score = (await db.execute(
+        select(func.count()).select_from(Trade).where(
+            Trade.suspicion_score >= 70,
+        )
+    )).scalar() or 0
+
+    medium_score = (await db.execute(
+        select(func.count()).select_from(Trade).where(
+            Trade.suspicion_score >= 40,
+            Trade.suspicion_score < 70,
+        )
+    )).scalar() or 0
+
+    # Round-trip stats
+    with_realized = (await db.execute(
+        select(func.count()).select_from(Trade).where(
+            Trade.realized_return.isnot(None),
+        )
+    )).scalar() or 0
+
+    avg_realized = (await db.execute(
+        select(func.avg(Trade.realized_return)).where(
+            Trade.realized_return.isnot(None),
+        )
+    )).scalar()
+
+    avg_hold = (await db.execute(
+        select(func.avg(Trade.hold_days)).where(
+            Trade.hold_days.isnot(None),
+        )
+    )).scalar()
+
+    realized_win_rate = None
+    if with_realized > 0:
+        realized_wins = (await db.execute(
+            select(func.count()).select_from(Trade).where(
+                Trade.realized_return > 0,
+            )
+        )).scalar() or 0
+        realized_win_rate = round(realized_wins / with_realized * 100, 1)
+
+    return {
+        "total_purchases": total_purchases,
+        "scored_trades": scored,
+        "scoring_coverage": f"{round(scored / total_purchases * 100, 1)}%" if total_purchases else "0%",
+        "with_90d_forward_returns": with_forward_prices,
+        "with_excess_returns": with_excess,
+        "cluster_trades": clustered,
+        "avg_suspicion_score": round(avg_score, 1) if avg_score else None,
+        "high_suspicion_count": high_score,
+        "medium_suspicion_count": medium_score,
+        "round_trips": {
+            "matched_trades": with_realized,
+            "avg_realized_return": round(avg_realized, 2) if avg_realized else None,
+            "avg_hold_days": round(avg_hold, 0) if avg_hold else None,
+            "win_rate": realized_win_rate,
+        },
+    }
+
+
+@router.get("/trades/round-trips")
+async def get_round_trip_trades(
+    min_return: float | None = None,
+    max_return: float | None = None,
+    politician: str | None = None,
+    sort_by: str = Query(default="realized_return", pattern="^(realized_return|hold_days|suspicion_score)$"),
+    limit: int = Query(default=50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get trades with matched buy→sell round-trip returns.
+
+    Shows what politicians actually made on closed positions.
+    Sort by realized_return to see best/worst trades, or by
+    suspicion_score to see if suspicious trades also made money.
+    """
+    stmt = (
+        select(Trade)
+        .where(
+            Trade.realized_return.isnot(None),
+            Trade.tx_type == "purchase",
+        )
+    )
+    if min_return is not None:
+        stmt = stmt.where(Trade.realized_return >= min_return)
+    if max_return is not None:
+        stmt = stmt.where(Trade.realized_return <= max_return)
+    if politician:
+        stmt = stmt.where(Trade.politician.ilike(f"%{politician}%"))
+
+    if sort_by == "realized_return":
+        stmt = stmt.order_by(Trade.realized_return.desc())
+    elif sort_by == "hold_days":
+        stmt = stmt.order_by(Trade.hold_days.asc())
+    elif sort_by == "suspicion_score":
+        stmt = stmt.order_by(Trade.suspicion_score.desc().nullslast())
+
+    stmt = stmt.limit(limit)
+    result = await db.execute(stmt)
+    trades = result.scalars().all()
+    return [_trade_to_response(t) for t in trades]
+
+
 # --- Admin / Ingestion ---
 
 
@@ -880,3 +1145,53 @@ async def force_price_politician(
 
     await db.commit()
     return {"politician": politician, "updated": updated, "attempted": len(trades), "errors": errors[:10]}
+
+
+@router.post("/admin/backfill-scores")
+async def trigger_backfill_and_score(
+    limit: int = Query(default=2000, ge=1, le=50000),
+):
+    """Run the full scoring pipeline: backfill forward prices, compute scores.
+
+    Steps:
+    1. Backfill disclosure_delay_days
+    2. Backfill 30d/90d forward prices + excess returns
+    3. Detect trade clusters
+    4. Score all unscored trades
+    """
+    import asyncio
+    from app.services.backfill import run_full_backfill
+    from app.services.scoring import run_scoring
+
+    async def _run():
+        try:
+            backfill_result = await run_full_backfill(price_limit=limit)
+            logger.info(f"Backfill complete: {backfill_result}")
+            scoring_result = await run_scoring()
+            logger.info(f"Scoring complete: {scoring_result} trades scored")
+        except Exception as e:
+            logger.error(f"Backfill/scoring failed: {e}")
+
+    asyncio.create_task(_run())
+    return {"status": "started", "limit": limit, "message": "Backfill + scoring started. Check logs."}
+
+
+@router.post("/admin/ingest-committees")
+async def trigger_committee_ingestion():
+    """Ingest congressional committee assignments from GitHub.
+
+    Populates PoliticianCommittee table used for committee-sector
+    overlap scoring signal.
+    """
+    import asyncio
+    from app.services.committees import run_committee_ingestion
+
+    async def _run():
+        try:
+            result = await run_committee_ingestion()
+            logger.info(f"Committee ingestion complete: {result}")
+        except Exception as e:
+            logger.error(f"Committee ingestion failed: {e}")
+
+    asyncio.create_task(_run())
+    return {"status": "started", "message": "Committee ingestion started. Check logs."}

@@ -6,12 +6,14 @@ import {
   LayoutDashboard,
   Landmark,
   Trophy,
+  AlertTriangle,
   Zap,
 } from "lucide-react";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/congress", label: "Congress Trades", icon: Landmark },
+  { href: "/suspicious", label: "Suspicious Trades", icon: AlertTriangle },
   { href: "/leaderboard", label: "Leaderboard", icon: Trophy },
 ];
 

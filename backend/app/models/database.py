@@ -50,6 +50,15 @@ class Trade(Base):
     price_90d_after = Column(Float)
     return_since_disclosure = Column(Float)
 
+    # Scoring fields
+    disclosure_delay_days = Column(Integer)        # (disclosure_date - tx_date).days
+    return_30d = Column(Float)                     # % return 30 days after disclosure
+    return_90d = Column(Float)                     # % return 90 days after disclosure
+    excess_return_30d = Column(Float)              # return_30d minus SPY return over same window
+    excess_return_90d = Column(Float)              # return_90d minus SPY return over same window
+    suspicion_score = Column(Float, index=True)    # 0-100 composite suspicion score
+    cluster_flag = Column(Boolean, default=False)  # 3+ politicians same ticker within 7 days
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     notified = Column(Boolean, default=False)
@@ -474,6 +483,15 @@ async def _migrate_missing_columns():
             ("total_buys", "INTEGER", "0"),
             ("total_sells", "INTEGER", "0"),
             ("district", "VARCHAR(10)", None),
+        ],
+        "trades": [
+            ("disclosure_delay_days", "INTEGER", None),
+            ("return_30d", "DOUBLE PRECISION", None),
+            ("return_90d", "DOUBLE PRECISION", None),
+            ("excess_return_30d", "DOUBLE PRECISION", None),
+            ("excess_return_90d", "DOUBLE PRECISION", None),
+            ("suspicion_score", "DOUBLE PRECISION", None),
+            ("cluster_flag", "BOOLEAN", "false"),
         ],
         "optimized_weights": [
             ("full_result_json", "TEXT", None),

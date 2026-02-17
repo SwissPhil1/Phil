@@ -20,6 +20,11 @@ class TradeResponse(BaseModel):
     price_current: float | None = None
     return_since_disclosure: float | None = None
     disclosure_delay_days: int | None = None
+    suspicion_score: float | None = None
+    cluster_flag: bool = False
+    return_30d: float | None = None
+    return_90d: float | None = None
+    excess_return_90d: float | None = None
 
     class Config:
         from_attributes = True

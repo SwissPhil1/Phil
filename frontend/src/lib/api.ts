@@ -34,6 +34,39 @@ export interface Trade {
   price_current: number | null;
   return_since_disclosure: number | null;
   disclosure_delay_days?: number;
+  suspicion_score: number | null;
+  cluster_flag: boolean;
+  return_30d: number | null;
+  return_90d: number | null;
+  excess_return_90d: number | null;
+}
+
+export interface ClusterGroup {
+  ticker: string;
+  week: string;
+  politicians: number;
+  trades: {
+    id: number;
+    politician: string;
+    party: string | null;
+    tx_date: string | null;
+    amount_low: number | null;
+    amount_high: number | null;
+    suspicion_score: number | null;
+    return_since_disclosure: number | null;
+  }[];
+}
+
+export interface ScoringStats {
+  total_purchases: number;
+  scored_trades: number;
+  scoring_coverage: string;
+  with_90d_forward_returns: number;
+  with_excess_returns: number;
+  cluster_trades: number;
+  avg_suspicion_score: number | null;
+  high_suspicion_count: number;
+  medium_suspicion_count: number;
 }
 
 export interface Politician {
@@ -191,4 +224,16 @@ export const api = {
     const qs = params.toString() ? `?${params.toString()}` : "";
     return fetchApi<TickerChartData>(`/api/v1/tickers/${encodeURIComponent(ticker)}/chart${qs}`);
   },
+
+  // Suspicious trades
+  getSuspiciousTrades: (params?: Record<string, string>) => {
+    const qs = params ? "?" + new URLSearchParams(params).toString() : "";
+    return fetchApi<Trade[]>(`/api/v1/trades/suspicious${qs}`);
+  },
+  getClusterTrades: (params?: Record<string, string>) => {
+    const qs = params ? "?" + new URLSearchParams(params).toString() : "";
+    return fetchApi<ClusterGroup[]>(`/api/v1/trades/clusters${qs}`);
+  },
+  getScoringStats: () => fetchApi<ScoringStats>("/api/v1/scoring/stats"),
+  getScoringValidation: () => fetchApi<Record<string, unknown>>("/api/v1/scoring/validation"),
 };

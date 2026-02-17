@@ -21,6 +21,8 @@ from app.services.ingestion import run_ingestion
 from app.services.historical_ingestion import run_historical_ingestion
 from app.services.capitoltrades import run_capitoltrades_ingestion
 from app.services.performance import run_performance_update, run_price_refresh
+from app.services.backfill import run_full_backfill
+from app.services.scoring import run_scoring
 
 logging.basicConfig(
     level=logging.INFO,
@@ -48,6 +50,19 @@ async def _check_db_has_data() -> bool:
         return False
 
 
+async def _run_backfill_and_scoring():
+    """Run backfill + scoring pipeline."""
+    try:
+        result = await run_full_backfill(price_limit=2000)
+        logger.info(f"Backfill result: {result}")
+        scored = await run_scoring()
+        logger.info(f"Scored {scored} trades")
+        return {"backfill": result, "scored": scored}
+    except Exception as e:
+        logger.error(f"Backfill/scoring failed: {e}")
+        return {"error": str(e)}
+
+
 async def _run_initial_ingestions():
     """Run all initial ingestions in background so the app starts immediately."""
     import asyncio
@@ -63,6 +78,7 @@ async def _run_initial_ingestions():
         ("House trades (CapitolTrades)", lambda: run_capitoltrades_ingestion(chamber="house"), True),
         ("Politician stats + prices", lambda: run_performance_update(price_limit=50000), False),
         ("Refresh current prices", run_price_refresh, False),
+        ("Backfill forward prices + scoring", lambda: _run_backfill_and_scoring(), False),
     ]
 
     for name, fn, skip_if_has_data in jobs:
@@ -115,8 +131,13 @@ async def lifespan(app: FastAPI):
             minutes=15,
             id="price_refresh", name="Refresh current prices + leaderboard",
         )
+        scheduler.add_job(
+            _run_backfill_and_scoring, "interval",
+            hours=6,
+            id="scoring", name="Backfill forward prices + suspicion scoring",
+        )
         scheduler.start()
-        logger.info("All 4 schedulers started")
+        logger.info("All 5 schedulers started")
     except Exception as e:
         logger.error(f"Scheduler setup failed (app will still run): {e}")
 

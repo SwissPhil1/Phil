@@ -13,7 +13,7 @@ from sqlalchemy.orm import sessionmaker
 # Override DB URL before any imports
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///test_smartflow.db"
 
-from app.models.database import Base, Trade, Politician, InsiderTrade, HedgeFund, HedgeFundHolding, get_db
+from app.models.database import Base, Trade, Politician, get_db
 from app.main import app
 
 
@@ -183,52 +183,3 @@ async def seed_politicians(db_session: AsyncSession):
     return politicians
 
 
-@pytest_asyncio.fixture
-async def seed_insider_trades(db_session: AsyncSession):
-    """Seed the database with sample insider trades."""
-    now = datetime.utcnow()
-    trades = [
-        InsiderTrade(
-            insider_name="Jensen Huang",
-            insider_cik="001234",
-            insider_title="CEO",
-            is_director=True,
-            is_officer=True,
-            issuer_name="NVIDIA Corp",
-            issuer_cik="001045810",
-            ticker="NVDA",
-            tx_date=now - timedelta(days=3),
-            filing_date=now - timedelta(days=1),
-            tx_code="S",
-            tx_type="sale",
-            shares=10000,
-            price_per_share=500.0,
-            total_value=5000000,
-            shares_after=90000,
-            acquired_disposed="D",
-        ),
-        InsiderTrade(
-            insider_name="Tim Cook",
-            insider_cik="001235",
-            insider_title="CEO",
-            is_director=True,
-            is_officer=True,
-            issuer_name="Apple Inc",
-            issuer_cik="0000320193",
-            ticker="AAPL",
-            tx_date=now - timedelta(days=5),
-            filing_date=now - timedelta(days=2),
-            tx_code="P",
-            tx_type="purchase",
-            shares=5000,
-            price_per_share=180.0,
-            total_value=900000,
-            shares_after=100000,
-            acquired_disposed="A",
-        ),
-    ]
-
-    for t in trades:
-        db_session.add(t)
-    await db_session.commit()
-    return trades

@@ -5,37 +5,14 @@ import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
   Landmark,
-  TrendingUp,
-  Target,
-  BarChart3,
   Trophy,
-  Brain,
-  Settings,
   Zap,
-  Eye,
-  FlaskConical,
-  UserCheck,
-  Bell,
-  Activity,
-  Sparkles,
 } from "lucide-react";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/alerts", label: "Alerts", icon: Bell },
-  { href: "/activity", label: "Activity Feed", icon: Activity },
   { href: "/congress", label: "Congress Trades", icon: Landmark },
-  { href: "/insiders", label: "Insider Trades", icon: UserCheck },
-  { href: "/hedge-funds", label: "Hedge Funds", icon: TrendingUp },
-  { href: "/trump", label: "Trump Circle", icon: Target },
-  { href: "/prediction-markets", label: "Markets", icon: BarChart3 },
   { href: "/leaderboard", label: "Leaderboard", icon: Trophy },
-  { href: "/signals", label: "Signals", icon: Zap },
-  { href: "/backtester", label: "Backtester", icon: FlaskConical },
-  { href: "/watchlist", label: "Watchlist", icon: Eye },
-  { href: "/search", label: "AI Search", icon: Sparkles },
-  { href: "/optimizer", label: "Optimizer", icon: Brain },
-  { href: "/settings", label: "Settings", icon: Settings },
 ];
 
 export function Sidebar() {
@@ -50,7 +27,7 @@ export function Sidebar() {
           </div>
           <div>
             <h1 className="text-sm font-bold tracking-tight">SmartFlow</h1>
-            <p className="text-[10px] text-muted-foreground">Copy the smartest money</p>
+            <p className="text-[10px] text-muted-foreground">Copy trading intelligence</p>
           </div>
         </Link>
       </div>

@@ -1,5 +1,4 @@
 // Always use relative paths - Next.js API route handler proxies /api/* to Railway backend.
-// This avoids cross-origin issues and trailing-slash redirect loops.
 const API_BASE = "";
 
 async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
@@ -16,7 +15,7 @@ async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
-// ─── Types ───
+// --- Types ---
 
 export interface Trade {
   id: number;
@@ -52,33 +51,6 @@ export interface Politician {
   conviction_cagr: number | null;
   priced_buy_count: number | null;
   years_active: number | null;
-}
-
-export interface Signal {
-  ticker: string;
-  action: string;
-  politician_count: number;
-  politicians: string[];
-  signal_strength: string;
-  is_mega_cap: boolean;
-  window_days: number;
-}
-
-export interface CrossSourceSignal {
-  ticker: string;
-  sector: string;
-  sources: string[];
-  source_count: number;
-  signal_strength: string;
-  description: string;
-}
-
-export interface ConvictionScore {
-  score: number;
-  rating: string;
-  factors: { factor: string; points: number; detail: string }[];
-  factor_breakdown: Record<string, number>;
-  committee_overlap: { committee: string; stock_sector: string; flag: string } | null;
 }
 
 export interface StatsResponse {
@@ -123,222 +95,6 @@ export interface UnifiedLeaderboard {
   }>;
 }
 
-export interface HedgeFund {
-  name: string;
-  manager_name: string;
-  cik: string;
-  total_value: number;
-  num_holdings: number;
-}
-
-export interface OptimizerResult {
-  optimization_params: {
-    lookback_days: number;
-    max_trades: number;
-    generations: number;
-    total_configs_tested: number;
-    elapsed_seconds: number;
-  };
-  data_summary: {
-    trades_with_returns: number;
-    trades_with_30d_return: number;
-    trades_with_90d_return: number;
-    trades_with_exit: number;
-  };
-  generation_history: {
-    generation: number;
-    configs_tested: number;
-    best_fitness: number;
-    avg_fitness: number;
-  }[];
-  current_formula: {
-    fitness: number;
-    correlation_30d: number;
-    correlation_90d: number;
-    hit_rate_30d: number;
-    hit_rate_90d: number;
-    edge_30d: number;
-    edge_90d: number;
-    weights: Record<string, number>;
-  };
-  top_formulas: {
-    rank: number;
-    fitness: number;
-    correlation_30d: number;
-    correlation_90d: number;
-    hit_rate_30d: number;
-    hit_rate_90d: number;
-    edge_30d: number;
-    edge_90d: number;
-    weights: Record<string, number>;
-    cross_validation: {
-      is_robust: boolean;
-      avg_test_fitness: number;
-      avg_overfit_ratio: number;
-    };
-  }[];
-  best_robust_formula: {
-    rank: number;
-    fitness: number;
-    weights: Record<string, number>;
-    cross_validation: { is_robust: boolean };
-  } | null;
-  recommendation: {
-    use_new_formula: boolean;
-    improvement_pct: number;
-    detail: string;
-  };
-  applied: {
-    status: string;
-    weights: Record<string, number>;
-    fitness: number;
-    is_robust: boolean;
-  } | null;
-}
-
-export interface TimePeriodValidation {
-  periods: Record<string, {
-    n_trades: number;
-    fitness?: number;
-    edge_90d?: number;
-    hit_rate_90d?: number;
-    correlation_90d?: number;
-    skipped: boolean;
-  }>;
-  is_consistent: boolean;
-  worst_period_edge: number;
-}
-
-export interface DeepOptimizerResult {
-  mode: "deep";
-  optimization_params: {
-    lookback_days: number;
-    max_trades: number;
-    generations: number;
-    total_configs_tested: number;
-    elapsed_seconds: number;
-    train_trades: number;
-    holdout_trades: number;
-    train_cutoff_date: string | null;
-  };
-  data_summary: {
-    trades_with_returns: number;
-    trades_with_30d_return: number;
-    trades_with_90d_return: number;
-    trades_with_exit: number;
-  };
-  generation_history: {
-    generation: number;
-    configs_tested: number;
-    best_fitness: number;
-    avg_fitness: number;
-  }[];
-  current_formula: {
-    fitness: number;
-    correlation_30d: number;
-    correlation_90d: number;
-    hit_rate_30d: number;
-    hit_rate_90d: number;
-    edge_30d: number;
-    edge_90d: number;
-    weights: Record<string, number>;
-    holdout_fitness: number;
-    holdout_edge_90d: number;
-    time_period_validation: TimePeriodValidation;
-  };
-  top_formulas: {
-    rank: number;
-    fitness: number;
-    train_fitness: number;
-    holdout_fitness: number;
-    holdout_edge_90d: number;
-    holdout_hit_rate_90d: number;
-    holdout_correlation_90d: number;
-    overfit_ratio: number;
-    correlation_30d: number;
-    correlation_90d: number;
-    hit_rate_30d: number;
-    hit_rate_90d: number;
-    edge_30d: number;
-    edge_90d: number;
-    weights: Record<string, number>;
-    cross_validation: { is_robust: boolean; avg_test_fitness: number; avg_overfit_ratio: number };
-    time_period_validation: TimePeriodValidation;
-    is_deep_robust: boolean;
-  }[];
-  best_robust_formula: {
-    rank: number;
-    fitness: number;
-    holdout_fitness: number;
-    weights: Record<string, number>;
-    is_deep_robust: boolean;
-    time_period_validation: TimePeriodValidation;
-  } | null;
-  recommendation: {
-    use_new_formula: boolean;
-    improvement_pct: number;
-    detail: string;
-  };
-  applied: {
-    status: string;
-    weights: Record<string, number>;
-    fitness: number;
-    is_robust: boolean;
-  } | null;
-}
-
-export interface TestWeightsResult {
-  weights: Record<string, number>;
-  result: {
-    fitness: number;
-    correlation_30d: number;
-    correlation_90d: number;
-    hit_rate_30d: number;
-    hit_rate_90d: number;
-    high_score_avg_return_30d: number;
-    high_score_avg_return_90d: number;
-    low_score_avg_return_30d: number;
-    low_score_avg_return_90d: number;
-    edge_30d: number;
-    edge_90d: number;
-    n_trades: number;
-    n_high_score: number;
-    n_low_score: number;
-  };
-  cross_validation: {
-    is_robust: boolean;
-    avg_test_fitness: number;
-    avg_overfit_ratio: number;
-  };
-  trades_analyzed: number;
-}
-
-export interface TrumpOverview {
-  total_insiders: number;
-  total_companies: number;
-  total_donors: number;
-  categories: Record<string, number>;
-}
-
-export interface BacktestResult {
-  backtest_params: Record<string, unknown>;
-  total_trades_checked: number;
-  trades_with_returns: number;
-  exits_found: number;
-  still_holding: number;
-  score_bucket_analysis: Record<string, {
-    trade_count: number;
-    avg_return_pct: number | null;
-  }>;
-  score_validation: {
-    error?: string;
-    significant_95pct?: boolean;
-    edge_pct?: number;
-    t_statistic?: number;
-  };
-  top_scored_trades?: any[];
-}
-
 export interface PortfolioNavPoint {
   date: string;
   eq_return: number;
@@ -376,197 +132,23 @@ export interface PortfolioLeaderboardEntry {
   conviction_weighted: PortfolioStrategyStats & { years: number };
 }
 
-// Alerts
-export interface AlertItem {
-  id: string;
-  source: "congress" | "insider";
-  politician: string;
-  party: string | null;
-  state: string | null;
-  ticker: string;
-  action: string;
-  tx_type: string;
-  amount_low: number | null;
-  amount_high: number | null;
-  tx_date: string | null;
-  disclosure_date: string | null;
-  description: string;
-  return_since: number | null;
-}
-
-export interface AlertsResponse {
-  alerts: AlertItem[];
-  total: number;
-  congress_total: number;
-  insider_total: number;
-  page: number;
-  page_size: number;
-  hours: number;
-}
-
-export interface SuspiciousTrade {
-  id: string;
-  source: "congress" | "insider";
-  politician: string;
-  party: string | null;
-  state: string | null;
-  ticker: string;
-  asset_description: string | null;
-  amount_low: number | null;
-  amount_high: number | null;
-  tx_date: string | null;
-  disclosure_date: string | null;
-  disclosure_delay_days: number | null;
-  tx_type: string;
-  action: string;
-  return_since: number | null;
-  conviction_score: number;
-  conviction_rating: "VERY_HIGH" | "HIGH" | "MEDIUM" | "LOW" | "VERY_LOW";
-  factors: { factor: string; points: number; detail: string }[];
-  cluster_count: number;
-  insider_also_buying: boolean;
-  fund_also_holds: boolean;
-  committee_overlap: { committee: string; stock_sector: string; overlap_type: string; flag: string } | null;
-}
-
-export interface SuspiciousResponse {
-  trades: SuspiciousTrade[];
-  total: number;
-  days_checked: number;
-}
-
-export interface NavSeriesPoint {
-  date: string;
-  nav: number;
-  return_pct: number;
-  positions: number;
-  cash: number;
-}
-
-export interface ConvictionPortfolioPosition {
-  id: string;
-  source: "congress" | "insider";
-  politician: string;
-  party: string | null;
-  ticker: string;
-  conviction_score: number;
-  conviction_rating: "VERY_HIGH" | "HIGH" | "MEDIUM" | "LOW" | "VERY_LOW";
-  entry_date: string | null;
-  entry_price: number;
-  exit_date: string | null;
-  exit_price: number;
-  return_pct: number;
-  invested: number;
-  current_value: number;
-  pnl: number;
-  holding_days: number | null;
-  status: "closed" | "holding";
-}
-
-export interface ConvictionPortfolioResponse {
-  nav_series: NavSeriesPoint[];
-  summary: {
-    initial_capital: number;
-    current_value: number;
-    total_return_pct: number;
-    cagr_pct: number;
-    total_positions: number;
-    open_positions: number;
-    closed_positions: number;
-    win_rate: number;
-    best_trade_pct: number | null;
-    worst_trade_pct: number | null;
-    avg_holding_days: number | null;
-    cash: number;
-    skipped_no_cash: number;
-    skipped_max_positions: number;
-    skipped_duplicate: number;
-    exit_reasons?: Record<string, number>;
-  };
-  positions: ConvictionPortfolioPosition[];
-  min_score: number;
-  days: number;
-  initial_capital: number;
-  max_positions: number;
-  stop_loss_pct?: number;
-  take_profit_pct?: number;
-  max_holding_days?: number;
-  conviction_sizing?: boolean;
-}
-
-// Chart data for ticker price + trade markers
-export interface ChartTradeMarker {
-  date: string | null;
-  type: "buy" | "sell";
-  politician: string;
-  source: "congress" | "insider";
-  party: string | null;
-  amount_low: number | null;
-  amount_high: number | null;
-  price: number | null;
-}
-
 export interface TickerChartData {
   ticker: string;
   prices: { date: string; close: number }[];
-  trades: ChartTradeMarker[];
+  trades: {
+    date: string | null;
+    type: "buy" | "sell";
+    politician: string;
+    source: string;
+    party: string | null;
+    amount_low: number | null;
+    amount_high: number | null;
+    price: number | null;
+  }[];
   days: number;
 }
 
-export interface AlertsSummary {
-  periods: Record<string, { congress_trades: number; insider_trades: number; total: number }>;
-  hot_tickers_24h: { ticker: string; count: number }[];
-}
-
-export interface ActivityItem {
-  id: string;
-  source: "congress" | "insider";
-  actor: string;
-  actor_detail: string;
-  action: string;
-  ticker: string;
-  description: string | null;
-  amount_low: number | null;
-  amount_high: number | null;
-  date: string | null;
-  tx_date: string | null;
-  return_pct: number | null;
-  price_at_trade: number | null;
-  price_current: number | null;
-}
-
-export interface ActivityFeedResponse {
-  activities: ActivityItem[];
-  page: number;
-  page_size: number;
-}
-
-// AI Search
-export interface AISearchResult {
-  query: string;
-  sql: string;
-  columns: string[];
-  results: Record<string, unknown>[];
-  total: number;
-  summary: string;
-  error?: string;
-}
-
-// Saved Segments
-export interface SavedSegment {
-  id: number;
-  name: string;
-  query: string;
-  sql: string;
-  columns: string[];
-  results: Record<string, unknown>[];
-  result_count: number;
-  summary: string | null;
-  created_at: string;
-  refreshed_at: string;
-}
-
-// ─── API Functions ───
+// --- API Functions ---
 
 export const api = {
   // Stats
@@ -586,138 +168,27 @@ export const api = {
   },
   getPolitician: (name: string) =>
     fetchApi<Politician & { recent_trades: Trade[]; total_buys?: number; total_sells?: number }>(`/api/v1/politicians/${encodeURIComponent(name)}`),
-  getPoliticianCommittees: (name: string) =>
-    fetchApi<{ committee_id?: string; committee_name?: string; committee?: string; role?: string; rank?: number }[]>(`/api/v1/signals/committees/politician/${encodeURIComponent(name)}`),
   getPoliticianPortfolio: (name: string) =>
     fetchApi<PortfolioSimulation>(`/api/v1/politicians/${encodeURIComponent(name)}/portfolio`),
-
-  // Signals
-  getSignals: () =>
-    fetchApi<{ clusters: Signal[]; cross_source_signals: CrossSourceSignal[]; total_high_signals: number }>(
-      "/api/v1/signals"
-    ),
-  getClusters: () => fetchApi<Signal[]>("/api/v1/signals/clusters"),
-  getCrossSourceSignals: () => fetchApi<CrossSourceSignal[]>("/api/v1/signals/cross-source"),
-  scoreTrade: (params: Record<string, string>) => {
-    const qs = new URLSearchParams(params).toString();
-    return fetchApi<ConvictionScore>(`/api/v1/signals/score-trade?${qs}`);
-  },
 
   // Leaderboard
   getLeaderboard: (params?: Record<string, string>) => {
     const qs = params ? "?" + new URLSearchParams(params).toString() : "";
     return fetchApi<UnifiedLeaderboard>(`/api/v1/leaderboard${qs}`);
   },
-  getBestTrades: () => fetchApi<Trade[]>("/api/v1/leaderboard/best-trades"),
   getPortfolioReturns: (params?: Record<string, string>) => {
     const qs = params ? "?" + new URLSearchParams(params).toString() : "";
     return fetchApi<PortfolioLeaderboardEntry[]>(`/api/v1/leaderboard/portfolio-returns${qs}`);
   },
 
-  // Hedge Funds
-  getHedgeFunds: () => fetchApi<HedgeFund[]>("/api/v1/hedge-funds"),
-  getHedgeFundHoldings: (cik: string) =>
-    fetchApi<{ fund: HedgeFund; holdings: unknown[] }>(`/api/v1/hedge-funds/${cik}/holdings`),
-
-  // Insiders
-  getInsiderTrades: (params?: Record<string, string>) => {
-    const qs = params ? "?" + new URLSearchParams(params).toString() : "";
-    return fetchApi<unknown[]>(`/api/v1/insiders/trades${qs}`);
-  },
-  getInsiderBuys: () => fetchApi<unknown[]>("/api/v1/insiders/buys"),
-
-  // Prediction Markets
-  getPolymarketLeaderboard: () => fetchApi<unknown[]>("/api/v1/prediction-markets/polymarket/leaderboard"),
-  getKalshiMarkets: () => fetchApi<unknown[]>("/api/v1/prediction-markets/kalshi/markets"),
-
-  // Trump
-  getTrumpOverview: () => fetchApi<TrumpOverview>("/api/v1/trump"),
-  getTrumpInsiders: () => fetchApi<unknown[]>("/api/v1/trump/insiders"),
-  getTrumpConflictMap: () => fetchApi<unknown>("/api/v1/trump/conflict-map"),
-
-  // Backtester
-  runBacktest: (params?: Record<string, string>) => {
-    const qs = params ? "?" + new URLSearchParams(params).toString() : "";
-    return fetchApi<BacktestResult>(`/api/v1/leaderboard/backtest${qs}`);
-  },
-
-  // Optimizer
-  runOptimizer: (params?: Record<string, string>) => {
-    const qs = params ? "?" + new URLSearchParams(params).toString() : "";
-    return fetchApi<OptimizerResult>(`/api/v1/optimizer/run${qs}`);
-  },
-  runDeepOptimizer: (params?: Record<string, string>) => {
-    const qs = params ? "?" + new URLSearchParams(params).toString() : "";
-    return fetchApi<DeepOptimizerResult>(`/api/v1/optimizer/run-deep${qs}`);
-  },
-  getOptimizerStatus: () => fetchApi<{ status: string; sample_trades: number; has_applied_weights?: boolean; applied_weights?: unknown }>("/api/v1/optimizer/status"),
-  testCustomWeights: (params: Record<string, string>) => {
-    const qs = new URLSearchParams(params).toString();
-    return fetchApi<TestWeightsResult>(`/api/v1/optimizer/test-weights?${qs}`);
-  },
-  applyWeights: (weights: Record<string, number>) =>
-    fetchApi<{ status: string; weights: Record<string, number>; fitness: number; is_robust: boolean }>(
-      "/api/v1/optimizer/apply",
-      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(weights) },
-    ),
-  getActiveWeights: () =>
-    fetchApi<{ source: string; weights: Record<string, number>; applied_details: unknown }>("/api/v1/optimizer/active-weights"),
-  getLastOptimizerResults: () =>
-    fetchApi<{ quick: OptimizerResult | null; deep: DeepOptimizerResult | null }>("/api/v1/optimizer/last-results"),
-  resetWeights: () =>
-    fetchApi<{ status: string; weights: Record<string, number> }>("/api/v1/optimizer/reset-weights", { method: "POST" }),
-
   // Most traded tickers
   getMostTraded: () => fetchApi<{ ticker: string; count: number }[]>("/api/v1/tickers/most-traded"),
 
-  // Alerts
-  getRecentAlerts: (hours?: number, page?: number, pageSize?: number) => {
-    const params = new URLSearchParams();
-    if (hours) params.set("hours", String(hours));
-    if (page) params.set("page", String(page));
-    if (pageSize) params.set("page_size", String(pageSize));
-    const qs = params.toString() ? `?${params.toString()}` : "";
-    return fetchApi<AlertsResponse>(`/api/v1/alerts/recent${qs}`);
-  },
-  getAlertsSummary: () => fetchApi<AlertsSummary>("/api/v1/alerts/summary"),
-  getActivityFeed: (params?: Record<string, string>) => {
-    const qs = params ? "?" + new URLSearchParams(params).toString() : "";
-    return fetchApi<ActivityFeedResponse>(`/api/v1/alerts/feed${qs}`);
-  },
-  getSuspiciousTrades: (days?: number) => {
-    const qs = days ? `?days=${days}&limit=200` : "?limit=200";
-    return fetchApi<SuspiciousResponse>(`/api/v1/alerts/suspicious${qs}`);
-  },
+  // Ticker chart
   getTickerChart: (ticker: string, days?: number) => {
     const params = new URLSearchParams();
     if (days) params.set("days", String(days));
     const qs = params.toString() ? `?${params.toString()}` : "";
     return fetchApi<TickerChartData>(`/api/v1/tickers/${encodeURIComponent(ticker)}/chart${qs}`);
-  },
-  // AI Search
-  aiSearch: (query: string) =>
-    fetchApi<AISearchResult>(`/api/v1/ai/search?q=${encodeURIComponent(query)}`),
-
-  // Saved Segments
-  getSegments: () => fetchApi<SavedSegment[]>("/api/v1/segments"),
-  createSegment: (data: { name: string; query: string; sql: string; columns: string[]; results: Record<string, unknown>[]; summary?: string }) =>
-    fetchApi<SavedSegment>("/api/v1/segments", { method: "POST", body: JSON.stringify(data) }),
-  deleteSegment: (id: number) =>
-    fetchApi<{ status: string }>(`/api/v1/segments/${id}`, { method: "DELETE" }),
-  refreshSegment: (id: number) =>
-    fetchApi<SavedSegment>(`/api/v1/segments/${id}/refresh`, { method: "POST" }),
-
-  getConvictionPortfolio: (minScore?: number, days?: number, initialCapital?: number, maxPositions?: number, stopLoss?: number, takeProfit?: number, maxHoldingDays?: number, convictionSizing?: boolean) => {
-    const params = new URLSearchParams();
-    if (minScore !== undefined) params.set("min_score", String(minScore));
-    if (days) params.set("days", String(days));
-    if (initialCapital) params.set("initial_capital", String(initialCapital));
-    if (maxPositions) params.set("max_positions", String(maxPositions));
-    if (stopLoss !== undefined) params.set("stop_loss_pct", String(stopLoss));
-    if (takeProfit !== undefined) params.set("take_profit_pct", String(takeProfit));
-    if (maxHoldingDays !== undefined) params.set("max_holding_days", String(maxHoldingDays));
-    if (convictionSizing !== undefined) params.set("conviction_sizing", String(convictionSizing));
-    const qs = params.toString() ? `?${params.toString()}` : "";
-    return fetchApi<ConvictionPortfolioResponse>(`/api/v1/alerts/conviction-portfolio${qs}`);
   },
 };

@@ -11,14 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import Politician, Trade, get_db
 from app.models.schemas import (
-    AlertConfig,
-    NewTradeAlert,
     PoliticianDetail,
     PoliticianResponse,
     StatsResponse,
     TradeResponse,
 )
-from app.services.alerts import check_and_generate_alerts
 from app.services.ingestion import run_ingestion
 from app.services.performance import run_performance_update
 
@@ -360,21 +357,16 @@ async def get_ticker_chart(
     days: int = Query(default=365, ge=30, le=1825),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get price history and trade markers for a ticker chart.
-
-    Returns weekly closing prices from Yahoo Finance and all
-    congressional + insider trades for the ticker.
-    """
+    """Get price history and congressional trade markers for a ticker chart."""
     import httpx
 
-    from app.models.database import InsiderTrade
     from app.services.portfolio import _fetch_weekly_prices
 
     ticker_upper = ticker.upper()
     end = datetime.utcnow()
     start = end - timedelta(days=days)
 
-    # 1. Fetch weekly prices from Yahoo (single API call)
+    # 1. Fetch weekly prices from Yahoo
     try:
         async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
             prices_raw = await _fetch_weekly_prices(client, ticker_upper, start, end)
@@ -400,17 +392,6 @@ async def get_ticker_chart(
     congress_result = await db.execute(congress_stmt)
     congress_trades = congress_result.scalars().all()
 
-    # 3. Fetch insider trades for this ticker
-    insider_stmt = (
-        select(InsiderTrade)
-        .where(InsiderTrade.ticker == ticker_upper)
-        .where(InsiderTrade.tx_date >= start)
-        .order_by(InsiderTrade.tx_date.asc())
-    )
-    insider_result = await db.execute(insider_stmt)
-    insider_trades = insider_result.scalars().all()
-
-    # 4. Normalize into unified trade marker format
     trades = []
     for t in congress_trades:
         action = "buy" if t.tx_type == "purchase" else "sell"
@@ -423,18 +404,6 @@ async def get_ticker_chart(
             "amount_low": t.amount_low,
             "amount_high": t.amount_high,
             "price": t.price_at_disclosure,
-        })
-    for t in insider_trades:
-        action = "buy" if t.tx_type == "purchase" else "sell"
-        trades.append({
-            "date": t.tx_date.strftime("%Y-%m-%d") if t.tx_date else None,
-            "type": action,
-            "politician": t.insider_name,
-            "source": "insider",
-            "party": None,
-            "amount_low": t.total_value,
-            "amount_high": None,
-            "price": t.price_per_share,
         })
 
     return {
@@ -511,15 +480,6 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
         most_active_politicians=most_active_politicians,
         party_breakdown=party_breakdown,
     )
-
-
-# --- Alerts ---
-
-
-@router.post("/alerts/check", response_model=list[NewTradeAlert])
-async def check_alerts(config: AlertConfig | None = None):
-    """Check for new trades matching alert configuration."""
-    return await check_and_generate_alerts(config)
 
 
 # --- Admin / Ingestion ---

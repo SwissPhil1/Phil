@@ -25,6 +25,9 @@ class TradeResponse(BaseModel):
     return_30d: float | None = None
     return_90d: float | None = None
     excess_return_90d: float | None = None
+    realized_return: float | None = None
+    hold_days: int | None = None
+    sell_price: float | None = None
 
     class Config:
         from_attributes = True

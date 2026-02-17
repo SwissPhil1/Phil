@@ -59,6 +59,12 @@ class Trade(Base):
     suspicion_score = Column(Float, index=True)    # 0-100 composite suspicion score
     cluster_flag = Column(Boolean, default=False)  # 3+ politicians same ticker within 7 days
 
+    # Round-trip fields (buy→sell matching)
+    realized_return = Column(Float)                # % return from buy price to actual sell price
+    hold_days = Column(Integer)                    # days between buy and sell
+    sell_price = Column(Float)                     # price at which position was closed
+    matched_sell_id = Column(Integer)              # id of the sell trade that closed this position
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     notified = Column(Boolean, default=False)
@@ -492,6 +498,10 @@ async def _migrate_missing_columns():
             ("excess_return_90d", "DOUBLE PRECISION", None),
             ("suspicion_score", "DOUBLE PRECISION", None),
             ("cluster_flag", "BOOLEAN", "false"),
+            ("realized_return", "DOUBLE PRECISION", None),
+            ("hold_days", "INTEGER", None),
+            ("sell_price", "DOUBLE PRECISION", None),
+            ("matched_sell_id", "INTEGER", None),
         ],
         "optimized_weights": [
             ("full_result_json", "TEXT", None),

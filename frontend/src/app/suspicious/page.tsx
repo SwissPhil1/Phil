@@ -12,6 +12,7 @@ import {
   BarChart3,
   ChevronDown,
   ChevronUp,
+  ArrowRightLeft,
 } from "lucide-react";
 import { api, Trade, ClusterGroup } from "@/lib/api";
 import { useApiData } from "@/lib/hooks";
@@ -121,12 +122,23 @@ function SuspiciousTradeRow({ trade }: { trade: Trade }) {
       </div>
 
       {/* Returns */}
-      <div className="w-32 text-right shrink-0 space-y-0.5">
-        <ReturnBadge value={trade.return_since_disclosure} label="now" />
-        {trade.return_90d !== null && (
-          <div>
-            <ReturnBadge value={trade.return_90d} label="90d" />
-          </div>
+      <div className="w-36 text-right shrink-0 space-y-0.5">
+        {trade.realized_return !== null ? (
+          <>
+            <ReturnBadge value={trade.realized_return} label="closed" />
+            {trade.hold_days !== null && (
+              <div className="text-[10px] text-muted-foreground">held {trade.hold_days}d</div>
+            )}
+          </>
+        ) : (
+          <>
+            <ReturnBadge value={trade.return_since_disclosure} label="now" />
+            {trade.return_90d !== null && (
+              <div>
+                <ReturnBadge value={trade.return_90d} label="90d" />
+              </div>
+            )}
+          </>
         )}
       </div>
 
@@ -189,12 +201,74 @@ function ClusterCard({ cluster }: { cluster: ClusterGroup }) {
   );
 }
 
+function RoundTripRow({ trade }: { trade: Trade }) {
+  return (
+    <div className="flex items-center gap-4 px-4 py-3 border-b border-border hover:bg-muted/30 transition-colors">
+      {/* Return */}
+      <div className="w-20 shrink-0">
+        <ReturnBadge value={trade.realized_return} />
+      </div>
+
+      {/* Ticker */}
+      <div className="w-20 shrink-0">
+        <Link
+          href={`/congress?ticker=${trade.ticker}`}
+          className="text-sm font-semibold text-primary hover:underline"
+        >
+          {trade.ticker}
+        </Link>
+      </div>
+
+      {/* Politician */}
+      <div className="flex-1 min-w-0">
+        <Link
+          href={`/politician/${encodeURIComponent(trade.politician)}`}
+          className="text-sm font-medium hover:underline"
+        >
+          {trade.politician}
+        </Link>
+        <span className={`text-xs ml-2 ${trade.party === "D" ? "text-blue-400" : trade.party === "R" ? "text-red-400" : "text-muted-foreground"}`}>
+          {trade.party}
+        </span>
+      </div>
+
+      {/* Buy/Sell prices */}
+      <div className="w-36 text-right shrink-0 text-xs">
+        <div className="text-muted-foreground">
+          Buy: ${trade.price_at_disclosure?.toFixed(2) ?? "--"}
+        </div>
+        <div className="text-muted-foreground">
+          Sell: ${trade.sell_price?.toFixed(2) ?? "--"}
+        </div>
+      </div>
+
+      {/* Hold period */}
+      <div className="w-20 text-right shrink-0">
+        <span className="text-xs text-muted-foreground">
+          <Clock className="w-3 h-3 inline mr-0.5" />
+          {trade.hold_days ?? "--"}d
+        </span>
+      </div>
+
+      {/* Score */}
+      <div className="w-16 shrink-0 text-right">
+        <ScoreBadge score={trade.suspicion_score} />
+      </div>
+
+      {/* Amount */}
+      <div className="w-28 text-right shrink-0">
+        <AmountRange low={trade.amount_low} high={trade.amount_high} />
+      </div>
+    </div>
+  );
+}
+
 export default function SuspiciousPage() {
   const [minScore, setMinScore] = useState(30);
   const [days, setDays] = useState(365);
   const [chamber, setChamber] = useState("");
   const [party, setParty] = useState("");
-  const [tab, setTab] = useState<"trades" | "clusters">("trades");
+  const [tab, setTab] = useState<"trades" | "clusters" | "roundtrips">("trades");
 
   const params: Record<string, string> = {
     min_score: String(minScore),
@@ -214,6 +288,12 @@ export default function SuspiciousPage() {
     { deps: [days] }
   );
 
+  const [roundTripSort, setRoundTripSort] = useState("realized_return");
+  const { data: roundTrips, loading: roundTripsLoading } = useApiData(
+    () => api.getRoundTrips({ sort_by: roundTripSort, limit: "100" }),
+    { deps: [roundTripSort] }
+  );
+
   const { data: stats } = useApiData(() => api.getScoringStats());
 
   return (
@@ -231,7 +311,7 @@ export default function SuspiciousPage() {
 
       {/* Stats cards */}
       {stats && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           <div className="rounded-lg border border-border bg-card p-3">
             <p className="text-xs text-muted-foreground">Scored Trades</p>
             <p className="text-lg font-bold">{stats.scored_trades.toLocaleString()}</p>
@@ -252,6 +332,15 @@ export default function SuspiciousPage() {
             <p className="text-lg font-bold">{stats.avg_suspicion_score?.toFixed(1) ?? "--"}</p>
             <p className="text-xs text-muted-foreground">out of 100</p>
           </div>
+          <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3">
+            <p className="text-xs text-muted-foreground">Round-Trips</p>
+            <p className="text-lg font-bold text-emerald-400">
+              {stats.round_trips?.matched_trades?.toLocaleString() ?? "--"}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {stats.round_trips?.win_rate != null ? `${stats.round_trips.win_rate}% win rate` : "buy→sell matched"}
+            </p>
+          </div>
         </div>
       )}
 
@@ -271,6 +360,13 @@ export default function SuspiciousPage() {
           >
             <Users className="w-3.5 h-3.5 inline mr-1.5" />
             Clusters
+          </button>
+          <button
+            onClick={() => setTab("roundtrips")}
+            className={`px-4 py-1.5 text-sm font-medium transition-colors ${tab === "roundtrips" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+          >
+            <ArrowRightLeft className="w-3.5 h-3.5 inline mr-1.5" />
+            Round-Trips
           </button>
         </div>
 
@@ -327,7 +423,7 @@ export default function SuspiciousPage() {
             <div className="flex-1">Politician</div>
             <div className="w-28 text-right shrink-0">Amount</div>
             <div className="w-16 text-right shrink-0">Delay</div>
-            <div className="w-32 text-right shrink-0">Return</div>
+            <div className="w-36 text-right shrink-0">Return</div>
             <div className="w-20 text-right shrink-0">Disclosed</div>
           </div>
 
@@ -357,6 +453,49 @@ export default function SuspiciousPage() {
             </div>
           ) : (
             clusters.map((cluster, i) => <ClusterCard key={`${cluster.ticker}-${cluster.week}-${i}`} cluster={cluster} />)
+          )}
+        </div>
+      )}
+
+      {tab === "roundtrips" && (
+        <div className="border border-border rounded-lg bg-card overflow-hidden">
+          {/* Sort + info */}
+          <div className="flex items-center gap-4 px-4 py-2 bg-muted/30 border-b border-border">
+            <div className="text-xs text-muted-foreground flex-1">
+              Closed positions: politician bought then sold the same ticker. Shows actual profit/loss.
+            </div>
+            <select
+              value={roundTripSort}
+              onChange={(e) => setRoundTripSort(e.target.value)}
+              className="text-xs bg-background border border-border rounded px-2 py-1"
+            >
+              <option value="realized_return">Sort by return</option>
+              <option value="hold_days">Sort by hold time (shortest)</option>
+              <option value="suspicion_score">Sort by suspicion score</option>
+            </select>
+          </div>
+
+          {/* Table header */}
+          <div className="flex items-center gap-4 px-4 py-2 border-b border-border text-xs font-medium text-muted-foreground">
+            <div className="w-20 shrink-0">Return</div>
+            <div className="w-20 shrink-0">Ticker</div>
+            <div className="flex-1">Politician</div>
+            <div className="w-36 text-right shrink-0">Buy / Sell Price</div>
+            <div className="w-20 text-right shrink-0">Hold</div>
+            <div className="w-16 text-right shrink-0">Score</div>
+            <div className="w-28 text-right shrink-0">Amount</div>
+          </div>
+
+          {roundTripsLoading ? (
+            <div className="px-4 py-12 text-center text-sm text-muted-foreground">
+              Loading round-trip trades...
+            </div>
+          ) : !roundTrips || roundTrips.length === 0 ? (
+            <div className="px-4 py-12 text-center text-sm text-muted-foreground">
+              No round-trip trades found. Run the backfill pipeline to match buy→sell pairs.
+            </div>
+          ) : (
+            roundTrips.map((trade) => <RoundTripRow key={trade.id} trade={trade} />)
           )}
         </div>
       )}

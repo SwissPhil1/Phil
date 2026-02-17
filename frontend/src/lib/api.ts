@@ -39,6 +39,9 @@ export interface Trade {
   return_30d: number | null;
   return_90d: number | null;
   excess_return_90d: number | null;
+  realized_return: number | null;
+  hold_days: number | null;
+  sell_price: number | null;
 }
 
 export interface ClusterGroup {
@@ -67,6 +70,12 @@ export interface ScoringStats {
   avg_suspicion_score: number | null;
   high_suspicion_count: number;
   medium_suspicion_count: number;
+  round_trips?: {
+    matched_trades: number;
+    avg_realized_return: number | null;
+    avg_hold_days: number | null;
+    win_rate: number | null;
+  };
 }
 
 export interface Politician {
@@ -236,4 +245,8 @@ export const api = {
   },
   getScoringStats: () => fetchApi<ScoringStats>("/api/v1/scoring/stats"),
   getScoringValidation: () => fetchApi<Record<string, unknown>>("/api/v1/scoring/validation"),
+  getRoundTrips: (params?: Record<string, string>) => {
+    const qs = params ? "?" + new URLSearchParams(params).toString() : "";
+    return fetchApi<Trade[]>(`/api/v1/trades/round-trips${qs}`);
+  },
 };

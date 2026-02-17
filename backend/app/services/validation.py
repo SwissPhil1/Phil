@@ -101,37 +101,82 @@ def _is_significant(r: float, n: int, alpha: float = 0.05) -> bool:
         return t > 2.2 if alpha == 0.05 else t > 3.0
 
 
-async def validate_signals(session: AsyncSession) -> dict:
-    """Run full signal validation against historical trade outcomes.
+def _analyze_signal(
+    signal_name: str,
+    values: list[float],
+    returns: list[float],
+) -> dict:
+    """Analyze one signal against a return series."""
+    corr, n = _spearman_rank_correlation(values, returns)
+    significant = _is_significant(corr, n)
 
-    Only uses trades with excess_return_90d populated (i.e., old enough
-    to have 90-day forward returns + SPY benchmark).
+    paired = sorted(zip(values, returns), key=lambda x: x[0])
+    mid = len(paired) // 2
+    low_half_returns = [p[1] for p in paired[:mid]]
+    high_half_returns = [p[1] for p in paired[mid:]]
 
-    Returns a report with per-signal correlation, significance, and
-    recommended weight adjustments.
-    """
-    # Load trades with 90-day forward excess returns
-    stmt = (
-        select(Trade)
-        .where(
-            Trade.ticker.isnot(None),
-            Trade.tx_type == "purchase",
-            Trade.excess_return_90d.isnot(None),
+    mean_low = sum(low_half_returns) / len(low_half_returns) if low_half_returns else 0
+    mean_high = sum(high_half_returns) / len(high_half_returns) if high_half_returns else 0
+
+    nonzero = sum(1 for v in values if v > 0)
+    total = len(values)
+
+    return {
+        "spearman_correlation": round(corr, 4),
+        "n_trades": n,
+        "significant_at_5pct": significant,
+        "t_statistic": round(_t_statistic(corr, n), 2),
+        "mean_return_low_score": round(mean_low, 2),
+        "mean_return_high_score": round(mean_high, 2),
+        "spread": round(mean_high - mean_low, 2),
+        "nonzero_count": nonzero,
+        "nonzero_pct": round(nonzero / total * 100, 1) if total else 0,
+        "recommendation": _recommendation(corr, significant, nonzero / total if total else 0),
+    }
+
+
+def _load_signal_values(
+    trades: list,
+    committees_by_pol: dict,
+    pol_stats: dict,
+    avg_delays: dict,
+) -> dict[str, list[float]]:
+    """Compute all signal values for a list of trades."""
+    signals: dict[str, list[float]] = {
+        "disclosure_delay": [],
+        "trade_size": [],
+        "committee_overlap": [],
+        "cluster": [],
+        "politician_alpha": [],
+        "delay_pattern": [],
+        "composite": [],
+    }
+
+    for trade in trades:
+        committees = committees_by_pol.get(trade.politician, [])
+        stats = pol_stats.get(trade.politician)
+        avg_delay = avg_delays.get(trade.politician)
+
+        signals["disclosure_delay"].append(score_disclosure_delay(trade))
+        signals["trade_size"].append(score_trade_size(trade))
+        signals["committee_overlap"].append(
+            score_committee_overlap(trade, committees)
         )
-    )
-    result = await session.execute(stmt)
-    trades = result.scalars().all()
+        signals["cluster"].append(score_cluster(trade))
+        signals["politician_alpha"].append(
+            score_politician_alpha(
+                stats.get("win_rate") if stats else None,
+                stats.get("avg_return") if stats else None,
+            )
+        )
+        signals["delay_pattern"].append(score_delay_pattern(avg_delay))
+        signals["composite"].append(trade.suspicion_score or 0.0)
 
-    if len(trades) < 50:
-        return {
-            "error": "Not enough trades with 90-day excess returns for validation",
-            "trades_available": len(trades),
-            "minimum_needed": 50,
-        }
+    return signals
 
-    logger.info(f"Validating signals against {len(trades)} trades with 90d excess returns")
 
-    # Load context data
+async def _load_context(session: AsyncSession) -> tuple[dict, dict, dict]:
+    """Load committee, politician stats, and delay context for signal computation."""
     committee_result = await session.execute(
         select(PoliticianCommittee.politician_name, PoliticianCommittee.committee_name)
     )
@@ -158,89 +203,174 @@ async def validate_signals(session: AsyncSession) -> dict:
     for row in delay_result:
         avg_delays[row.politician] = float(row.avg_delay) if row.avg_delay else None
 
-    # Compute each signal for every trade
-    signal_values: dict[str, list[float]] = {
-        "disclosure_delay": [],
-        "trade_size": [],
-        "committee_overlap": [],
-        "cluster": [],
-        "politician_alpha": [],
-        "delay_pattern": [],
-        "composite": [],
-    }
-    excess_returns: list[float] = []
+    return committees_by_pol, pol_stats, avg_delays
 
-    for trade in trades:
-        committees = committees_by_pol.get(trade.politician, [])
-        stats = pol_stats.get(trade.politician)
-        avg_delay = avg_delays.get(trade.politician)
 
-        signal_values["disclosure_delay"].append(score_disclosure_delay(trade))
-        signal_values["trade_size"].append(score_trade_size(trade))
-        signal_values["committee_overlap"].append(
-            score_committee_overlap(trade, committees)
+async def validate_signals(session: AsyncSession) -> dict:
+    """Run full signal validation against historical trade outcomes.
+
+    Validates against THREE return measures:
+    1. excess_return_90d — 90-day forward return minus SPY (fixed window)
+    2. realized_return — actual buy→sell round-trip return (what they made)
+    3. excess_return_90d for trades WITH realized_return (subset analysis)
+
+    Returns a report with per-signal correlation, significance, and
+    recommended weight adjustments.
+    """
+    # ─── Section 1: Validate against 90-day excess returns ───
+
+    stmt_90d = (
+        select(Trade)
+        .where(
+            Trade.ticker.isnot(None),
+            Trade.tx_type == "purchase",
+            Trade.excess_return_90d.isnot(None),
         )
-        signal_values["cluster"].append(score_cluster(trade))
-        signal_values["politician_alpha"].append(
-            score_politician_alpha(
-                stats.get("win_rate") if stats else None,
-                stats.get("avg_return") if stats else None,
-            )
+    )
+    result_90d = await session.execute(stmt_90d)
+    trades_90d = result_90d.scalars().all()
+
+    # ─── Section 2: Validate against realized round-trip returns ───
+
+    stmt_realized = (
+        select(Trade)
+        .where(
+            Trade.ticker.isnot(None),
+            Trade.tx_type == "purchase",
+            Trade.realized_return.isnot(None),
         )
-        signal_values["delay_pattern"].append(score_delay_pattern(avg_delay))
+    )
+    result_realized = await session.execute(stmt_realized)
+    trades_realized = result_realized.scalars().all()
 
-        # Composite uses current suspicion_score if available
-        signal_values["composite"].append(trade.suspicion_score or 0.0)
-
-        excess_returns.append(trade.excess_return_90d)
-
-    # Analyze each signal
-    report = {
-        "total_trades": len(trades),
-        "avg_excess_return_90d": round(sum(excess_returns) / len(excess_returns), 2),
-        "signals": {},
-    }
-
-    for signal_name, values in signal_values.items():
-        corr, n = _spearman_rank_correlation(values, excess_returns)
-        significant = _is_significant(corr, n)
-
-        # Split into high/low halves for mean comparison
-        paired = sorted(zip(values, excess_returns), key=lambda x: x[0])
-        mid = len(paired) // 2
-        low_half_returns = [p[1] for p in paired[:mid]]
-        high_half_returns = [p[1] for p in paired[mid:]]
-
-        mean_low = sum(low_half_returns) / len(low_half_returns) if low_half_returns else 0
-        mean_high = sum(high_half_returns) / len(high_half_returns) if high_half_returns else 0
-
-        # Non-zero count (how many trades have this signal active)
-        nonzero = sum(1 for v in values if v > 0)
-
-        report["signals"][signal_name] = {
-            "spearman_correlation": round(corr, 4),
-            "n_trades": n,
-            "significant_at_5pct": significant,
-            "t_statistic": round(_t_statistic(corr, n), 2),
-            "mean_excess_return_low_score": round(mean_low, 2),
-            "mean_excess_return_high_score": round(mean_high, 2),
-            "spread": round(mean_high - mean_low, 2),
-            "nonzero_count": nonzero,
-            "nonzero_pct": round(nonzero / len(trades) * 100, 1),
-            "recommendation": _recommendation(corr, significant, nonzero / len(trades)),
+    if len(trades_90d) < 50 and len(trades_realized) < 50:
+        return {
+            "error": "Not enough trades with return data for validation",
+            "trades_with_90d_excess": len(trades_90d),
+            "trades_with_realized_return": len(trades_realized),
+            "minimum_needed": 50,
         }
 
-    # Optimal weights based on positive correlations
-    positive_signals = {
-        k: v for k, v in report["signals"].items()
-        if k != "composite" and v["spearman_correlation"] > 0 and v["significant_at_5pct"]
+    committees_by_pol, pol_stats, avg_delays = await _load_context(session)
+
+    report = {
+        "validation_targets": {},
     }
 
-    if positive_signals:
-        total_corr = sum(v["spearman_correlation"] for v in positive_signals.values())
+    # ─── Analyze: 90-day excess return ───
+    if len(trades_90d) >= 50:
+        logger.info(f"Validating signals against {len(trades_90d)} trades with 90d excess returns")
+
+        signals_90d = _load_signal_values(trades_90d, committees_by_pol, pol_stats, avg_delays)
+        excess_returns = [t.excess_return_90d for t in trades_90d]
+
+        analysis_90d = {
+            "n_trades": len(trades_90d),
+            "avg_return": round(sum(excess_returns) / len(excess_returns), 2),
+            "description": "90-day forward return minus S&P 500 (fixed window, market-adjusted)",
+            "signals": {},
+        }
+
+        for signal_name, values in signals_90d.items():
+            analysis_90d["signals"][signal_name] = _analyze_signal(
+                signal_name, values, excess_returns
+            )
+
+        report["validation_targets"]["excess_return_90d"] = analysis_90d
+
+    # ─── Analyze: Realized round-trip return ───
+    if len(trades_realized) >= 50:
+        logger.info(f"Validating signals against {len(trades_realized)} trades with realized returns")
+
+        signals_realized = _load_signal_values(
+            trades_realized, committees_by_pol, pol_stats, avg_delays
+        )
+        realized_returns = [t.realized_return for t in trades_realized]
+
+        analysis_realized = {
+            "n_trades": len(trades_realized),
+            "avg_return": round(sum(realized_returns) / len(realized_returns), 2),
+            "avg_hold_days": round(
+                sum(t.hold_days for t in trades_realized if t.hold_days) / len(trades_realized), 0
+            ),
+            "win_rate": round(
+                sum(1 for r in realized_returns if r > 0) / len(realized_returns) * 100, 1
+            ),
+            "description": "Actual return from buy price to sell price (round-trip, what they made)",
+            "signals": {},
+        }
+
+        for signal_name, values in signals_realized.items():
+            analysis_realized["signals"][signal_name] = _analyze_signal(
+                signal_name, values, realized_returns
+            )
+
+        report["validation_targets"]["realized_return"] = analysis_realized
+
+    # ─── Annualized realized return (adjust for hold time) ───
+    # Short holds with high returns are more suspicious than long holds
+    if len(trades_realized) >= 50:
+        annualized_returns = []
+        annualized_signals: dict[str, list[float]] = defaultdict(list)
+        for i, trade in enumerate(trades_realized):
+            if trade.hold_days and trade.hold_days > 0 and trade.realized_return is not None:
+                # Annualize: (1 + r/100)^(365/days) - 1, capped at ±500%
+                try:
+                    annual = ((1 + trade.realized_return / 100) ** (365 / trade.hold_days) - 1) * 100
+                    annual = max(min(annual, 500), -100)  # Cap extremes
+                except (OverflowError, ZeroDivisionError):
+                    continue
+                annualized_returns.append(annual)
+                for sig_name in signals_realized:
+                    annualized_signals[sig_name].append(signals_realized[sig_name][i])
+
+        if len(annualized_returns) >= 50:
+            analysis_annual = {
+                "n_trades": len(annualized_returns),
+                "avg_annualized_return": round(
+                    sum(annualized_returns) / len(annualized_returns), 2
+                ),
+                "description": "Realized return annualized by hold period (rewards quick profits)",
+                "signals": {},
+            }
+            for signal_name, values in annualized_signals.items():
+                analysis_annual["signals"][signal_name] = _analyze_signal(
+                    signal_name, values, annualized_returns
+                )
+            report["validation_targets"]["annualized_realized"] = analysis_annual
+
+    # ─── Summary: best signals across all targets ───
+    all_signal_corrs: dict[str, list[float]] = defaultdict(list)
+    for target_name, target_data in report["validation_targets"].items():
+        for sig_name, sig_data in target_data.get("signals", {}).items():
+            if sig_name != "composite":
+                all_signal_corrs[sig_name].append(sig_data["spearman_correlation"])
+
+    # Rank signals by average correlation across all targets
+    signal_rankings = []
+    for sig_name, corrs in all_signal_corrs.items():
+        avg_corr = sum(corrs) / len(corrs)
+        significant_count = sum(
+            1 for target in report["validation_targets"].values()
+            if target.get("signals", {}).get(sig_name, {}).get("significant_at_5pct", False)
+        )
+        signal_rankings.append({
+            "signal": sig_name,
+            "avg_correlation": round(avg_corr, 4),
+            "significant_in_n_targets": significant_count,
+            "total_targets": len(report["validation_targets"]),
+        })
+
+    signal_rankings.sort(key=lambda x: x["avg_correlation"], reverse=True)
+    report["signal_rankings"] = signal_rankings
+
+    # Recommended weights from best signals
+    positive_ranked = [s for s in signal_rankings if s["avg_correlation"] > 0 and s["significant_in_n_targets"] > 0]
+    if positive_ranked:
+        total_corr = sum(s["avg_correlation"] for s in positive_ranked)
         report["recommended_weights"] = {
-            k: round(v["spearman_correlation"] / total_corr * 100, 1)
-            for k, v in positive_signals.items()
+            s["signal"]: round(s["avg_correlation"] / total_corr * 100, 1)
+            for s in positive_ranked
         }
     else:
         report["recommended_weights"] = "Not enough significant positive signals yet"

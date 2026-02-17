@@ -298,15 +298,121 @@ async def backfill_cluster_flags(session: AsyncSession) -> int:
     return flagged
 
 
+async def backfill_realized_returns(session: AsyncSession) -> dict:
+    """Match buy trades to sell trades and compute realized round-trip returns.
+
+    For each politician+ticker pair:
+      1. Sort trades chronologically
+      2. Track open buy positions (FIFO queue)
+      3. When a sell occurs, match it to the oldest open buy
+      4. Compute realized_return = (sell_price - buy_price) / buy_price * 100
+      5. Record hold_days = (sell_date - buy_date).days
+
+    This gives us the actual profit/loss the politician made on each
+    round-trip trade, which is the most direct test of informed trading.
+    """
+    # Get all trades with tickers and prices, ordered for matching
+    stmt = (
+        select(Trade)
+        .where(
+            Trade.ticker.isnot(None),
+            Trade.price_at_disclosure.isnot(None),
+            Trade.price_at_disclosure > 0,
+            Trade.tx_date.isnot(None),
+        )
+        .order_by(Trade.politician, Trade.ticker, Trade.tx_date)
+    )
+    result = await session.execute(stmt)
+    trades = result.scalars().all()
+
+    if not trades:
+        return {"matched": 0}
+
+    # Group by (politician, ticker)
+    from collections import defaultdict
+    groups: dict[tuple[str, str], list] = defaultdict(list)
+    for t in trades:
+        groups[(t.politician, t.ticker)].append(t)
+
+    matched = 0
+    total_pairs = 0
+
+    for (politician, ticker), group_trades in groups.items():
+        # FIFO queue of open buy positions
+        open_buys: list[Trade] = []
+
+        for trade in group_trades:
+            if trade.tx_type == "purchase":
+                open_buys.append(trade)
+
+            elif trade.tx_type in ("sale", "sale_full", "sale_partial"):
+                if not open_buys:
+                    continue  # Sell without a matching buy (position opened before our data)
+
+                sell_price = trade.price_at_disclosure
+                sell_date = trade.tx_date
+
+                if not sell_price or sell_price <= 0:
+                    continue
+
+                if trade.tx_type == "sale_partial":
+                    # Partial sell: match to the oldest buy but don't remove it
+                    buy = open_buys[0]
+                    buy_price = buy.price_at_disclosure
+                    buy_date = buy.tx_date
+
+                    if buy_price and buy_price > 0 and buy_date:
+                        ret = round(((sell_price - buy_price) / buy_price) * 100, 2)
+                        days_held = (sell_date - buy_date).days
+
+                        # Store on the BUY trade (so we can correlate with suspicion score)
+                        if buy.realized_return is None:
+                            buy.realized_return = ret
+                            buy.hold_days = days_held
+                            buy.sell_price = sell_price
+                            buy.matched_sell_id = trade.id
+                            matched += 1
+                        total_pairs += 1
+                else:
+                    # Full sell: match and remove the oldest buy (FIFO)
+                    buy = open_buys.pop(0)
+                    buy_price = buy.price_at_disclosure
+                    buy_date = buy.tx_date
+
+                    if buy_price and buy_price > 0 and buy_date:
+                        ret = round(((sell_price - buy_price) / buy_price) * 100, 2)
+                        days_held = (sell_date - buy_date).days
+
+                        buy.realized_return = ret
+                        buy.hold_days = days_held
+                        buy.sell_price = sell_price
+                        buy.matched_sell_id = trade.id
+                        matched += 1
+                    total_pairs += 1
+
+        # For remaining open buys with no sell, check if we can use current price
+        # as an "unrealized" reference (don't mark as realized — leave realized_return null)
+        # This is intentional: we only count actual closed positions as "realized"
+
+    await session.commit()
+    logger.info(
+        f"Matched {matched} buy→sell round-trips "
+        f"({total_pairs} sell events processed)"
+    )
+    return {"matched_buys": matched, "sell_events": total_pairs}
+
+
 async def run_full_backfill(price_limit: int = 2000):
     """Run all backfill operations in sequence."""
     async with async_session() as session:
         delay_count = await backfill_disclosure_delay(session)
         forward_result = await backfill_forward_prices(session, limit=price_limit)
         cluster_count = await backfill_cluster_flags(session)
+        roundtrip_result = await backfill_realized_returns(session)
 
         return {
             "disclosure_delays_filled": delay_count,
             "forward_prices": forward_result,
             "cluster_flags": cluster_count,
+            "round_trips": roundtrip_result,
         }

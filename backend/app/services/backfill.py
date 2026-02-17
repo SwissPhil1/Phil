@@ -248,52 +248,47 @@ async def backfill_forward_prices(
 async def backfill_cluster_flags(session: AsyncSession) -> int:
     """Flag trades where 3+ politicians bought the same ticker within 7 days.
 
-    This is a strong signal of shared non-public information.
+    Uses SQL aggregation to find cluster windows, then batch-updates trade IDs.
+    Memory-efficient: never loads all trades into Python at once.
     """
-    # Find clusters: tickers bought by 3+ different politicians within 7 days
-    # We use a self-join approach: for each trade, count distinct politicians
-    # who also bought the same ticker within ±7 days
+    from sqlalchemy import text
 
     # Reset all flags first
     await session.execute(
         update(Trade).where(Trade.cluster_flag.is_(True)).values(cluster_flag=False)
     )
-
-    # Get all purchase trades with tickers
-    stmt = (
-        select(Trade)
-        .where(
-            Trade.ticker.isnot(None),
-            Trade.tx_type == "purchase",
-            Trade.tx_date.isnot(None),
-        )
-        .order_by(Trade.ticker, Trade.tx_date)
-    )
-    result = await session.execute(stmt)
-    trades = result.scalars().all()
-
-    # Group by ticker
-    by_ticker: dict[str, list] = defaultdict(list)
-    for t in trades:
-        by_ticker[t.ticker].append(t)
-
-    flagged = 0
-    for ticker, ticker_trades in by_ticker.items():
-        for i, trade in enumerate(ticker_trades):
-            # Look within ±7 day window
-            window_start = trade.tx_date - timedelta(days=7)
-            window_end = trade.tx_date + timedelta(days=7)
-
-            politicians_in_window = set()
-            for other in ticker_trades:
-                if window_start <= other.tx_date <= window_end:
-                    politicians_in_window.add(other.politician)
-
-            if len(politicians_in_window) >= 3:
-                trade.cluster_flag = True
-                flagged += 1
-
     await session.commit()
+
+    # SQL-based cluster detection: for each trade, count distinct politicians
+    # who bought the same ticker within ±7 days. Flag if >= 3.
+    # We do this in two steps to keep memory low:
+    # Step 1: Find (ticker, date_window) combos with 3+ politicians
+    # Step 2: Flag matching trade IDs
+
+    cluster_query = text("""
+        UPDATE trades SET cluster_flag = TRUE
+        WHERE id IN (
+            SELECT t1.id
+            FROM trades t1
+            WHERE t1.ticker IS NOT NULL
+              AND t1.tx_type = 'purchase'
+              AND t1.tx_date IS NOT NULL
+              AND (
+                SELECT COUNT(DISTINCT t2.politician)
+                FROM trades t2
+                WHERE t2.ticker = t1.ticker
+                  AND t2.tx_type = 'purchase'
+                  AND t2.tx_date IS NOT NULL
+                  AND t2.tx_date BETWEEN t1.tx_date - INTERVAL '7 days'
+                                     AND t1.tx_date + INTERVAL '7 days'
+              ) >= 3
+        )
+    """)
+
+    result = await session.execute(cluster_query)
+    flagged = result.rowcount or 0
+    await session.commit()
+
     logger.info(f"Flagged {flagged} trades as cluster trades (3+ politicians)")
     return flagged
 
@@ -301,98 +296,110 @@ async def backfill_cluster_flags(session: AsyncSession) -> int:
 async def backfill_realized_returns(session: AsyncSession) -> dict:
     """Match buy trades to sell trades and compute realized round-trip returns.
 
+    Processes one politician at a time to keep memory usage low.
     For each politician+ticker pair:
       1. Sort trades chronologically
       2. Track open buy positions (FIFO queue)
       3. When a sell occurs, match it to the oldest open buy
       4. Compute realized_return = (sell_price - buy_price) / buy_price * 100
       5. Record hold_days = (sell_date - buy_date).days
-
-    This gives us the actual profit/loss the politician made on each
-    round-trip trade, which is the most direct test of informed trading.
     """
-    # Get all trades with tickers and prices, ordered for matching
-    stmt = (
-        select(Trade)
-        .where(
+    # Get distinct politicians with eligible trades
+    pol_result = await session.execute(
+        select(Trade.politician).where(
             Trade.ticker.isnot(None),
             Trade.price_at_disclosure.isnot(None),
             Trade.price_at_disclosure > 0,
             Trade.tx_date.isnot(None),
-        )
-        .order_by(Trade.politician, Trade.ticker, Trade.tx_date)
+            Trade.realized_return.is_(None),  # Only unmatched
+            Trade.tx_type == "purchase",
+        ).distinct()
     )
-    result = await session.execute(stmt)
-    trades = result.scalars().all()
+    politicians = [row[0] for row in pol_result if row[0]]
 
-    if not trades:
-        return {"matched": 0}
+    if not politicians:
+        logger.info("No unmatched trades to process for round-trips")
+        return {"matched_buys": 0, "sell_events": 0}
 
-    # Group by (politician, ticker)
-    from collections import defaultdict
-    groups: dict[tuple[str, str], list] = defaultdict(list)
-    for t in trades:
-        groups[(t.politician, t.ticker)].append(t)
+    logger.info(f"Processing round-trip matching for {len(politicians)} politicians")
 
     matched = 0
     total_pairs = 0
 
-    for (politician, ticker), group_trades in groups.items():
-        # FIFO queue of open buy positions
-        open_buys: list[Trade] = []
+    for i, politician in enumerate(politicians):
+        # Load trades for just this politician
+        stmt = (
+            select(Trade)
+            .where(
+                Trade.politician == politician,
+                Trade.ticker.isnot(None),
+                Trade.price_at_disclosure.isnot(None),
+                Trade.price_at_disclosure > 0,
+                Trade.tx_date.isnot(None),
+            )
+            .order_by(Trade.ticker, Trade.tx_date)
+        )
+        result = await session.execute(stmt)
+        trades = result.scalars().all()
 
-        for trade in group_trades:
-            if trade.tx_type == "purchase":
-                open_buys.append(trade)
+        # Group by ticker
+        by_ticker: dict[str, list] = defaultdict(list)
+        for t in trades:
+            by_ticker[t.ticker].append(t)
 
-            elif trade.tx_type in ("sale", "sale_full", "sale_partial"):
-                if not open_buys:
-                    continue  # Sell without a matching buy (position opened before our data)
+        for ticker, group_trades in by_ticker.items():
+            open_buys: list = []
 
-                sell_price = trade.price_at_disclosure
-                sell_date = trade.tx_date
+            for trade in group_trades:
+                if trade.tx_type == "purchase":
+                    open_buys.append(trade)
 
-                if not sell_price or sell_price <= 0:
-                    continue
+                elif trade.tx_type in ("sale", "sale_full", "sale_partial"):
+                    if not open_buys:
+                        continue
 
-                if trade.tx_type == "sale_partial":
-                    # Partial sell: match to the oldest buy but don't remove it
-                    buy = open_buys[0]
-                    buy_price = buy.price_at_disclosure
-                    buy_date = buy.tx_date
+                    sell_price = trade.price_at_disclosure
+                    sell_date = trade.tx_date
 
-                    if buy_price and buy_price > 0 and buy_date:
-                        ret = round(((sell_price - buy_price) / buy_price) * 100, 2)
-                        days_held = (sell_date - buy_date).days
+                    if not sell_price or sell_price <= 0:
+                        continue
 
-                        # Store on the BUY trade (so we can correlate with suspicion score)
-                        if buy.realized_return is None:
+                    if trade.tx_type == "sale_partial":
+                        buy = open_buys[0]
+                        buy_price = buy.price_at_disclosure
+                        buy_date = buy.tx_date
+
+                        if buy_price and buy_price > 0 and buy_date:
+                            ret = round(((sell_price - buy_price) / buy_price) * 100, 2)
+                            days_held = (sell_date - buy_date).days
+
+                            if buy.realized_return is None:
+                                buy.realized_return = ret
+                                buy.hold_days = days_held
+                                buy.sell_price = sell_price
+                                buy.matched_sell_id = trade.id
+                                matched += 1
+                            total_pairs += 1
+                    else:
+                        buy = open_buys.pop(0)
+                        buy_price = buy.price_at_disclosure
+                        buy_date = buy.tx_date
+
+                        if buy_price and buy_price > 0 and buy_date:
+                            ret = round(((sell_price - buy_price) / buy_price) * 100, 2)
+                            days_held = (sell_date - buy_date).days
+
                             buy.realized_return = ret
                             buy.hold_days = days_held
                             buy.sell_price = sell_price
                             buy.matched_sell_id = trade.id
                             matched += 1
                         total_pairs += 1
-                else:
-                    # Full sell: match and remove the oldest buy (FIFO)
-                    buy = open_buys.pop(0)
-                    buy_price = buy.price_at_disclosure
-                    buy_date = buy.tx_date
 
-                    if buy_price and buy_price > 0 and buy_date:
-                        ret = round(((sell_price - buy_price) / buy_price) * 100, 2)
-                        days_held = (sell_date - buy_date).days
-
-                        buy.realized_return = ret
-                        buy.hold_days = days_held
-                        buy.sell_price = sell_price
-                        buy.matched_sell_id = trade.id
-                        matched += 1
-                    total_pairs += 1
-
-        # For remaining open buys with no sell, check if we can use current price
-        # as an "unrealized" reference (don't mark as realized — leave realized_return null)
-        # This is intentional: we only count actual closed positions as "realized"
+        # Commit per politician to avoid holding too many dirty objects
+        if (i + 1) % 20 == 0:
+            await session.commit()
+            logger.info(f"  Round-trip matching: {i + 1}/{len(politicians)} politicians, {matched} matched so far")
 
     await session.commit()
     logger.info(
@@ -403,16 +410,22 @@ async def backfill_realized_returns(session: AsyncSession) -> dict:
 
 
 async def run_full_backfill(price_limit: int = 2000):
-    """Run all backfill operations in sequence."""
-    async with async_session() as session:
-        delay_count = await backfill_disclosure_delay(session)
-        forward_result = await backfill_forward_prices(session, limit=price_limit)
-        cluster_count = await backfill_cluster_flags(session)
-        roundtrip_result = await backfill_realized_returns(session)
+    """Run all backfill operations in sequence. Each step is isolated so one failure doesn't block others."""
+    results = {}
 
-        return {
-            "disclosure_delays_filled": delay_count,
-            "forward_prices": forward_result,
-            "cluster_flags": cluster_count,
-            "round_trips": roundtrip_result,
-        }
+    steps = [
+        ("disclosure_delays_filled", lambda s: backfill_disclosure_delay(s)),
+        ("forward_prices", lambda s: backfill_forward_prices(s, limit=price_limit)),
+        ("cluster_flags", lambda s: backfill_cluster_flags(s)),
+        ("round_trips", lambda s: backfill_realized_returns(s)),
+    ]
+
+    for name, fn in steps:
+        try:
+            async with async_session() as session:
+                results[name] = await fn(session)
+        except Exception as e:
+            logger.error(f"Backfill step '{name}' failed: {e}")
+            results[name] = {"error": str(e)}
+
+    return results

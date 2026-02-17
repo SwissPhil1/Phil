@@ -4,14 +4,14 @@ import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { api, type Trade, type StatsResponse, type HedgeFund } from "@/lib/api";
+import { api, type Trade, type StatsResponse } from "@/lib/api";
 import { useMultiApiData } from "@/lib/hooks";
 import { ErrorState, RefreshIndicator } from "@/components/error-state";
 import {
   Landmark,
+  Users,
+  Calendar,
   TrendingUp,
-  Target,
-  BarChart3,
   ArrowUpRight,
   ArrowDownRight,
   ChevronRight,
@@ -45,22 +45,16 @@ export default function Dashboard() {
   const { data, loading, errors, hasError, retry, refreshIn } = useMultiApiData<{
     stats: StatsResponse;
     trades: Trade[];
-    funds: HedgeFund[];
-    trumpInsiders: unknown[];
   }>(
     {
       stats: () => api.getStats(),
       trades: () => api.getRecentTrades(),
-      funds: () => api.getHedgeFunds().then((f) => (Array.isArray(f) ? f : [])),
-      trumpInsiders: () => api.getTrumpInsiders().then((t) => (Array.isArray(t) ? t : [])),
     },
     { refreshInterval: 60 }
   );
 
   const stats = data.stats;
   const trades = data.trades ?? [];
-  const funds = data.funds ?? [];
-  const trumpInsiders = (data.trumpInsiders ?? []) as any[];
 
   if (loading) {
     return (
@@ -87,7 +81,7 @@ export default function Dashboard() {
         <div>
           <h1 className="text-2xl font-bold">SmartFlow</h1>
           <p className="text-muted-foreground text-sm mt-1">
-            Copy the smartest money — Congress, hedge funds, and Trump&apos;s inner circle
+            Copy trading intelligence — Congressional STOCK Act trades
           </p>
         </div>
         <ErrorState
@@ -98,8 +92,6 @@ export default function Dashboard() {
     );
   }
 
-  const totalFundValue = funds.reduce((sum, f) => sum + (f.total_value || 0), 0);
-
   return (
     <div className="space-y-8">
       {/* Header */}
@@ -107,7 +99,7 @@ export default function Dashboard() {
         <div>
           <h1 className="text-2xl font-bold">SmartFlow</h1>
           <p className="text-muted-foreground text-sm mt-1">
-            Copy the smartest money — Congress, hedge funds, and Trump&apos;s inner circle
+            Copy trading intelligence — Congressional STOCK Act trades
           </p>
         </div>
         <RefreshIndicator refreshIn={refreshIn} />
@@ -132,57 +124,51 @@ export default function Dashboard() {
                 <ChevronRight className="w-4 h-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
               </div>
               <div className="text-2xl font-bold font-mono-data">
-                {stats?.total_trades?.toLocaleString() || "28,000+"}
+                {stats?.total_trades?.toLocaleString() || "—"}
               </div>
-              <div className="text-xs text-muted-foreground mt-1">Congressional trades</div>
+              <div className="text-xs text-muted-foreground mt-1">Total trades tracked</div>
             </CardContent>
           </Card>
         </Link>
 
-        <Link href="/hedge-funds">
+        <Link href="/leaderboard">
           <Card className="hover:border-primary/30 transition-colors cursor-pointer group">
             <CardContent className="p-5">
               <div className="flex items-center justify-between mb-3">
-                <TrendingUp className="w-5 h-5 text-green-400" />
+                <Users className="w-5 h-5 text-green-400" />
                 <ChevronRight className="w-4 h-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
               </div>
               <div className="text-2xl font-bold font-mono-data">
-                {funds.length || 14}
+                {stats?.total_politicians?.toLocaleString() || "—"}
               </div>
-              <div className="text-xs text-muted-foreground mt-1">
-                Hedge funds &middot; ${(totalFundValue / 1e12).toFixed(1)}T AUM
-              </div>
+              <div className="text-xs text-muted-foreground mt-1">Politicians tracked</div>
             </CardContent>
           </Card>
         </Link>
 
-        <Link href="/trump">
-          <Card className="hover:border-primary/30 transition-colors cursor-pointer group">
-            <CardContent className="p-5">
-              <div className="flex items-center justify-between mb-3">
-                <Target className="w-5 h-5 text-purple-400" />
-                <ChevronRight className="w-4 h-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
-              </div>
-              <div className="text-2xl font-bold font-mono-data">
-                {trumpInsiders.length || 18}
-              </div>
-              <div className="text-xs text-muted-foreground mt-1">Trump inner circle tracked</div>
-            </CardContent>
-          </Card>
-        </Link>
+        <Card>
+          <CardContent className="p-5">
+            <div className="flex items-center justify-between mb-3">
+              <Calendar className="w-5 h-5 text-purple-400" />
+            </div>
+            <div className="text-2xl font-bold font-mono-data">
+              {stats?.trades_last_7d?.toLocaleString() || "—"}
+            </div>
+            <div className="text-xs text-muted-foreground mt-1">Trades last 7 days</div>
+          </CardContent>
+        </Card>
 
-        <Link href="/prediction-markets">
-          <Card className="hover:border-primary/30 transition-colors cursor-pointer group">
-            <CardContent className="p-5">
-              <div className="flex items-center justify-between mb-3">
-                <BarChart3 className="w-5 h-5 text-orange-400" />
-                <ChevronRight className="w-4 h-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
-              </div>
-              <div className="text-2xl font-bold font-mono-data">50</div>
-              <div className="text-xs text-muted-foreground mt-1">Polymarket top traders</div>
-            </CardContent>
-          </Card>
-        </Link>
+        <Card>
+          <CardContent className="p-5">
+            <div className="flex items-center justify-between mb-3">
+              <TrendingUp className="w-5 h-5 text-orange-400" />
+            </div>
+            <div className="text-2xl font-bold font-mono-data">
+              {stats?.trades_last_30d?.toLocaleString() || "—"}
+            </div>
+            <div className="text-xs text-muted-foreground mt-1">Trades last 30 days</div>
+          </CardContent>
+        </Card>
       </div>
 
       {/* Filing delay notice */}
@@ -209,7 +195,7 @@ export default function Dashboard() {
               </CardContent>
             </Card>
           ) : (
-            trades.slice(0, 8).map((trade, i) => (
+            trades.slice(0, 10).map((trade, i) => (
               <Card key={i} className="hover:border-border/80 transition-colors">
                 <CardContent className="p-4">
                   <div className="flex items-center gap-3">
@@ -254,65 +240,11 @@ export default function Dashboard() {
           )}
         </div>
 
-        {/* Right sidebar */}
+        {/* Right sidebar - Most Traded */}
         <div className="space-y-6">
-          {/* Top Hedge Funds */}
-          {funds.length > 0 && (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Top Funds</h2>
-                <Link href="/hedge-funds" className="text-xs text-primary hover:underline">View all</Link>
-              </div>
-              {funds.slice(0, 5).map((fund, i) => (
-                <Card key={i} className="hover:border-border/80 transition-colors">
-                  <CardContent className="p-3">
-                    <div className="font-medium text-sm">{fund.manager_name}</div>
-                    <div className="text-xs text-muted-foreground">{fund.name}</div>
-                    <div className="flex items-center gap-4 mt-2">
-                      <span className="text-xs">
-                        <span className="text-muted-foreground">AUM </span>
-                        <span className="font-mono-data font-medium">
-                          {fund.total_value ? `$${(fund.total_value / 1e9).toFixed(1)}B` : "-"}
-                        </span>
-                      </span>
-                      <span className="text-xs">
-                        <span className="text-muted-foreground">Holdings </span>
-                        <span className="font-mono-data font-medium">{fund.num_holdings || "-"}</span>
-                      </span>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          )}
-
-          {/* Trump Circle Highlights */}
-          {trumpInsiders.length > 0 && (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Trump Circle</h2>
-                <Link href="/trump" className="text-xs text-primary hover:underline">View all</Link>
-              </div>
-              {trumpInsiders.slice(0, 4).map((insider: any, i: number) => (
-                <Card key={i} className="hover:border-border/80 transition-colors">
-                  <CardContent className="p-3">
-                    <div className="flex items-center justify-between">
-                      <span className="font-medium text-sm">{insider.name}</span>
-                      <Badge variant="outline" className="text-[10px] bg-purple-500/10 text-purple-400 border-purple-500/20">
-                        {insider.category}
-                      </Badge>
-                    </div>
-                    <div className="text-xs text-muted-foreground mt-0.5">{insider.role}</div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          )}
-
-          {/* Most Traded */}
           {stats?.most_bought_tickers && stats.most_bought_tickers.length > 0 && (
             <div className="space-y-3">
-              <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Most Bought</h2>
+              <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Most Bought (30d)</h2>
               <Card>
                 <CardContent className="p-3">
                   <div className="flex flex-wrap gap-2">
@@ -323,6 +255,34 @@ export default function Dashboard() {
                       </div>
                     ))}
                   </div>
+                </CardContent>
+              </Card>
+            </div>
+          )}
+
+          {stats?.most_active_politicians && stats.most_active_politicians.length > 0 && (
+            <div className="space-y-3">
+              <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Most Active (30d)</h2>
+              <Card>
+                <CardContent className="p-3 space-y-2">
+                  {stats.most_active_politicians.slice(0, 8).map((p: any, i: number) => (
+                    <Link
+                      key={i}
+                      href={`/politician/${encodeURIComponent(p.politician)}`}
+                      className="flex items-center justify-between py-1 hover:text-primary transition-colors"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm">{p.politician}</span>
+                        {p.party && (
+                          <Badge variant="outline" className={`text-[10px] px-1.5 ${
+                            p.party === "R" ? "bg-red-500/10 text-red-400 border-red-500/20" :
+                            p.party === "D" ? "bg-blue-500/10 text-blue-400 border-blue-500/20" : ""
+                          }`}>{p.party}</Badge>
+                        )}
+                      </div>
+                      <span className="font-mono-data text-xs text-muted-foreground">{p.count} trades</span>
+                    </Link>
+                  ))}
                 </CardContent>
               </Card>
             </div>

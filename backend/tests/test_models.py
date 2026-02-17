@@ -4,8 +4,6 @@ import pytest
 from datetime import datetime
 
 from app.models.schemas import (
-    AlertConfig,
-    NewTradeAlert,
     TradeResponse,
     PoliticianResponse,
     StatsResponse,
@@ -58,28 +56,6 @@ def test_politician_response_none_coercion():
     assert pol.total_sells == 0
 
 
-def test_alert_config_defaults():
-    """Test AlertConfig has proper defaults."""
-    config = AlertConfig()
-    assert config.politicians == []
-    assert config.tickers == []
-    assert config.min_amount is None
-    assert config.tx_types == []
-
-
-def test_alert_config_with_values():
-    """Test AlertConfig with provided values."""
-    config = AlertConfig(
-        politicians=["Nancy Pelosi"],
-        tickers=["AAPL", "NVDA"],
-        min_amount=100000,
-        tx_types=["purchase"],
-    )
-    assert len(config.politicians) == 1
-    assert len(config.tickers) == 2
-    assert config.min_amount == 100000
-
-
 def test_stats_response_defaults():
     """Test StatsResponse has proper defaults."""
     stats = StatsResponse()
@@ -94,21 +70,3 @@ def test_trade_filters_defaults():
     assert filters.days == 90
     assert filters.page == 1
     assert filters.page_size == 50
-
-
-def test_new_trade_alert():
-    """Test NewTradeAlert model."""
-    trade = TradeResponse(
-        id=1,
-        chamber="house",
-        politician="Test",
-        tx_type="purchase",
-        ticker="AAPL",
-    )
-    alert = NewTradeAlert(
-        trade=trade,
-        alert_reason="Test bought AAPL",
-        detected_at=datetime.utcnow(),
-    )
-    assert alert.alert_reason == "Test bought AAPL"
-    assert alert.trade.ticker == "AAPL"

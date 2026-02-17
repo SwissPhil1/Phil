@@ -14,7 +14,6 @@ import {
   ArrowDownRight,
   TrendingUp,
   TrendingDown,
-  Building2,
   Clock,
   Briefcase,
   BarChart3,
@@ -22,8 +21,6 @@ import {
   CircleDollarSign,
   Activity,
   Loader2,
-  AlertTriangle,
-  ShieldAlert,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -241,124 +238,6 @@ function buildHoldings(trades: Trade[]) {
     .sort((a, b) => b.allocationPct - a.allocationPct);
 }
 
-// ─── Conflict of Interest Detection ───
-
-const COMMITTEE_SECTORS: Record<string, string[]> = {
-  "Armed Services": ["defense", "aerospace"],
-  "Defense": ["defense", "aerospace"],
-  "Financial Services": ["finance", "banking", "fintech"],
-  "Banking": ["finance", "banking", "fintech"],
-  "Banking, Housing, and Urban Affairs": ["finance", "banking", "real_estate"],
-  "Energy and Commerce": ["energy", "oil", "healthcare", "pharma", "tech"],
-  "Energy and Natural Resources": ["energy", "oil", "mining"],
-  "Commerce, Science, and Transportation": ["tech", "telecom", "transport"],
-  "Science, Space, and Technology": ["tech", "defense"],
-  "Intelligence": ["defense", "cybersecurity", "tech"],
-  "Health, Education, Labor, and Pensions": ["healthcare", "pharma", "biotech"],
-  "Agriculture": ["agriculture", "food"],
-  "Agriculture, Nutrition, and Forestry": ["agriculture", "food"],
-  "Ways and Means": ["finance", "trade"],
-  "Finance": ["finance", "healthcare"],
-  "Judiciary": ["tech", "prison"],
-  "Foreign Affairs": ["defense", "oil", "emerging_markets"],
-  "Foreign Relations": ["defense", "oil", "emerging_markets"],
-  "Transportation and Infrastructure": ["transport", "construction"],
-  "Environment and Public Works": ["energy", "construction"],
-  "Veterans Affairs": ["healthcare", "defense"],
-  "Homeland Security": ["defense", "cybersecurity"],
-  "Homeland Security and Governmental Affairs": ["defense", "cybersecurity", "tech"],
-  "Natural Resources": ["mining", "oil", "energy"],
-};
-
-const TICKER_SECTORS: Record<string, string> = {
-  LMT: "defense", RTX: "defense", NOC: "defense", GD: "defense", BA: "defense",
-  LHX: "defense", HII: "defense", LDOS: "defense", PLTR: "defense",
-  PANW: "cybersecurity", CRWD: "cybersecurity", NET: "cybersecurity", FTNT: "cybersecurity",
-  XOM: "oil", CVX: "oil", COP: "oil", OXY: "oil", SLB: "oil", HAL: "oil",
-  NEE: "energy", DUK: "energy", SO: "energy", ENPH: "energy", FSLR: "energy",
-  TSLA: "energy", AES: "energy",
-  JPM: "finance", BAC: "finance", GS: "finance", MS: "finance", C: "finance",
-  WFC: "finance", BLK: "finance", SCHW: "finance",
-  V: "fintech", MA: "fintech", PYPL: "fintech", SQ: "fintech", COIN: "fintech",
-  AAPL: "tech", MSFT: "tech", GOOGL: "tech", META: "tech", AMZN: "tech",
-  NVDA: "tech", AMD: "tech", AVGO: "tech", INTC: "tech", CRM: "tech",
-  ORCL: "tech", NOW: "tech", ADBE: "tech", MU: "tech", QCOM: "tech",
-  T: "telecom", VZ: "telecom", TMUS: "telecom",
-  JNJ: "pharma", PFE: "pharma", MRK: "pharma", ABBV: "pharma", LLY: "pharma",
-  UNH: "healthcare", CVS: "healthcare", CI: "healthcare", HCA: "healthcare",
-  MRNA: "biotech", BNTX: "biotech", REGN: "biotech", VRTX: "biotech",
-  CAT: "construction", DE: "construction", VMC: "construction",
-  ADM: "agriculture", BG: "agriculture", CTVA: "agriculture",
-  FCX: "mining", NEM: "mining", GOLD: "mining",
-  AMT: "real_estate", PLD: "real_estate", SPG: "real_estate",
-  GEO: "prison", CXW: "prison",
-  BABA: "emerging_markets", PDD: "emerging_markets", JD: "emerging_markets",
-};
-
-const SECTOR_LABELS: Record<string, string> = {
-  defense: "Defense & Aerospace", cybersecurity: "Cybersecurity", oil: "Oil & Gas",
-  energy: "Energy & Utilities", finance: "Finance & Banking", fintech: "Fintech",
-  tech: "Technology", telecom: "Telecommunications", pharma: "Pharmaceuticals",
-  healthcare: "Healthcare", biotech: "Biotech", construction: "Construction",
-  agriculture: "Agriculture", mining: "Mining", real_estate: "Real Estate",
-  prison: "Private Prisons", emerging_markets: "Emerging Markets", transport: "Transportation",
-  trade: "International Trade", banking: "Banking",
-};
-
-type ConflictItem = {
-  ticker: string;
-  committee: string;
-  sector: string;
-  sectorLabel: string;
-  totalBuys: number;
-  totalSells: number;
-  amountMid: number;
-  returnPct: number | null;
-};
-
-function detectConflicts(
-  committees: { committee_name?: string; committee?: string }[],
-  holdingsData: ReturnType<typeof buildHoldings>,
-): ConflictItem[] {
-  const conflicts: ConflictItem[] = [];
-  const seen = new Set<string>();
-
-  for (const h of holdingsData) {
-    const tickerSector = TICKER_SECTORS[h.ticker];
-    if (!tickerSector) continue;
-
-    for (const c of committees) {
-      const commName = c.committee_name || c.committee || "";
-      const matchedSectors: string[] = [];
-
-      for (const [key, sectors] of Object.entries(COMMITTEE_SECTORS)) {
-        if (commName.toLowerCase().includes(key.toLowerCase()) || key.toLowerCase().includes(commName.toLowerCase())) {
-          matchedSectors.push(...sectors);
-        }
-      }
-
-      if (matchedSectors.includes(tickerSector)) {
-        const dedup = `${h.ticker}-${commName}`;
-        if (seen.has(dedup)) continue;
-        seen.add(dedup);
-
-        conflicts.push({
-          ticker: h.ticker,
-          committee: commName,
-          sector: tickerSector,
-          sectorLabel: SECTOR_LABELS[tickerSector] || tickerSector,
-          totalBuys: h.totalBuys,
-          totalSells: h.totalSells,
-          amountMid: h.amountMid,
-          returnPct: h.returnPct,
-        });
-      }
-    }
-  }
-
-  return conflicts.sort((a, b) => b.amountMid - a.amountMid);
-}
-
 // ─── Component ───
 
 export default function PoliticianPage() {
@@ -366,9 +245,6 @@ export default function PoliticianPage() {
   const params = useParams();
   const name = decodeURIComponent(params.name as string);
   const [politician, setPolitician] = useState<PoliticianDetail | null>(null);
-  const [committees, setCommittees] = useState<
-    { committee_id?: string; committee_name?: string; committee?: string; role?: string; rank?: number }[]
-  >([]);
   const [portfolio, setPortfolio] = useState<PortfolioSimulation | null>(null);
   const [portfolioLoading, setPortfolioLoading] = useState(true);
   const [loading, setLoading] = useState(true);
@@ -377,14 +253,12 @@ export default function PoliticianPage() {
 
   useEffect(() => {
     async function load() {
-      const [pol, com] = await Promise.allSettled([
-        api.getPolitician(name),
-        api.getPoliticianCommittees(name),
-      ]);
-      if (pol.status === "fulfilled")
-        setPolitician(pol.value as PoliticianDetail);
-      if (com.status === "fulfilled")
-        setCommittees(Array.isArray(com.value) ? com.value : []);
+      try {
+        const pol = await api.getPolitician(name);
+        setPolitician(pol as PoliticianDetail);
+      } catch {
+        // Politician not found
+      }
       setLoading(false);
     }
     load();
@@ -446,12 +320,6 @@ export default function PoliticianPage() {
   );
 
   const holdings = useMemo(() => buildHoldings(filteredTrades), [filteredTrades]);
-
-  // Conflict of interest detection
-  const conflicts = useMemo(
-    () => detectConflicts(committees, holdings),
-    [committees, holdings]
-  );
 
   // Portfolio return for hero number (rebased to selected period, using selected strategy)
   const portfolioReturn = useMemo(() => {
@@ -708,25 +576,6 @@ export default function PoliticianPage() {
           </div>
         </div>
 
-        {/* Committees inline */}
-        {committees.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 mt-4">
-            {committees.slice(0, 4).map((c, i) => (
-              <span
-                key={i}
-                className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md bg-muted/50 border border-border/50 text-muted-foreground"
-              >
-                <Building2 className="w-3 h-3" />
-                {c.committee_name || c.committee}{c.role && c.role !== "Member" ? ` (${c.role})` : ""}
-              </span>
-            ))}
-            {committees.length > 4 && (
-              <span className="text-[11px] px-2 py-0.5 text-muted-foreground">
-                +{committees.length - 4} more
-              </span>
-            )}
-          </div>
-        )}
       </div>
 
       {/* ─── Performance Chart ─── */}
@@ -1186,65 +1035,6 @@ export default function PoliticianPage() {
                 + {holdings.length - 15} more positions
               </div>
             )}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* ─── Conflict of Interest Cross-Reference ─── */}
-      {conflicts.length > 0 && (
-        <Card className="border-amber-500/20">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-sm font-medium flex items-center gap-2 text-amber-400">
-              <ShieldAlert className="w-4 h-4" />
-              Potential Conflicts of Interest
-              <Badge variant="outline" className="text-[10px] border-amber-500/30 text-amber-400 ml-1">
-                {conflicts.length}
-              </Badge>
-            </CardTitle>
-            <p className="text-xs text-muted-foreground mt-1">
-              Stocks traded in sectors overseen by their committee assignments
-            </p>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {conflicts.map((conflict, i) => (
-              <div
-                key={i}
-                className="flex items-center justify-between p-3 rounded-lg bg-amber-500/5 border border-amber-500/10"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-amber-500/10 flex items-center justify-center">
-                    <AlertTriangle className="w-4 h-4 text-amber-400" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono text-sm font-bold">{conflict.ticker}</span>
-                      <Badge variant="outline" className="text-[9px] px-1.5 border-muted-foreground/30">
-                        {conflict.sectorLabel}
-                      </Badge>
-                    </div>
-                    <div className="text-[11px] text-muted-foreground mt-0.5">
-                      <Building2 className="w-3 h-3 inline mr-1" />
-                      {conflict.committee}
-                    </div>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <div className="text-xs text-muted-foreground">
-                    {conflict.totalBuys}B{conflict.totalSells > 0 ? ` / ${conflict.totalSells}S` : ""}
-                  </div>
-                  {conflict.returnPct != null && (
-                    <div className={`text-xs font-mono font-semibold ${conflict.returnPct >= 0 ? "text-emerald-400" : "text-red-400"}`}>
-                      {conflict.returnPct >= 0 ? "+" : ""}{conflict.returnPct.toFixed(1)}%
-                    </div>
-                  )}
-                  {conflict.amountMid > 0 && (
-                    <div className="text-[10px] text-muted-foreground">
-                      {formatLargeNumber(conflict.amountMid)} est.
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
           </CardContent>
         </Card>
       )}

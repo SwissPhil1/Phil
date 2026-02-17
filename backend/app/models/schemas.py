@@ -69,34 +69,6 @@ class TradeFilters(BaseModel):
     page_size: int = Field(default=50, ge=1, le=200)
 
 
-class RankingFilters(BaseModel):
-    chamber: str | None = None
-    party: str | None = None
-    sort_by: str = Field(default="avg_return", description="avg_return, win_rate, total_trades")
-    min_trades: int = Field(default=5, description="Minimum trades to be ranked")
-    limit: int = Field(default=20, ge=1, le=100)
-
-
-class IngestionStatus(BaseModel):
-    last_run: datetime | None = None
-    total_trades: int = 0
-    new_trades_last_run: int = 0
-    next_run: datetime | None = None
-
-
-class AlertConfig(BaseModel):
-    politicians: list[str] = Field(default_factory=list, description="Politicians to watch")
-    tickers: list[str] = Field(default_factory=list, description="Tickers to watch")
-    min_amount: float | None = Field(default=None, description="Min trade amount to alert on")
-    tx_types: list[str] = Field(default_factory=list, description="purchase, sale, etc.")
-
-
-class NewTradeAlert(BaseModel):
-    trade: TradeResponse
-    alert_reason: str
-    detected_at: datetime
-
-
 class StatsResponse(BaseModel):
     total_trades: int = 0
     total_politicians: int = 0

@@ -5,9 +5,9 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ErrorBoundary } from "@/components/error-boundary";
 
 export const metadata: Metadata = {
-  title: "SmartFlow - Copy the Smartest Money",
+  title: "SmartFlow - Copy Trading Intelligence",
   description:
-    "Track insider trades from politicians, hedge funds, corporate insiders, prediction markets, and Trump's inner circle. Built for European investors.",
+    "Track and copy-trade Congressional stock trades (STOCK Act disclosures). Built for European investors.",
 };
 
 export default function RootLayout({

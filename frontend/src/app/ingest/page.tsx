@@ -23,6 +23,7 @@ export default function IngestPage() {
   const [processing, setProcessing] = useState<number | null>(null);
   const [results, setResults] = useState<Record<number, ProcessResult | { error: string }>>({});
   const [extracting, setExtracting] = useState(false);
+  const [extractProgress, setExtractProgress] = useState<{ current: number; total: number } | null>(null);
   const [selectedChapters, setSelectedChapters] = useState<Set<number>>(new Set());
 
   const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -30,6 +31,7 @@ export default function IngestPage() {
     if (!file) return;
 
     setExtracting(true);
+    setExtractProgress(null);
     setChapters([]);
     setResults({});
 
@@ -45,8 +47,10 @@ export default function IngestPage() {
 
       const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
       let text = "";
+      setExtractProgress({ current: 0, total: pdf.numPages });
 
       for (let i = 1; i <= pdf.numPages; i++) {
+        setExtractProgress({ current: i, total: pdf.numPages });
         const page = await pdf.getPage(i);
         const content = await page.getTextContent();
         const pageText = content.items
@@ -91,6 +95,7 @@ export default function IngestPage() {
       setPdfText(`Error: ${err instanceof Error ? err.message : "Failed to read PDF"}`);
     } finally {
       setExtracting(false);
+      setExtractProgress(null);
     }
   }, []);
 
@@ -194,8 +199,25 @@ export default function IngestPage() {
               <Upload className="h-8 w-8 text-muted-foreground mb-2" />
             )}
             <p className="text-sm text-muted-foreground">
-              {extracting ? "Extracting text from PDF..." : "Click to upload a PDF file"}
+              {extracting
+                ? extractProgress
+                  ? `Extracting page ${extractProgress.current} of ${extractProgress.total}...`
+                  : "Loading PDF..."
+                : "Click to upload a PDF file"}
             </p>
+            {extracting && extractProgress && extractProgress.total > 0 && (
+              <div className="w-64 mt-2">
+                <div className="h-2 bg-muted rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-primary rounded-full transition-all duration-200"
+                    style={{ width: `${Math.round((extractProgress.current / extractProgress.total) * 100)}%` }}
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground mt-1 text-center">
+                  {Math.round((extractProgress.current / extractProgress.total) * 100)}%
+                </p>
+              </div>
+            )}
           </div>
           <input
             type="file"

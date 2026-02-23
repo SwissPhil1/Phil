@@ -3,6 +3,13 @@ import { PrismaClient } from "@prisma/client";
 const prisma = new PrismaClient();
 
 async function main() {
+  // Skip seeding if data already exists (safe for repeated Vercel builds)
+  const existingChapters = await prisma.chapter.count();
+  if (existingChapters > 0) {
+    console.log(`Database already has ${existingChapters} chapters, skipping seed.`);
+    return;
+  }
+
   console.log("Seeding database with sample radiology content...");
 
   // Chapter 1: Chest Radiology (Core Radiology)

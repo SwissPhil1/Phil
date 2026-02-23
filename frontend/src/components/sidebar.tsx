@@ -9,6 +9,7 @@ import {
   Layers,
   Menu,
   X,
+  Upload,
 } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
@@ -18,6 +19,7 @@ const navItems = [
   { href: "/chapters", label: "Chapters", icon: BookOpen },
   { href: "/quiz", label: "Quiz", icon: Brain },
   { href: "/flashcards", label: "Flashcards", icon: Layers },
+  { href: "/ingest", label: "PDF Ingest", icon: Upload },
 ];
 
 export function Sidebar() {

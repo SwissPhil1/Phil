@@ -1,33 +1,25 @@
 import type { Metadata } from "next";
-import "./globals.css";
 import { Sidebar } from "@/components/sidebar";
-import { TooltipProvider } from "@/components/ui/tooltip";
-import { ErrorBoundary } from "@/components/error-boundary";
+import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "SmartFlow - Copy Trading Intelligence",
+  title: "RadioRevise - FMH2 Radiology Study App",
   description:
-    "Track and copy-trade Congressional stock trades (STOCK Act disclosures). Built for European investors.",
+    "Study app for Swiss FMH2 radiology specialty exam with spaced repetition, QCM, and active recall",
 };
 
 export default function RootLayout({
   children,
-}: Readonly<{
+}: {
   children: React.ReactNode;
-}>) {
+}) {
   return (
-    <html lang="en">
+    <html lang="fr">
       <body className="font-sans antialiased">
-        <TooltipProvider>
-          <div className="flex h-screen overflow-hidden">
-            <Sidebar />
-            <main className="flex-1 overflow-y-auto">
-              <div className="p-6 max-w-[1600px] mx-auto">
-                <ErrorBoundary>{children}</ErrorBoundary>
-              </div>
-            </main>
-          </div>
-        </TooltipProvider>
+        <Sidebar />
+        <main className="md:ml-64 min-h-screen">
+          <div className="p-6 md:p-8 pt-16 md:pt-8 max-w-5xl">{children}</div>
+        </main>
       </body>
     </html>
   );

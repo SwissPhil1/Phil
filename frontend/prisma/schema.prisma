@@ -1,0 +1,90 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Chapter {
+  id         Int      @id @default(autoincrement())
+  bookSource String   // "core_radiology" or "crack_the_core"
+  number     Int
+  title      String
+  rawText    String?
+  summary    String?
+  keyPoints  String?  // JSON array of key points
+  highYield  String?  // JSON array of high-yield facts
+  mnemonics  String?  // JSON array of mnemonics
+  memoryPalace String?
+  mindMap    String?  // JSON for mind map nodes/edges
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  questions  Question[]
+  flashcards Flashcard[]
+
+  @@unique([bookSource, number])
+}
+
+model Question {
+  id            Int      @id @default(autoincrement())
+  chapterId     Int
+  chapter       Chapter  @relation(fields: [chapterId], references: [id])
+  questionText  String
+  options       String   // JSON array of option strings
+  correctAnswer Int      // 0-based index into options
+  explanation   String
+  difficulty    String   @default("medium") // easy, medium, hard
+  category      String?
+  imageUrl      String?
+  createdAt     DateTime @default(now())
+
+  attempts QuestionAttempt[]
+}
+
+model Flashcard {
+  id         Int      @id @default(autoincrement())
+  chapterId  Int
+  chapter    Chapter  @relation(fields: [chapterId], references: [id])
+  front      String
+  back       String
+  category   String?
+  createdAt  DateTime @default(now())
+
+  reviews FlashcardReview[]
+}
+
+model FlashcardReview {
+  id          Int      @id @default(autoincrement())
+  flashcardId Int
+  flashcard   Flashcard @relation(fields: [flashcardId], references: [id])
+  quality     Int       // SM-2 quality rating 0-5
+  easeFactor  Float     @default(2.5)
+  interval    Int       @default(1)   // days until next review
+  repetitions Int       @default(0)
+  nextReview  DateTime
+  reviewedAt  DateTime  @default(now())
+}
+
+model QuestionAttempt {
+  id             Int      @id @default(autoincrement())
+  questionId     Int
+  question       Question @relation(fields: [questionId], references: [id])
+  selectedAnswer Int
+  isCorrect      Boolean
+  timeSpent      Int?     // seconds
+  attemptedAt    DateTime @default(now())
+}
+
+model StudySession {
+  id            Int       @id @default(autoincrement())
+  chapterId     Int?
+  type          String    // "quiz", "flashcard", "review"
+  duration      Int       @default(0) // seconds
+  score         Float?    // percentage for quizzes
+  cardsReviewed Int?
+  startedAt     DateTime  @default(now())
+  endedAt       DateTime?
+}

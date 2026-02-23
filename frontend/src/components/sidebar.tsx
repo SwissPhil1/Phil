@@ -4,63 +4,89 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
-  Landmark,
-  Trophy,
-  AlertTriangle,
-  Zap,
+  BookOpen,
+  Brain,
+  Layers,
+  Menu,
+  X,
 } from "lucide-react";
+import { useState } from "react";
+import { cn } from "@/lib/utils";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/congress", label: "Congress Trades", icon: Landmark },
-  { href: "/suspicious", label: "Suspicious Trades", icon: AlertTriangle },
-  { href: "/leaderboard", label: "Leaderboard", icon: Trophy },
+  { href: "/chapters", label: "Chapters", icon: BookOpen },
+  { href: "/quiz", label: "Quiz", icon: Brain },
+  { href: "/flashcards", label: "Flashcards", icon: Layers },
 ];
 
 export function Sidebar() {
   const pathname = usePathname();
+  const [open, setOpen] = useState(false);
 
   return (
-    <aside className="hidden md:flex flex-col w-56 border-r border-border bg-sidebar shrink-0">
-      <div className="p-4 border-b border-border">
-        <Link href="/" className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
-            <Zap className="w-4 h-4 text-primary-foreground" />
-          </div>
-          <div>
-            <h1 className="text-sm font-bold tracking-tight">SmartFlow</h1>
-            <p className="text-[10px] text-muted-foreground">Copy trading intelligence</p>
-          </div>
-        </Link>
-      </div>
+    <>
+      {/* Mobile toggle */}
+      <button
+        onClick={() => setOpen(!open)}
+        className="fixed top-4 left-4 z-50 md:hidden rounded-lg bg-card p-2 shadow-md border"
+      >
+        {open ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+      </button>
 
-      <nav className="flex-1 p-2 space-y-0.5 overflow-y-auto">
-        {navItems.map((item) => {
-          const isActive = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
-          const Icon = item.icon;
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors ${
-                isActive
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
-                  : "text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50"
-              }`}
-            >
-              <Icon className="w-4 h-4 shrink-0" />
-              {item.label}
-            </Link>
-          );
-        })}
-      </nav>
+      {/* Overlay */}
+      {open && (
+        <div
+          className="fixed inset-0 z-30 bg-black/50 md:hidden"
+          onClick={() => setOpen(false)}
+        />
+      )}
 
-      <div className="p-3 border-t border-border">
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse-green" />
-          <span>Live - Data synced</span>
+      {/* Sidebar */}
+      <aside
+        className={cn(
+          "fixed left-0 top-0 z-40 h-full w-64 bg-card border-r transition-transform duration-200 md:translate-x-0",
+          open ? "translate-x-0" : "-translate-x-full"
+        )}
+      >
+        <div className="flex h-16 items-center gap-2 px-6 border-b">
+          <Brain className="h-6 w-6 text-primary" />
+          <h1 className="text-lg font-bold">RadioRevise</h1>
         </div>
-      </div>
-    </aside>
+
+        <nav className="mt-4 px-3 space-y-1">
+          {navItems.map((item) => {
+            const isActive =
+              item.href === "/"
+                ? pathname === "/"
+                : pathname.startsWith(item.href);
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                onClick={() => setOpen(false)}
+                className={cn(
+                  "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
+                  isActive
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                )}
+              >
+                <item.icon className="h-4 w-4" />
+                {item.label}
+              </Link>
+            );
+          })}
+        </nav>
+
+        <div className="absolute bottom-4 left-0 right-0 px-4">
+          <div className="rounded-lg bg-muted p-3 text-xs text-muted-foreground">
+            <p className="font-medium text-foreground mb-1">FMH2 Radiology</p>
+            <p>Core Radiology + Crack the Core</p>
+            <p className="mt-1">Exam: August 2026</p>
+          </div>
+        </div>
+      </aside>
+    </>
   );
 }

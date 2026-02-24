@@ -182,7 +182,7 @@ export default function IngestPage() {
 
       try {
         const { PDFDocument } = await import("pdf-lib");
-        const maxPagesPerChunk = 100;
+        const maxPagesPerChunk = 30;
         const startIdx = Math.max(0, chapter.startPage - 1); // 1-based → 0-based
         const endIdx = Math.min(pdfDocRef.current.getPageCount(), chapter.endPage);
         const chapterPageCount = endIdx - startIdx;
@@ -525,7 +525,7 @@ export default function IngestPage() {
 
           <p className="text-xs text-muted-foreground">
             Pages are extracted on your device, then uploaded to the Anthropic Files API — lightweight, no base64 encoding.
-            Large chapters (&gt;100 pages) are split into chunks automatically.
+            Large chapters (&gt;30 pages) are split into smaller chunks automatically.
           </p>
 
           <div className="space-y-2">

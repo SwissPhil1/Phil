@@ -208,8 +208,9 @@ async function handleProcessPdf(body: {
   chapterTitle: string;
   chapterNumber: number;
   bookSource: string;
+  appendMode?: boolean;
 }) {
-  const { pdfBase64, chapterTitle, chapterNumber, bookSource } = body;
+  const { pdfBase64, chapterTitle, chapterNumber, bookSource, appendMode } = body;
 
   if (!pdfBase64 || !chapterTitle || !chapterNumber || !bookSource) {
     return NextResponse.json(
@@ -228,7 +229,7 @@ async function handleProcessPdf(body: {
     );
   }
 
-  const prompt = `You are an expert radiology educator helping a resident prepare for the Swiss FMH2 radiology specialty exam.
+  const fullPrompt = `You are an expert radiology educator helping a resident prepare for the Swiss FMH2 radiology specialty exam.
 
 You are looking at actual pages from a radiology textbook — Chapter ${chapterNumber}: "${chapterTitle}".
 
@@ -270,6 +271,47 @@ Requirements:
 - Focus on diagnostic imaging findings, differential diagnoses, and classic signs
 - Return ONLY valid JSON, no markdown fences`;
 
+  const appendPrompt = `You are an expert radiology educator helping a resident prepare for the Swiss FMH2 radiology specialty exam.
+
+You are looking at additional pages from Chapter ${chapterNumber}: "${chapterTitle}" of a radiology textbook.
+Earlier pages of this chapter have already been processed. Focus on generating questions and flashcards from the NEW content on these pages.
+
+IMPORTANT: You can see the IMAGES in these pages. Reference specific imaging findings you can see.
+
+Generate study materials as a JSON object with exactly these fields:
+
+{
+  "summary": "",
+  "keyPoints": ["3-5 key points from these specific pages"],
+  "highYield": ["2-4 high-yield facts from these pages"],
+  "mnemonics": [],
+  "memoryPalace": "",
+  "questions": [
+    {
+      "questionText": "MCQ question based on content from these pages",
+      "options": ["A) ...", "B) ...", "C) ...", "D) ..."],
+      "correctAnswer": 0,
+      "explanation": "Detailed explanation",
+      "difficulty": "medium",
+      "category": "topic area"
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "Question from these pages",
+      "back": "Answer with imaging characteristics",
+      "category": "topic area"
+    }
+  ]
+}
+
+Requirements:
+- Generate 8-15 questions with varying difficulty (easy/medium/hard)
+- Generate 15-25 flashcards
+- Focus on content unique to THESE pages — avoid duplicating earlier material
+- Questions should mimic RadPrimer / FMH2 exam style
+- Return ONLY valid JSON, no markdown fences`;
+
   const response = await client.messages.create({
     model: "claude-sonnet-4-20250514",
     max_tokens: 8000,
@@ -287,7 +329,7 @@ Requirements:
           },
           {
             type: "text",
-            text: prompt,
+            text: appendMode ? appendPrompt : fullPrompt,
           },
         ],
       },
@@ -309,6 +351,9 @@ Requirements:
     );
   }
 
+  if (appendMode) {
+    return await appendStudyContent(content, chapterNumber, bookSource);
+  }
   return await saveStudyContent(content, chapterTitle, chapterNumber, bookSource);
 }
 
@@ -462,6 +507,72 @@ async function saveStudyContent(
     chapterId: chapter.id,
     questionsCreated: content.questions.length,
     flashcardsCreated: content.flashcards.length,
+  });
+}
+
+/**
+ * Append questions/flashcards to an existing chapter (for multi-chunk processing).
+ * Does NOT clear existing data — just adds more content.
+ */
+async function appendStudyContent(
+  content: StudyContent,
+  chapterNumber: number,
+  bookSource: string
+) {
+  const chapter = await prisma.chapter.findUnique({
+    where: { bookSource_number: { bookSource, number: chapterNumber } },
+  });
+
+  if (!chapter) {
+    return NextResponse.json({ error: "Chapter not found for appending" }, { status: 404 });
+  }
+
+  // Merge key points and high yield facts
+  const existingKeyPoints: string[] = JSON.parse(chapter.keyPoints || "[]");
+  const existingHighYield: string[] = JSON.parse(chapter.highYield || "[]");
+  await prisma.chapter.update({
+    where: { id: chapter.id },
+    data: {
+      keyPoints: JSON.stringify([...existingKeyPoints, ...content.keyPoints]),
+      highYield: JSON.stringify([...existingHighYield, ...content.highYield]),
+    },
+  });
+
+  // Append new questions
+  for (const q of content.questions) {
+    await prisma.question.create({
+      data: {
+        chapterId: chapter.id,
+        questionText: q.questionText,
+        options: JSON.stringify(q.options),
+        correctAnswer: q.correctAnswer,
+        explanation: q.explanation,
+        difficulty: q.difficulty || "medium",
+        category: q.category,
+      },
+    });
+  }
+
+  // Append new flashcards
+  for (const f of content.flashcards) {
+    await prisma.flashcard.create({
+      data: {
+        chapterId: chapter.id,
+        front: f.front,
+        back: f.back,
+        category: f.category,
+      },
+    });
+  }
+
+  const totalQuestions = await prisma.question.count({ where: { chapterId: chapter.id } });
+  const totalFlashcards = await prisma.flashcard.count({ where: { chapterId: chapter.id } });
+
+  return NextResponse.json({
+    success: true,
+    chapterId: chapter.id,
+    questionsCreated: totalQuestions,
+    flashcardsCreated: totalFlashcards,
   });
 }
 

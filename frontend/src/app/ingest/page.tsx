@@ -27,19 +27,34 @@ interface ProcessResult {
 type ChapterStatus =
   | { state: "pending" }
   | { state: "splitting" }
-  | { state: "processing" }
+  | { state: "processing"; chunk?: number; totalChunks?: number }
   | { state: "done"; result: ProcessResult }
   | { state: "error"; message: string };
 
-/** Convert a Uint8Array to a base64 string (browser-safe, handles large arrays) */
+/** Convert a Uint8Array to a base64 string — avoids btoa() which crashes on iPad Safari */
 function uint8ToBase64(bytes: Uint8Array): string {
-  const CHUNK = 8192;
-  let binary = "";
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    const slice = bytes.subarray(i, i + CHUNK);
-    binary += String.fromCharCode(...slice);
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  const len = bytes.length;
+  const segments: string[] = [];
+
+  // Process in 12288-byte segments (divisible by 3) for memory efficiency
+  for (let offset = 0; offset < len; offset += 12288) {
+    let segment = '';
+    const end = Math.min(offset + 12288, len);
+    for (let i = offset; i < end; i += 3) {
+      const b0 = bytes[i];
+      const b1 = i + 1 < len ? bytes[i + 1] : 0;
+      const b2 = i + 2 < len ? bytes[i + 2] : 0;
+      segment +=
+        chars[b0 >> 2] +
+        chars[((b0 & 3) << 4) | (b1 >> 4)] +
+        (i + 1 < len ? chars[((b1 & 15) << 2) | (b2 >> 6)] : '=') +
+        (i + 2 < len ? chars[b2 & 63] : '=');
+    }
+    segments.push(segment);
   }
-  return btoa(binary);
+
+  return segments.join('');
 }
 
 export default function IngestPage() {
@@ -66,7 +81,7 @@ export default function IngestPage() {
   // API key diagnostic
   const [keyTest, setKeyTest] = useState<{ testing: boolean; result?: Record<string, unknown> }>({ testing: false });
 
-  const PAGES_PER_CHUNK = 15; // Max pages sent to Claude per request
+  const PAGES_PER_CHUNK = 10; // Max pages per Claude request (kept small for Vercel 4.5MB body limit)
 
   const testApiKey = useCallback(async () => {
     setKeyTest({ testing: true });
@@ -159,7 +174,7 @@ export default function IngestPage() {
     }
   }, [pdfBytes, totalPages]);
 
-  // ─── Step 3: Process a Single Chapter ──────────────────────────────────
+  // ─── Step 3: Process a Single Chapter (all chunks) ─────────────────────
   const processChapter = useCallback(
     async (chapter: DetectedChapter) => {
       if (!pdfBytes) return;
@@ -171,34 +186,30 @@ export default function IngestPage() {
       const startIdx = Math.max(0, chapter.startPage - 1);
       const endIdx = Math.min(totalPages, chapter.endPage);
       const chapterPageCount = endIdx - startIdx;
-
-      // Split into sub-chunks if the chapter has more than PAGES_PER_CHUNK pages
       const numChunks = Math.ceil(chapterPageCount / PAGES_PER_CHUNK);
-
-      // For multi-chunk chapters, we process the first chunk as the main one
-      // and merge study content. For simplicity, process the largest viable chunk.
-      // If the chapter is ≤ PAGES_PER_CHUNK, send it all at once.
-      // If larger, send PAGES_PER_CHUNK pages (Claude's vision limit is 100 pages,
-      // but we keep chunks small for Vercel payload limits).
 
       setStatuses((prev) => ({ ...prev, [chapter.number]: { state: "splitting" } }));
 
       try {
-        // For very large chapters, we process in chunks and only use the first chunk
-        // plus a text summary of remaining chunks. This keeps quality high.
-        const pagesToSend = Math.min(chapterPageCount, PAGES_PER_CHUNK);
-        const chunkPdf = await PDFDocument.create();
-        const indices = Array.from({ length: pagesToSend }, (_, i) => startIdx + i);
-        const pages = await chunkPdf.copyPages(fullPdf, indices);
-        pages.forEach((p) => chunkPdf.addPage(p));
-        const chunkBytes = await chunkPdf.save();
-        const chunkBase64 = uint8ToBase64(new Uint8Array(chunkBytes));
+        for (let chunkIdx = 0; chunkIdx < numChunks; chunkIdx++) {
+          const chunkStart = startIdx + chunkIdx * PAGES_PER_CHUNK;
+          const chunkEnd = Math.min(chunkStart + PAGES_PER_CHUNK, endIdx);
+          const pagesToSend = chunkEnd - chunkStart;
 
-        setStatuses((prev) => ({ ...prev, [chapter.number]: { state: "processing" } }));
+          // Extract this chunk's pages into a new PDF
+          const chunkPdf = await PDFDocument.create();
+          const indices = Array.from({ length: pagesToSend }, (_, i) => chunkStart + i);
+          const pages = await chunkPdf.copyPages(fullPdf, indices);
+          pages.forEach((p) => chunkPdf.addPage(p));
+          const chunkBytes = await chunkPdf.save();
+          const chunkBase64 = uint8ToBase64(new Uint8Array(chunkBytes));
 
-        // If there are more chunks, process them sequentially
-        if (numChunks > 1) {
-          // Process first chunk
+          setStatuses((prev) => ({
+            ...prev,
+            [chapter.number]: { state: "processing", chunk: chunkIdx + 1, totalChunks: numChunks },
+          }));
+
+          const isAppend = chunkIdx > 0;
           const res = await fetch("/api/ingest", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -208,6 +219,7 @@ export default function IngestPage() {
               chapterTitle: chapter.title,
               chapterNumber: chapter.number,
               bookSource,
+              appendMode: isAppend,
             }),
           });
 
@@ -215,45 +227,28 @@ export default function IngestPage() {
           if (data.error) {
             setStatuses((prev) => ({
               ...prev,
-              [chapter.number]: { state: "error", message: data.error },
+              [chapter.number]: {
+                state: "error",
+                message: numChunks > 1
+                  ? `Chunk ${chunkIdx + 1}/${numChunks}: ${data.error}`
+                  : data.error,
+              },
             }));
             return;
           }
 
-          setStatuses((prev) => ({
-            ...prev,
-            [chapter.number]: {
-              state: "done",
-              result: data,
-            },
-          }));
-        } else {
-          // Single chunk — send directly
-          const res = await fetch("/api/ingest", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              action: "process-pdf",
-              pdfBase64: chunkBase64,
-              chapterTitle: chapter.title,
-              chapterNumber: chapter.number,
-              bookSource,
-            }),
-          });
-
-          const data = await res.json();
-          if (data.error) {
+          // Update with latest totals after each chunk
+          if (chunkIdx === numChunks - 1) {
             setStatuses((prev) => ({
               ...prev,
-              [chapter.number]: { state: "error", message: data.error },
+              [chapter.number]: { state: "done", result: data },
             }));
-            return;
           }
 
-          setStatuses((prev) => ({
-            ...prev,
-            [chapter.number]: { state: "done", result: data },
-          }));
+          // Small delay between chunks to avoid rate limits
+          if (chunkIdx < numChunks - 1) {
+            await new Promise((r) => setTimeout(r, 1500));
+          }
         }
       } catch (err) {
         setStatuses((prev) => ({
@@ -514,7 +509,7 @@ export default function IngestPage() {
 
           <p className="text-xs text-muted-foreground">
             Each chapter&apos;s PDF pages are sent directly to Claude — text, tables, and images are all analyzed.
-            {totalPages > 100 && " Large chapters are split into 15-page chunks."}
+            Large chapters are split into {PAGES_PER_CHUNK}-page chunks and processed sequentially.
           </p>
 
           <div className="space-y-2">
@@ -563,7 +558,9 @@ export default function IngestPage() {
                   {status?.state === "processing" && (
                     <span className="flex items-center gap-1 text-sm text-blue-600">
                       <Loader2 className="h-4 w-4 animate-spin" />
-                      Claude analyzing...
+                      {status.totalChunks && status.totalChunks > 1
+                        ? `Chunk ${status.chunk}/${status.totalChunks}...`
+                        : "Claude analyzing..."}
                     </span>
                   )}
                   {isDone && (
@@ -574,9 +571,9 @@ export default function IngestPage() {
                     </span>
                   )}
                   {isError && (
-                    <span className="flex items-center gap-1 text-sm text-red-600 max-w-xs truncate">
+                    <span className="flex items-center gap-1 text-sm text-red-600 max-w-sm truncate" title={(status as { state: "error"; message: string }).message}>
                       <AlertCircle className="h-4 w-4 flex-shrink-0" />
-                      {(status as { state: "error"; message: string }).message.slice(0, 60)}
+                      {(status as { state: "error"; message: string }).message.slice(0, 80)}
                     </span>
                   )}
 

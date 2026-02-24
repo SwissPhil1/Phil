@@ -2,6 +2,9 @@ import { prisma } from "@/lib/prisma";
 import Anthropic from "@anthropic-ai/sdk";
 import { NextResponse } from "next/server";
 
+// Force this route to be dynamic — never pre-render at build time
+export const dynamic = "force-dynamic";
+
 interface StudyContent {
   summary: string;
   keyPoints: string[];
@@ -105,15 +108,17 @@ async function handleProcess(body: {
     );
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
+  // Let the Anthropic SDK read ANTHROPIC_API_KEY from the environment itself.
+  // Passing it explicitly can cause issues if Next.js inlines the value at build time.
+  let client: Anthropic;
+  try {
+    client = new Anthropic();
+  } catch {
     return NextResponse.json(
-      { error: "ANTHROPIC_API_KEY not configured on the server" },
+      { error: "ANTHROPIC_API_KEY is not configured. Add it in Vercel → Settings → Environment Variables and redeploy." },
       { status: 500 }
     );
   }
-
-  const client = new Anthropic({ apiKey });
 
   const prompt = `You are an expert radiology educator helping a resident prepare for the Swiss FMH2 radiology specialty exam.
 

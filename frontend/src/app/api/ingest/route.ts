@@ -14,6 +14,7 @@ interface StudyContent {
   highYield: string[];
   mnemonics: { name: string; content: string }[];
   memoryPalace: string;
+  studyGuide?: string;
   questions: {
     questionText: string;
     options: string[];
@@ -288,6 +289,7 @@ Generate comprehensive study materials as a JSON object with exactly these field
   "highYield": ["5-8 high-yield facts for the exam, including classic imaging signs"],
   "mnemonics": [{"name": "Mnemonic name", "content": "Explanation"}],
   "memoryPalace": "A vivid memory palace description linking concepts to imaging findings.",
+  "studyGuide": "A comprehensive markdown study guide (see instructions below).",
   "questions": [
     {
       "questionText": "MCQ question — include image-based questions like 'A CT shows X finding. What is the most likely diagnosis?'",
@@ -307,6 +309,30 @@ Generate comprehensive study materials as a JSON object with exactly these field
   ]
 }
 
+## Study Guide Instructions (for the "studyGuide" field):
+Write a comprehensive, exam-focused study guide in **markdown** format. This should be a single, cohesive document that a radiology resident would actually want to read the night before the FMH2 exam. Structure it as follows:
+
+### Structure:
+1. **Overview** — 2-3 sentence orientation: what this chapter covers and why it matters clinically.
+2. **Core Concepts** — Walk through the key topics systematically. Use subheadings (### or ####). For each concept:
+   - Explain the pathophysiology/anatomy briefly
+   - Describe the **imaging appearance** on each relevant modality (CT, MRI, US, X-ray) using bullet points
+   - Note **classic signs** (e.g., "double duct sign", "target sign") in **bold**
+   - Include differential diagnosis where relevant
+3. **High-Yield Exam Points** — A clearly marked section with the facts most likely to appear on exams. Use ⚡ bullet markers.
+4. **Mnemonics & Memory Aids** — Integrate mnemonics naturally. Format each as a bold title followed by explanation.
+5. **Active Recall Prompts** — End with 5-8 "Stop and think" questions (no answers — force the reader to recall). Format as a blockquote section with > markers.
+6. **Differential Diagnosis Tables** — Where applicable, use markdown tables comparing entities (columns: Entity | Key Finding | Distinguishing Feature).
+
+### Style rules:
+- Use **bold** for critical terms and classic signs
+- Use *italics* for modality-specific descriptions
+- Use markdown tables for comparisons
+- Use > blockquotes for active recall prompts
+- Keep it dense but readable — no filler
+- Reference imaging findings from the actual pages you can see
+- Target length: 1500-3000 words
+
 Requirements:
 - Generate 8-15 questions with varying difficulty (easy/medium/hard)
 - Generate 15-25 flashcards
@@ -319,7 +345,7 @@ Requirements:
   const appendPrompt = `You are an expert radiology educator helping a resident prepare for the Swiss FMH2 radiology specialty exam.
 
 You are looking at additional pages from Chapter ${chapterNumber}: "${chapterTitle}" of a radiology textbook.
-Earlier pages of this chapter have already been processed. Focus on generating questions and flashcards from the NEW content on these pages.
+Earlier pages of this chapter have already been processed. Focus on generating questions, flashcards, and study guide content from the NEW content on these pages.
 
 IMPORTANT: You can see the IMAGES in these pages. Reference specific imaging findings you can see.
 
@@ -331,6 +357,7 @@ Generate study materials as a JSON object with exactly these fields:
   "highYield": ["2-4 high-yield facts from these pages"],
   "mnemonics": [],
   "memoryPalace": "",
+  "studyGuide": "Additional study guide content for THESE pages in markdown (see instructions below).",
   "questions": [
     {
       "questionText": "MCQ question based on content from these pages",
@@ -349,6 +376,17 @@ Generate study materials as a JSON object with exactly these fields:
     }
   ]
 }
+
+## Study Guide Instructions (for the "studyGuide" field):
+Write a study guide section covering ONLY the content on these specific pages. This will be appended to the existing study guide from earlier pages. Use markdown formatting:
+- Use ### subheadings for each new topic/entity covered on these pages
+- Describe **imaging appearance** on each relevant modality (CT, MRI, US, X-ray) with bullet points
+- **Bold** classic signs and critical terms
+- Include ⚡ high-yield exam points inline
+- Add markdown tables for differential diagnosis comparisons where relevant
+- End with 2-3 active recall prompts as > blockquotes
+- Target length: 500-1500 words (proportional to content density on these pages)
+- Do NOT repeat an overview or introduction — jump straight into the new material
 
 Requirements:
 - Generate 8-15 questions with varying difficulty (easy/medium/hard)
@@ -499,9 +537,20 @@ Generate a JSON object with exactly these fields:
   "highYield": ["List of 5-8 high-yield facts"],
   "mnemonics": [{"name": "Mnemonic name", "content": "Explanation"}],
   "memoryPalace": "A vivid memory palace description.",
+  "studyGuide": "A comprehensive markdown study guide (see instructions below).",
   "questions": [{"questionText": "MCQ question", "options": ["A", "B", "C", "D"], "correctAnswer": 0, "explanation": "Why", "difficulty": "medium", "category": "topic"}],
   "flashcards": [{"front": "Question", "back": "Answer", "category": "topic"}]
 }
+
+## Study Guide Instructions (for the "studyGuide" field):
+Write a comprehensive, exam-focused study guide in **markdown** format. Structure:
+1. **Overview** — 2-3 sentence orientation
+2. **Core Concepts** — Walk through key topics with ### subheadings. For each: pathophysiology, **imaging appearance** per modality, **classic signs** in bold, differentials
+3. **High-Yield Exam Points** — Use ⚡ bullet markers
+4. **Mnemonics & Memory Aids** — Bold titles with explanations
+5. **Active Recall Prompts** — 5-8 "Stop and think" questions as > blockquotes
+6. **Differential Diagnosis Tables** — Markdown tables where applicable
+Use **bold** for critical terms, *italics* for modality descriptions, tables for comparisons. Target 1500-3000 words.
 
 Important:
 - Generate 8-15 questions, varying difficulty (easy/medium/hard)
@@ -509,7 +558,7 @@ Important:
 - Generate 3-5 mnemonics
 - Questions should mimic RadPrimer intermediate level
 - Focus on diagnostic imaging findings and differential diagnoses
-- Return ONLY valid JSON, no markdown.`;
+- Return ONLY valid JSON, no markdown fences.`;
 
   const response = await callClaudeWithRetry(() =>
     client.messages.create({
@@ -558,6 +607,7 @@ async function saveContentToDB(
       highYield: JSON.stringify(content.highYield || []),
       mnemonics: JSON.stringify(content.mnemonics || []),
       memoryPalace: content.memoryPalace != null ? String(content.memoryPalace) : null,
+      studyGuide: content.studyGuide != null ? String(content.studyGuide) : null,
     },
     create: {
       bookSource: String(bookSource),
@@ -569,6 +619,7 @@ async function saveContentToDB(
       highYield: JSON.stringify(content.highYield || []),
       mnemonics: JSON.stringify(content.mnemonics || []),
       memoryPalace: content.memoryPalace != null ? String(content.memoryPalace) : null,
+      studyGuide: content.studyGuide != null ? String(content.studyGuide) : null,
     },
   });
 
@@ -643,11 +694,20 @@ async function appendContentToDB(
 
   const existingKeyPoints: string[] = JSON.parse(chapter.keyPoints || "[]");
   const existingHighYield: string[] = JSON.parse(chapter.highYield || "[]");
+
+  // Append new study guide section to existing guide
+  const existingGuide = chapter.studyGuide || "";
+  const newGuideSection = content.studyGuide ? String(content.studyGuide) : "";
+  const combinedGuide = existingGuide && newGuideSection
+    ? `${existingGuide}\n\n---\n\n${newGuideSection}`
+    : existingGuide || newGuideSection || null;
+
   await prisma.chapter.update({
     where: { id: chapter.id },
     data: {
       keyPoints: JSON.stringify([...existingKeyPoints, ...(content.keyPoints || [])]),
       highYield: JSON.stringify([...existingHighYield, ...(content.highYield || [])]),
+      studyGuide: combinedGuide,
     },
   });
 

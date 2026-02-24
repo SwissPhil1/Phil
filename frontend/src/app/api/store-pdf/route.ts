@@ -12,6 +12,16 @@ export const runtime = "nodejs";
  * Does NOT upload to Anthropic Files API — that happens later during content generation.
  */
 export async function POST(request: Request) {
+  // Pre-flight check: is blob storage configured?
+  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+    return NextResponse.json(
+      {
+        error: "Blob storage not configured. Connect your Vercel Blob store to this project (Vercel Dashboard → Project → Storage → Connect).",
+      },
+      { status: 500 }
+    );
+  }
+
   try {
     const formData = await request.formData();
     const pdfFile = formData.get("pdf") as File | null;

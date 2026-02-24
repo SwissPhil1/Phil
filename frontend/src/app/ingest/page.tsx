@@ -456,6 +456,25 @@ export default function SourcesPage() {
                 No AI processing happens yet — that&apos;s done later per chapter.
               </p>
 
+              {/* Global error banner — shown when all/most chapters fail (likely config issue) */}
+              {!storing && Object.values(storeStatuses).length > 0 &&
+               Object.values(storeStatuses).every((s) => s.state === "error") && (
+                <div className="rounded-lg bg-red-50 dark:bg-red-950/20 border border-red-300 dark:border-red-700 p-4 space-y-2">
+                  <div className="flex items-center gap-2 text-red-700 dark:text-red-400 font-medium">
+                    <AlertCircle className="h-5 w-5" />
+                    Storage upload failed
+                  </div>
+                  <p className="text-sm text-red-600 dark:text-red-400">
+                    {(Object.values(storeStatuses)[0] as { state: "error"; message: string }).message}
+                  </p>
+                  <p className="text-xs text-red-500 dark:text-red-500">
+                    Make sure your Vercel Blob store is connected to this project.
+                    In Vercel Dashboard: Project → Storage → connect your blob store.
+                    This adds the <code className="bg-red-100 dark:bg-red-900/30 px-1 rounded">BLOB_READ_WRITE_TOKEN</code> environment variable automatically.
+                  </p>
+                </div>
+              )}
+
               {/* Overall progress bar */}
               {storing && (
                 <div className="space-y-1">
@@ -526,9 +545,9 @@ export default function SourcesPage() {
                         <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
                       )}
                       {isError && (
-                        <span className="flex items-center gap-1 text-xs text-red-600" title={(status as { state: "error"; message: string }).message}>
+                        <span className="flex items-center gap-1 text-xs text-red-600 max-w-xs">
                           <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
-                          Error
+                          <span className="truncate">{(status as { state: "error"; message: string }).message}</span>
                         </span>
                       )}
                     </div>

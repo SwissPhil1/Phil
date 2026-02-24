@@ -33,6 +33,30 @@ function getClient(): Anthropic {
   return new Anthropic();
 }
 
+/**
+ * Retry wrapper for Anthropic API calls.
+ * Retries on transient errors: 429 (rate limit), 529 (overloaded), 500+ (server errors).
+ * Uses exponential backoff: 5s, 10s, 20s.
+ */
+async function callClaudeWithRetry<T>(
+  fn: () => Promise<T>,
+  maxRetries = 3
+): Promise<T> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err: unknown) {
+      const apiErr = err as { status?: number };
+      const isRetryable = apiErr.status === 429 || apiErr.status === 529 || (apiErr.status && apiErr.status >= 500);
+      if (!isRetryable || attempt === maxRetries) throw err;
+      const delay = Math.pow(2, attempt) * 5000; // 5s, 10s, 20s
+      console.warn(`Claude API returned ${apiErr.status}, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})...`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw new Error("callClaudeWithRetry: unreachable");
+}
+
 export async function POST(request: Request) {
   try {
     const body = await request.json();
@@ -163,29 +187,33 @@ Rules:
 - Return ONLY valid JSON, no markdown fences or explanation`;
 
   const response = fileId
-    ? await client.beta.messages.create({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 4000,
-        betas: ["files-api-2025-04-14"],
-        messages: [{
-          role: "user",
-          content: [
-            { type: "document", source: { type: "file", file_id: fileId } },
-            { type: "text", text: promptText },
-          ],
-        }],
-      })
-    : await client.messages.create({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 4000,
-        messages: [{
-          role: "user",
-          content: [
-            { type: "document", source: { type: "base64", media_type: "application/pdf" as const, data: pdfBase64! } },
-            { type: "text", text: promptText },
-          ],
-        }],
-      });
+    ? await callClaudeWithRetry(() =>
+        client.beta.messages.create({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 4000,
+          betas: ["files-api-2025-04-14"],
+          messages: [{
+            role: "user",
+            content: [
+              { type: "document", source: { type: "file", file_id: fileId } },
+              { type: "text", text: promptText },
+            ],
+          }],
+        })
+      )
+    : await callClaudeWithRetry(() =>
+        client.messages.create({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 4000,
+          messages: [{
+            role: "user",
+            content: [
+              { type: "document", source: { type: "base64", media_type: "application/pdf" as const, data: pdfBase64! } },
+              { type: "text", text: promptText },
+            ],
+          }],
+        })
+      );
 
   let responseText = (response.content[0] as { type: "text"; text: string }).text.trim();
   if (responseText.startsWith("```")) {
@@ -350,31 +378,35 @@ Requirements:
       }, 8000);
 
       try {
-        // Call Claude (this is the long-running part — 30-120s)
+        // Call Claude with retry on transient errors (529 overloaded, 429 rate limit)
         const response = fileId
-          ? await client.beta.messages.create({
-              model: "claude-sonnet-4-20250514",
-              max_tokens: 8000,
-              betas: ["files-api-2025-04-14"],
-              messages: [{
-                role: "user",
-                content: [
-                  { type: "document", source: { type: "file", file_id: fileId } },
-                  { type: "text", text: promptText },
-                ],
-              }],
-            })
-          : await client.messages.create({
-              model: "claude-sonnet-4-20250514",
-              max_tokens: 8000,
-              messages: [{
-                role: "user",
-                content: [
-                  { type: "document", source: { type: "base64", media_type: "application/pdf" as const, data: pdfBase64! } },
-                  { type: "text", text: promptText },
-                ],
-              }],
-            });
+          ? await callClaudeWithRetry(() =>
+              client.beta.messages.create({
+                model: "claude-sonnet-4-20250514",
+                max_tokens: 8000,
+                betas: ["files-api-2025-04-14"],
+                messages: [{
+                  role: "user",
+                  content: [
+                    { type: "document", source: { type: "file", file_id: fileId } },
+                    { type: "text", text: promptText },
+                  ],
+                }],
+              })
+            )
+          : await callClaudeWithRetry(() =>
+              client.messages.create({
+                model: "claude-sonnet-4-20250514",
+                max_tokens: 8000,
+                messages: [{
+                  role: "user",
+                  content: [
+                    { type: "document", source: { type: "base64", media_type: "application/pdf" as const, data: pdfBase64! } },
+                    { type: "text", text: promptText },
+                  ],
+                }],
+              })
+            );
 
         // Parse Claude's JSON response
         let responseText = (response.content[0] as { type: "text"; text: string }).text.trim();
@@ -479,11 +511,13 @@ Important:
 - Focus on diagnostic imaging findings and differential diagnoses
 - Return ONLY valid JSON, no markdown.`;
 
-  const response = await client.messages.create({
-    model: "claude-sonnet-4-20250514",
-    max_tokens: 8000,
-    messages: [{ role: "user", content: prompt }],
-  });
+  const response = await callClaudeWithRetry(() =>
+    client.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 8000,
+      messages: [{ role: "user", content: prompt }],
+    })
+  );
 
   let responseText = (response.content[0] as { type: "text"; text: string }).text.trim();
   if (responseText.startsWith("```")) {

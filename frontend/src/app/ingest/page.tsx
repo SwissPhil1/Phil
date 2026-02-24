@@ -189,6 +189,22 @@ export default function SourcesPage() {
       });
     } catch { /* non-critical */ }
 
+    // ── Purge ALL old chunks + chapters for this book before re-storing ──
+    setStatusMsg("Purging old data for this book...");
+    try {
+      const purgeRes = await fetch("/api/ingest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "purge-source", bookSource: bookKey }),
+      });
+      const purgeData = await purgeRes.json();
+      if (purgeData.success) {
+        console.log(`Purged ${purgeData.deletedChunks} old chunks + ${purgeData.deletedChapters} old chapters`);
+      }
+    } catch (e) {
+      console.warn("Purge failed (continuing anyway):", e);
+    }
+
     const { PDFDocument } = await import("pdf-lib");
     const maxPagesPerChunk = 3; // Smaller chunks to reduce iPad memory pressure
     let completedChapters = 0;

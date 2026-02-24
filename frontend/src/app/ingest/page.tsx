@@ -177,6 +177,14 @@ export default function IngestPage() {
       for (let attempt = 0; attempt <= retries; attempt++) {
         try {
           const res = await fetch(url, options);
+          // Retry on server errors (413 too large, 502/503/504 gateway errors)
+          if (res.status >= 500 || res.status === 413) {
+            if (attempt === retries) return res;
+            const delay = Math.pow(2, attempt + 1) * 1000;
+            console.warn(`Fetch ${url} returned ${res.status} (attempt ${attempt + 1}/${retries + 1}), retrying in ${delay}ms...`);
+            await new Promise((r) => setTimeout(r, delay));
+            continue;
+          }
           return res;
         } catch (err) {
           if (attempt === retries) throw err;
@@ -192,7 +200,7 @@ export default function IngestPage() {
   );
 
   // ─── Step 3: Process a Single Chapter ──────────────────────────────────
-  // Extracts chapter pages on the client (in chunks of ≤8 pages),
+  // Extracts chapter pages on the client (in chunks of ≤5 pages),
   // uploads each chunk to the server → Files API, then processes via Claude.
   // The ingest endpoint returns an SSE stream (heartbeats keep the
   // connection alive during the long-running Claude call).
@@ -204,7 +212,7 @@ export default function IngestPage() {
 
       try {
         const { PDFDocument } = await import("pdf-lib");
-        const maxPagesPerChunk = 8; // Radiology PDFs are image-heavy; keep chunks small
+        const maxPagesPerChunk = 5; // Radiology PDFs are very image-heavy (CT/MRI series)
         const startIdx = Math.max(0, chapter.startPage - 1); // 1-based → 0-based
         const endIdx = Math.min(pdfDocRef.current.getPageCount(), chapter.endPage);
         const chapterPageCount = endIdx - startIdx;
@@ -620,7 +628,7 @@ export default function IngestPage() {
 
           <p className="text-xs text-muted-foreground">
             Pages are extracted on your device, then uploaded to the Anthropic Files API — lightweight, no base64 encoding.
-            Large chapters are split into 8-page chunks automatically. Uploads retry on failure.
+            Large chapters are split into 5-page chunks automatically. Uploads retry on failure.
           </p>
 
           <div className="space-y-2">

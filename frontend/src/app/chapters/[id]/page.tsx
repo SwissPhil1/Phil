@@ -16,8 +16,9 @@ import {
   GraduationCap,
   Loader2,
   RefreshCw,
+  AlertCircle,
 } from "lucide-react";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -52,6 +53,7 @@ export default function ChapterDetailPage() {
   const [activeTab, setActiveTab] = useState("guide");
   const [generatingGuide, setGeneratingGuide] = useState(false);
   const [guideError, setGuideError] = useState<string | null>(null);
+  const autoGenerateTriggered = useRef(false);
 
   useEffect(() => {
     if (params.id) {
@@ -115,6 +117,23 @@ export default function ChapterDetailPage() {
       setGeneratingGuide(false);
     }
   }, [chapter]);
+
+  // Auto-generate study guide on first load if chapter has content but no guide
+  useEffect(() => {
+    if (
+      chapter &&
+      !chapter.studyGuide &&
+      !generatingGuide &&
+      !guideError &&
+      !autoGenerateTriggered.current &&
+      activeTab === "guide" &&
+      // Only auto-generate if the chapter has been ingested (has questions or summary)
+      (chapter.questions.length > 0 || chapter.summary)
+    ) {
+      autoGenerateTriggered.current = true;
+      generateStudyGuide();
+    }
+  }, [chapter, generatingGuide, guideError, activeTab, generateStudyGuide]);
 
   if (loading) {
     return (
@@ -231,7 +250,7 @@ export default function ChapterDetailPage() {
                     Generating study guide...
                   </p>
                   <p className="text-sm text-muted-foreground/70">
-                    Claude is synthesizing your chapter data into a comprehensive study guide. This takes about 30-60 seconds.
+                    Claude is synthesizing your chapter into a comprehensive study guide. This takes 30-60 seconds.
                   </p>
                 </div>
               ) : chapter.studyGuide ? (
@@ -253,26 +272,30 @@ export default function ChapterDetailPage() {
                     </ReactMarkdown>
                   </article>
                 </>
-              ) : (
+              ) : guideError ? (
                 <div className="text-center py-12 space-y-4">
-                  <GraduationCap className="h-12 w-12 mx-auto text-muted-foreground/40" />
+                  <AlertCircle className="h-10 w-10 mx-auto text-destructive/60" />
                   <div className="space-y-1">
                     <p className="text-muted-foreground font-medium">
-                      No study guide yet
+                      Study guide generation failed
                     </p>
-                    <p className="text-sm text-muted-foreground/70 max-w-md mx-auto">
-                      Generate a comprehensive, exam-focused study guide from this chapter&apos;s
-                      ingested content — with core concepts, imaging findings, mnemonics, differential
-                      diagnosis tables, and active recall prompts.
+                    <p className="text-sm text-destructive max-w-md mx-auto">
+                      {guideError}
                     </p>
                   </div>
-                  {guideError && (
-                    <p className="text-sm text-destructive">{guideError}</p>
-                  )}
-                  <Button onClick={generateStudyGuide} className="gap-2">
-                    <GraduationCap className="h-4 w-4" />
-                    Generate Study Guide
+                  <Button onClick={generateStudyGuide} variant="outline" className="gap-2">
+                    <RefreshCw className="h-4 w-4" />
+                    Retry
                   </Button>
+                </div>
+              ) : (
+                <div className="text-center py-12 space-y-3">
+                  <GraduationCap className="h-12 w-12 mx-auto text-muted-foreground/40" />
+                  <p className="text-muted-foreground">
+                    {chapter.questions.length > 0 || chapter.summary
+                      ? "Preparing study guide..."
+                      : "Ingest this chapter first to generate a study guide."}
+                  </p>
                 </div>
               )}
             </CardContent>
@@ -288,8 +311,7 @@ export default function ChapterDetailPage() {
                 </div>
               ) : (
                 <p className="text-muted-foreground italic">
-                  Summary not yet generated. Run the ingestion pipeline to
-                  generate content.
+                  Summary not yet generated.
                 </p>
               )}
             </CardContent>

@@ -29,7 +29,7 @@ type ChapterStatus =
   | { state: "uploading" }
   | { state: "processing"; chunk?: number; totalChunks?: number }
   | { state: "done"; result: ProcessResult }
-  | { state: "error"; message: string };
+  | { state: "error"; message: string; failedChunk?: number; totalChunks?: number };
 
 export default function IngestPage() {
   const [pdfFile, setPdfFile] = useState<File | null>(null);
@@ -162,8 +162,42 @@ export default function IngestPage() {
 
       const detected: DetectedChapter[] = data.chapters;
       setChapters(detected);
-      setSelectedChapters(new Set(detected.map((c) => c.number)));
-      setStatusMsg(`Found ${detected.length} chapters. Select which ones to process.`);
+
+      // Check which chapters are already ingested in the DB
+      try {
+        const existingRes = await fetch(`/api/chapters?book=${bookSource}`);
+        const existingChapters: { number: number; _count: { questions: number; flashcards: number } }[] = await existingRes.json();
+        const existingMap = new Map(existingChapters.map((c) => [c.number, c._count]));
+
+        // Pre-populate statuses for already-ingested chapters
+        const preStatuses: Record<number, ChapterStatus> = {};
+        const unprocessed: number[] = [];
+        for (const ch of detected) {
+          const counts = existingMap.get(ch.number);
+          if (counts && (counts.questions > 0 || counts.flashcards > 0)) {
+            preStatuses[ch.number] = {
+              state: "done",
+              result: { chapterId: 0, questionsCreated: counts.questions, flashcardsCreated: counts.flashcards },
+            };
+          } else {
+            unprocessed.push(ch.number);
+          }
+        }
+        setStatuses(preStatuses);
+        // Only select chapters that haven't been ingested yet
+        setSelectedChapters(new Set(unprocessed));
+
+        const alreadyDone = detected.length - unprocessed.length;
+        if (alreadyDone > 0) {
+          setStatusMsg(`Found ${detected.length} chapters. ${alreadyDone} already ingested, ${unprocessed.length} remaining.`);
+        } else {
+          setStatusMsg(`Found ${detected.length} chapters. Select which ones to process.`);
+        }
+      } catch {
+        // If check fails, just select all (old behavior)
+        setSelectedChapters(new Set(detected.map((c) => c.number)));
+        setStatusMsg(`Found ${detected.length} chapters. Select which ones to process.`);
+      }
     } catch (err) {
       setStatusMsg(`Detection failed: ${err instanceof Error ? err.message : "Unknown error"}`);
     } finally {
@@ -205,7 +239,7 @@ export default function IngestPage() {
   // The ingest endpoint returns an SSE stream (heartbeats keep the
   // connection alive during the long-running Claude call).
   const processChapter = useCallback(
-    async (chapter: DetectedChapter) => {
+    async (chapter: DetectedChapter, resumeFromChunk?: number) => {
       if (!pdfDocRef.current) return;
 
       setStatuses((prev) => ({ ...prev, [chapter.number]: { state: "uploading" } }));
@@ -218,7 +252,10 @@ export default function IngestPage() {
         const chapterPageCount = endIdx - startIdx;
         const numChunks = Math.ceil(chapterPageCount / maxPagesPerChunk);
 
-        for (let i = 0; i < numChunks; i++) {
+        // Resume from failed chunk if specified, otherwise start from 0
+        const startChunk = resumeFromChunk ?? 0;
+
+        for (let i = startChunk; i < numChunks; i++) {
           const chunkStart = startIdx + i * maxPagesPerChunk;
           const chunkEnd = Math.min(chunkStart + maxPagesPerChunk, endIdx);
           const pagesToCopy = chunkEnd - chunkStart;
@@ -286,7 +323,8 @@ export default function IngestPage() {
             [chapter.number]: { state: "processing", chunk: i + 1, totalChunks: numChunks },
           }));
 
-          const isAppend = i > 0;
+          // Append mode: always append when resuming, or for chunks after the first
+          const isAppend = i > 0 || (resumeFromChunk !== undefined && resumeFromChunk > 0);
           let ingestRes: Response;
           try {
             ingestRes = await fetchWithRetry("/api/ingest", {
@@ -351,6 +389,8 @@ export default function IngestPage() {
                 message: numChunks > 1
                   ? `Chunk ${i + 1}/${numChunks}: ${data.error}`
                   : String(data.error),
+                failedChunk: i,
+                totalChunks: numChunks,
               },
             }));
             return;
@@ -390,7 +430,9 @@ export default function IngestPage() {
     for (const ch of toProcess) {
       const status = statuses[ch.number];
       if (status?.state === "done") continue; // skip already processed
-      await processChapter(ch);
+      // Resume from failed chunk if applicable
+      const resumeChunk = status?.state === "error" && "failedChunk" in status ? status.failedChunk : undefined;
+      await processChapter(ch, resumeChunk);
       // Delay between chapters to avoid rate limits (4s)
       await new Promise((r) => setTimeout(r, 4000));
     }
@@ -696,13 +738,22 @@ export default function IngestPage() {
                     </span>
                   )}
 
-                  {!isDone && !isActive && (
+                  {!isActive && isError && status && "failedChunk" in status && status.failedChunk !== undefined && (
+                    <button
+                      onClick={() => processChapter(ch, status.failedChunk)}
+                      disabled={isAnyProcessing}
+                      className="text-sm px-3 py-1 rounded border bg-orange-50 border-orange-300 text-orange-700 hover:bg-orange-100 disabled:opacity-50 dark:bg-orange-950/30 dark:border-orange-700 dark:text-orange-400"
+                    >
+                      Resume chunk {(status.failedChunk as number) + 1}/{status.totalChunks}
+                    </button>
+                  )}
+                  {!isActive && (
                     <button
                       onClick={() => processChapter(ch)}
                       disabled={isAnyProcessing}
                       className="text-sm px-3 py-1 rounded border hover:bg-accent disabled:opacity-50"
                     >
-                      Process
+                      {isDone ? "Re-process" : isError ? "Restart" : "Process"}
                     </button>
                   )}
                 </div>

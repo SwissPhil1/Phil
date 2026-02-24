@@ -741,8 +741,61 @@ async function handleGenerateStudyGuide(body: {
 
   const hasFileIds = Array.isArray(fileIds) && fileIds.length > 0;
 
+  // ── Find related chapters from other book sources ───────────────────────
+  // Match by title similarity: extract key topic words and find chapters
+  // from other books that cover the same topic (e.g., both have "Thoracic")
+  const titleWords = chapter.title
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, "")
+    .split(/\s+/)
+    .filter((w) => w.length > 3 && !["chapter", "section", "part", "the", "and", "for", "with", "from"].includes(w));
+
+  const relatedChapters = titleWords.length > 0
+    ? await prisma.chapter.findMany({
+        where: {
+          bookSource: { not: chapter.bookSource },
+          OR: titleWords.map((word) => ({
+            title: { contains: word, mode: "insensitive" as const },
+          })),
+        },
+      })
+    : [];
+
+  // Build cross-reference context from related chapters
+  function formatChapterContext(ch: NonNullable<typeof chapter>) {
+    const kp: string[] = JSON.parse(ch.keyPoints || "[]");
+    const hy: string[] = JSON.parse(ch.highYield || "[]");
+    const mn: Array<{ name: string; content: string }> = JSON.parse(ch.mnemonics || "[]");
+    return `### ${ch.bookSource === "core_radiology" ? "Core Radiology" : "Crack the Core"} — Chapter ${ch.number}: ${ch.title}
+
+**Summary:** ${ch.summary || "(not available)"}
+
+**Key Points:**
+${kp.length > 0 ? kp.map((p) => `- ${p}`).join("\n") : "(none)"}
+
+**High-Yield Facts:**
+${hy.length > 0 ? hy.map((h) => `- ${h}`).join("\n") : "(none)"}
+
+**Mnemonics:**
+${mn.length > 0 ? mn.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(none)"}`;
+  }
+
+  const crossRefBlock = relatedChapters.length > 0
+    ? `\n\n## Additional Source Material (from other textbooks on the same topic)\n\n${relatedChapters.map(formatChapterContext).join("\n\n---\n\n")}`
+    : "";
+
+  const sourceNames = [
+    chapter.bookSource === "core_radiology" ? "Core Radiology" : "Crack the Core",
+    ...relatedChapters.map((rc) => rc.bookSource === "core_radiology" ? "Core Radiology" : "Crack the Core"),
+  ];
+  const uniqueSources = [...new Set(sourceNames)];
+
   // ── Build the prompt ────────────────────────────────────────────────────
-  const studyGuideInstructions = `Write a comprehensive study guide for Chapter ${chapter.number}: "${chapter.title}". This should be a single, cohesive document that a radiology resident would actually want to read the night before the Swiss FMH2 radiology specialty exam.
+  const crossRefNote = relatedChapters.length > 0
+    ? `\n\nIMPORTANT: You have material from multiple textbooks (${uniqueSources.join(" + ")}). Synthesize ALL sources into ONE unified guide. Where the books complement each other, combine their content. Where they differ or one adds detail the other lacks, include both perspectives. Do NOT separate content by book — integrate it into a single cohesive narrative.`
+    : "";
+
+  const studyGuideInstructions = `Write a comprehensive study guide for the topic: "${chapter.title}". This should be a single, cohesive document that a radiology resident would actually want to read the night before the Swiss FMH2 radiology specialty exam.${crossRefNote}
 
 ## Structure:
 1. **## Overview** — 2-3 sentence orientation: what this chapter covers and why it matters clinically.
@@ -782,37 +835,18 @@ async function handleGenerateStudyGuide(body: {
     }
     content.push({
       type: "text",
-      text: `You are an expert radiology educator. You can see the actual pages of this radiology textbook chapter above.\n\n${studyGuideInstructions}`,
+      text: `You are an expert radiology educator. You can see the actual pages of this radiology textbook chapter above.${crossRefBlock}\n\n${studyGuideInstructions}`,
     });
     messages = [{ role: "user", content }];
   } else {
     // MODE 2: No PDF pages — use accumulated metadata as context
-    const keyPoints: string[] = JSON.parse(chapter.keyPoints || "[]");
-    const highYield: string[] = JSON.parse(chapter.highYield || "[]");
-    const mnemonics: Array<{ name: string; content: string }> = JSON.parse(chapter.mnemonics || "[]");
+    const primaryContext = formatChapterContext(chapter);
 
-    const contextBlock = `## Chapter Data
-**Book:** ${chapter.bookSource}
-**Chapter ${chapter.number}:** ${chapter.title}
-
-### Summary
-${chapter.summary || "(not available)"}
-
-### Key Points
-${keyPoints.length > 0 ? keyPoints.map((p, i) => `${i + 1}. ${p}`).join("\n") : "(none)"}
-
-### High-Yield Facts
-${highYield.length > 0 ? highYield.map((h) => `- ${h}`).join("\n") : "(none)"}
-
-### Mnemonics
-${mnemonics.length > 0 ? mnemonics.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(none)"}
-
-### Memory Palace
-${chapter.memoryPalace || "(not available)"}`;
+    const contextBlock = `## Source Material\n\n${primaryContext}${crossRefBlock}`;
 
     messages = [{
       role: "user",
-      content: `You are an expert radiology educator. Below is the accumulated study data for a chapter. Synthesize this into a comprehensive study guide.\n\n${contextBlock}\n\n---\n\n${studyGuideInstructions}`,
+      content: `You are an expert radiology educator. Below is the accumulated study data for a topic. Synthesize ALL sources into a comprehensive, unified study guide.\n\n${contextBlock}\n\n---\n\n${studyGuideInstructions}`,
     }];
   }
 
@@ -869,6 +903,13 @@ ${chapter.memoryPalace || "(not available)"}`;
           chapterId: chapter.id,
           studyGuideLength: studyGuide.length,
           mode: hasFileIds ? "pdf" : "metadata",
+          sources: uniqueSources,
+          crossReferencedChapters: relatedChapters.map((rc) => ({
+            id: rc.id,
+            bookSource: rc.bookSource,
+            number: rc.number,
+            title: rc.title,
+          })),
         });
       } catch (err: unknown) {
         const anthropicError = err as { status?: number; error?: { type?: string; message?: string } };

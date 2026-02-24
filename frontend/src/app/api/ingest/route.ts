@@ -772,17 +772,24 @@ async function handleGenerateStudyGuide(body: {
   // ── Find related chapters from other book sources ───────────────────────
   // Match by title similarity: extract key topic words and find chapters
   // from other books that cover the same topic (e.g., both have "Thoracic")
+  // Generic words that appear in nearly every radiology chapter title — exclude them
+  const titleStopWords = [
+    "chapter", "section", "part", "the", "and", "for", "with", "from",
+    "imaging", "radiology", "radiologic", "radiological", "diagnostic",
+    "introduction", "overview", "principles", "approach", "review",
+  ];
   const titleWords = chapter.title
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, "")
     .split(/\s+/)
-    .filter((w) => w.length > 3 && !["chapter", "section", "part", "the", "and", "for", "with", "from"].includes(w));
+    .filter((w) => w.length > 3 && !titleStopWords.includes(w));
 
+  // Only cross-reference if we have meaningful topic words (not just generic terms)
   const relatedChapters = titleWords.length > 0
     ? await prisma.chapter.findMany({
         where: {
           bookSource: { not: chapter.bookSource },
-          OR: titleWords.map((word) => ({
+          AND: titleWords.map((word) => ({
             title: { contains: word, mode: "insensitive" as const },
           })),
         },
@@ -823,28 +830,33 @@ ${mn.length > 0 ? mn.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(no
     ? `\n\nIMPORTANT: You have material from multiple textbooks (${uniqueSources.join(" + ")}). Synthesize ALL sources into ONE unified guide. Where the books complement each other, combine their content. Where they differ or one adds detail the other lacks, include both perspectives. Do NOT separate content by book — integrate it into a single cohesive narrative.`
     : "";
 
-  const studyGuideInstructions = `Write a comprehensive study guide for the topic: "${chapter.title}". This should be a single, cohesive document that a radiology resident would actually want to read the night before the Swiss FMH2 radiology specialty exam.${crossRefNote}
+  const studyGuideInstructions = `Write an EXHAUSTIVE study guide for the topic: "${chapter.title}". This is for the Swiss FMH2 radiology specialty exam — one of the hardest radiology exams in Europe. The student CANNOT afford to miss any topic. Cover EVERYTHING.${crossRefNote}
+
+CRITICAL: This chapter may contain 50-150 pages of dense radiology content. Your study guide must cover ALL of it — every pathology, every imaging sign, every differential diagnosis, every classic finding mentioned in the chapter. If you see 20 different pathologies in the chapter, ALL 20 must appear in the guide with their imaging characteristics. Do NOT condense or skip topics.
 
 ## Structure:
-1. **## Overview** — 2-3 sentence orientation: what this chapter covers and why it matters clinically.
-2. **## Core Concepts** — Walk through the key topics systematically. Use ### subheadings for each major concept. For each:
-   - Explain the pathophysiology/anatomy briefly
-   - Describe the **imaging appearance** on each relevant modality (CT, MRI, US, X-ray) using bullet points
-   - Note **classic signs** (e.g., "double duct sign", "target sign") in **bold**
-   - Include differential diagnosis where relevant
-3. **## High-Yield Exam Points** — A clearly marked section with the facts most likely to appear on exams. Use ⚡ bullet markers.
-4. **## Mnemonics & Memory Aids** — Create memorable mnemonics for key concepts. Format each as a bold title followed by explanation.
-5. **## Differential Diagnosis Tables** — Where applicable, use markdown tables comparing entities (columns: Entity | Key Finding | Distinguishing Feature).
-6. **## Active Recall** — End with 8-10 "Stop and think" questions (no answers — force the reader to recall). Format as a blockquote section with > markers.
+1. **## Overview** — What this chapter covers and why it matters for the FMH2 exam.
+2. **## Anatomy & Normal Findings** — Relevant anatomy and what normal looks like on each modality. This is essential context.
+3. **## Core Concepts** — Walk through EVERY pathology/topic in the chapter systematically. Use ### subheadings for each. For EACH pathology:
+   - Pathophysiology in 1-2 sentences
+   - **Imaging appearance** on EACH relevant modality (X-ray, CT, MRI, US) — be specific (e.g., "hyperdense on non-contrast CT", "restricts on DWI")
+   - **Classic signs** in **bold** (e.g., **double duct sign**, **target sign**, **coffee bean sign**)
+   - Key differential diagnoses
+   - Pitfalls / look-alikes that could trick you on the exam
+4. **## High-Yield Exam Points** — The most testable facts. Use ⚡ bullet markers. Aim for 20-40 points.
+5. **## Differential Diagnosis Tables** — Multiple markdown tables grouping related entities (columns: Entity | Key Finding | Distinguishing Feature | Modality of Choice).
+6. **## Mnemonics & Memory Aids** — Create memorable mnemonics for the most complex topics.
+7. **## Imaging Protocols & Technique** — If the chapter discusses protocols, contrast phases, or technique, include them.
+8. **## Active Recall** — 15-25 "Stop and think" questions covering the full breadth of the chapter. Format as blockquotes.
 
 ## Style rules:
-- Use **bold** for critical terms and classic signs
+- Use **bold** for critical terms, classic signs, and diagnosis names
 - Use *italics* for modality-specific descriptions
-- Use markdown tables for comparisons
+- Use markdown tables liberally for comparisons and differentials
 - Use > blockquotes for active recall prompts
-- Keep it dense but readable — no filler
+- Be dense and detailed — no filler, but also no skipping. Every important fact from the chapter must appear.
 - Reference specific imaging findings from the chapter content
-- Target length: 2000-4000 words
+- Target length: 8000-15000 words — be as long as needed to cover everything. A 130-page chapter needs a thorough guide, not a brief summary.
 - Do NOT wrap the output in code fences — return raw markdown only`;
 
   // Build complete chapter data (ALL questions, flashcards, key points from every page)
@@ -902,7 +914,7 @@ ${mn.length > 0 ? mn.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(no
           ? await callClaudeWithRetry(() =>
               client.beta.messages.create({
                 model: "claude-sonnet-4-20250514",
-                max_tokens: 16000,
+                max_tokens: 32000,
                 betas: ["files-api-2025-04-14"],
                 messages,
               })
@@ -910,7 +922,7 @@ ${mn.length > 0 ? mn.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(no
           : await callClaudeWithRetry(() =>
               client.messages.create({
                 model: "claude-sonnet-4-20250514",
-                max_tokens: 12000,
+                max_tokens: 32000,
                 messages,
               })
             );
@@ -952,7 +964,7 @@ ${mn.length > 0 ? mn.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(no
             const fallbackResponse = await callClaudeWithRetry(() =>
               client.messages.create({
                 model: "claude-sonnet-4-20250514",
-                max_tokens: 16000,
+                max_tokens: 32000,
                 messages: [{
                   role: "user",
                   content: `You are an expert radiology educator. Below is the COMPLETE processed data from every page of this chapter — including all questions, flashcards, key points, and high-yield facts. Use ALL of this data to create a comprehensive study guide. Do not skip any topic.\n\n${fullContextBlock}\n\n---\n\n${studyGuideInstructions}`,
@@ -1363,17 +1375,22 @@ Requirements:
         sendEvent({ status: "generating-guide", message: "Generating comprehensive study guide..." });
 
         // Find related chapters from other books for cross-referencing
+        const titleStopWords2 = [
+          "chapter", "section", "part", "the", "and", "for", "with", "from",
+          "imaging", "radiology", "radiologic", "radiological", "diagnostic",
+          "introduction", "overview", "principles", "approach", "review",
+        ];
         const titleWords = chapter.title
           .toLowerCase()
           .replace(/[^a-z0-9\s]/g, "")
           .split(/\s+/)
-          .filter((w) => w.length > 3 && !["chapter", "section", "part", "the", "and", "for", "with", "from"].includes(w));
+          .filter((w) => w.length > 3 && !titleStopWords2.includes(w));
 
         const relatedChapters = titleWords.length > 0
           ? await prisma.chapter.findMany({
               where: {
                 bookSource: { not: chapter.bookSource },
-                OR: titleWords.map((word) => ({
+                AND: titleWords.map((word) => ({
                   title: { contains: word, mode: "insensitive" as const },
                 })),
               },
@@ -1402,27 +1419,32 @@ Requirements:
           ? `\n\nIMPORTANT: You have material from multiple textbooks (${uniqueSources.join(" + ")}). Synthesize ALL sources into ONE unified guide.`
           : "";
 
-        const guidePrompt = `Write a comprehensive study guide for the topic: "${chapter.title}". This should be a single, cohesive document that a radiology resident would actually want to read the night before the Swiss FMH2 radiology specialty exam.${crossRefNote}
+        const guidePrompt = `Write an EXHAUSTIVE study guide for the topic: "${chapter.title}". This is for the Swiss FMH2 radiology specialty exam — one of the hardest radiology exams in Europe. The student CANNOT afford to miss any topic. Cover EVERYTHING.${crossRefNote}
+
+CRITICAL: This chapter may contain 50-150 pages of dense radiology content. Your study guide must cover ALL of it — every pathology, every imaging sign, every differential diagnosis, every classic finding mentioned in the chapter. If you see 20 different pathologies in the chapter, ALL 20 must appear in the guide with their imaging characteristics. Do NOT condense or skip topics.
 
 ## Structure:
-1. **## Overview** — 2-3 sentence orientation: what this chapter covers and why it matters clinically.
-2. **## Core Concepts** — Walk through the key topics systematically. Use ### subheadings for each major concept. For each:
-   - Explain the pathophysiology/anatomy briefly
-   - Describe the **imaging appearance** on each relevant modality (CT, MRI, US, X-ray) using bullet points
-   - Note **classic signs** in **bold**
-   - Include differential diagnosis where relevant
-3. **## High-Yield Exam Points** — A clearly marked section with the facts most likely to appear on exams. Use bullet markers.
-4. **## Mnemonics & Memory Aids** — Create memorable mnemonics for key concepts.
-5. **## Differential Diagnosis Tables** — Where applicable, use markdown tables comparing entities.
-6. **## Active Recall** — End with 8-10 "Stop and think" questions (no answers). Format as blockquotes.
+1. **## Overview** — What this chapter covers and why it matters for the FMH2 exam.
+2. **## Anatomy & Normal Findings** — Relevant anatomy and what normal looks like on each modality.
+3. **## Core Concepts** — Walk through EVERY pathology/topic in the chapter systematically. Use ### subheadings for each. For EACH pathology:
+   - Pathophysiology in 1-2 sentences
+   - **Imaging appearance** on EACH relevant modality (X-ray, CT, MRI, US)
+   - **Classic signs** in **bold**
+   - Key differential diagnoses
+   - Pitfalls / look-alikes
+4. **## High-Yield Exam Points** — The most testable facts. Use ⚡ bullet markers. Aim for 20-40 points.
+5. **## Differential Diagnosis Tables** — Multiple markdown tables grouping related entities.
+6. **## Mnemonics & Memory Aids** — Memorable mnemonics for the most complex topics.
+7. **## Imaging Protocols & Technique** — If the chapter discusses protocols, contrast phases, or technique.
+8. **## Active Recall** — 15-25 "Stop and think" questions covering the full breadth. Format as blockquotes.
 
 ## Style rules:
-- Use **bold** for critical terms and classic signs
+- Use **bold** for critical terms, classic signs, and diagnosis names
 - Use *italics* for modality-specific descriptions
-- Use markdown tables for comparisons
+- Use markdown tables liberally for comparisons and differentials
 - Use > blockquotes for active recall prompts
-- Keep it dense but readable — no filler
-- Target length: 2000-4000 words
+- Be dense and detailed — no filler, but also no skipping
+- Target length: 8000-15000 words — be as long as needed to cover everything
 - Do NOT wrap the output in code fences — return raw markdown only`;
 
         // Merge all chunks into ONE PDF so Claude sees every page, image, table
@@ -1440,7 +1462,7 @@ Requirements:
           const guideResponse = await callClaudeWithRetry(() =>
             client.beta.messages.create({
               model: "claude-sonnet-4-20250514",
-              max_tokens: 16000,
+              max_tokens: 32000,
               betas: ["files-api-2025-04-14"],
               messages: [{
                 role: "user",
@@ -1461,7 +1483,7 @@ Requirements:
           const fallbackResponse = await callClaudeWithRetry(() =>
             client.messages.create({
               model: "claude-sonnet-4-20250514",
-              max_tokens: 16000,
+              max_tokens: 32000,
               messages: [{
                 role: "user",
                 content: `You are an expert radiology educator. Below is the COMPLETE processed data from every page of this chapter — including all questions, flashcards, key points, and high-yield facts extracted from the textbook. Use ALL of this data to create a comprehensive study guide. Do not skip any topic.\n\n${fullChapterData}${crossRefBlock}\n\n---\n\n${guidePrompt}`,

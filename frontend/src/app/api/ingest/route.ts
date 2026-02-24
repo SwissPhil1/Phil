@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import Anthropic from "@anthropic-ai/sdk";
 import { NextResponse } from "next/server";
+import { PDFDocument } from "pdf-lib";
 
 // Force this route to be dynamic — never pre-render at build time
 export const dynamic = "force-dynamic";
@@ -750,36 +751,23 @@ async function handleGenerateStudyGuide(body: {
     );
   }
 
-  // Determine file IDs for Claude: use provided ones, or re-upload from stored DB chunks
-  const effectiveFileIds = Array.isArray(fileIds) && fileIds.length > 0 ? [...fileIds] : [] as string[];
+  // Merge all PDF chunks into a single file for complete coverage
+  let mergedFileId: string | null = null;
+  const hasProvidedFileIds = Array.isArray(fileIds) && fileIds.length > 0;
 
-  if (effectiveFileIds.length === 0) {
-    // No fresh file IDs — re-upload from stored PDF chunks in DB
-    const pdfChunks = await prisma.pdfChunk.findMany({
-      where: { bookSource: chapter.bookSource, chapterNum: chapter.number },
-      orderBy: { chunkIndex: "asc" },
-    });
-
-    if (pdfChunks.length > 0) {
-      console.log(`Re-uploading ${pdfChunks.length} stored PDF chunks to Anthropic Files API for chapter ${chapter.number}...`);
-      for (let i = 0; i < pdfChunks.length; i++) {
-        try {
-          const chunk = pdfChunks[i];
-          const file = new File(
-            [Buffer.from(chunk.data)],
-            `ch${chapter.number}_chunk${i + 1}.pdf`,
-            { type: "application/pdf" }
-          );
-          const uploaded = await client.beta.files.upload({ file });
-          effectiveFileIds.push(uploaded.id);
-        } catch (err) {
-          console.warn(`Failed to re-upload chunk ${i + 1}:`, err instanceof Error ? err.message : err);
-        }
+  if (!hasProvidedFileIds) {
+    // No fresh file IDs — merge stored chunks into one PDF and upload
+    try {
+      mergedFileId = await mergeAndUploadChapterPdf(client, chapter.bookSource, chapter.number);
+      if (mergedFileId) {
+        console.log(`Merged PDF uploaded for chapter ${chapter.number}`);
       }
+    } catch (err) {
+      console.warn("Failed to merge/upload chapter PDF:", err instanceof Error ? err.message : err);
     }
   }
 
-  const hasFileIds = effectiveFileIds.length > 0;
+  const hasFileIds = hasProvidedFileIds || mergedFileId !== null;
 
   // ── Find related chapters from other book sources ───────────────────────
   // Match by title similarity: extract key topic words and find chapters
@@ -866,23 +854,26 @@ ${mn.length > 0 ? mn.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(no
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let messages: any[];
 
-  if (hasFileIds) {
-    // Send ALL PDF files for complete visual coverage
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const content: any[] = [];
-    for (const fid of effectiveFileIds) {
-      content.push({
-        type: "document",
-        source: { type: "file", file_id: fid },
-      });
-    }
-    content.push({
-      type: "text",
-      text: `You are an expert radiology educator. You can see ALL pages of this radiology textbook chapter above. Use EVERY detail you see — every image, diagram, table, and text — to create the most complete study guide possible.\n\n${studyGuideInstructions}`,
-    });
-    messages = [{ role: "user", content }];
+  // Determine which file ID to use: merged single PDF or provided file IDs
+  const pdfFileId = mergedFileId || (hasProvidedFileIds ? fileIds![0] : null);
+
+  if (pdfFileId) {
+    // Single merged PDF — Claude sees every page, image, diagram, table
+    messages = [{
+      role: "user",
+      content: [
+        { type: "document", source: { type: "file", file_id: pdfFileId } },
+        ...(hasProvidedFileIds && fileIds!.length > 1
+          ? fileIds!.slice(1).map((fid: string) => ({
+              type: "document" as const,
+              source: { type: "file" as const, file_id: fid },
+            }))
+          : []),
+        { type: "text", text: `You are an expert radiology educator. You can see EVERY page of this radiology textbook chapter above — all images, diagrams, tables, and text. Use ALL of it to create the most complete study guide possible. Do not skip any topic or imaging finding.\n\n${studyGuideInstructions}` },
+      ],
+    }];
   } else {
-    // No PDF files — use complete processed data from every page
+    // No PDF available — use complete processed data from every page
     messages = [{
       role: "user",
       content: `You are an expert radiology educator. Below is the COMPLETE processed data from every page of this chapter — including all questions, flashcards, key points, and high-yield facts. Use ALL of this data to create a comprehensive study guide. Do not skip any topic.\n\n${fullContextBlock}\n\n---\n\n${studyGuideInstructions}`,
@@ -1049,6 +1040,45 @@ async function handleStoreChapter(body: {
     chapterId: chapter.id,
     pdfChunksStored: pdfChunkCount,
   });
+}
+
+/**
+ * Merge all PDF chunks for a chapter into a single PDF and upload to Anthropic Files API.
+ * Returns a single file ID that contains every page of the chapter.
+ */
+async function mergeAndUploadChapterPdf(
+  client: Anthropic,
+  bookSource: string,
+  chapterNum: number,
+): Promise<string | null> {
+  const chunks = await prisma.pdfChunk.findMany({
+    where: { bookSource, chapterNum },
+    orderBy: { chunkIndex: "asc" },
+  });
+  if (chunks.length === 0) return null;
+
+  const mergedPdf = await PDFDocument.create();
+  for (const chunk of chunks) {
+    try {
+      const chunkPdf = await PDFDocument.load(Buffer.from(chunk.data), { ignoreEncryption: true });
+      const pages = await mergedPdf.copyPages(chunkPdf, chunkPdf.getPageIndices());
+      pages.forEach((p) => mergedPdf.addPage(p));
+    } catch (err) {
+      console.warn(`Failed to merge chunk ${chunk.chunkIndex}:`, err instanceof Error ? err.message : err);
+    }
+  }
+
+  const totalPages = mergedPdf.getPageCount();
+  if (totalPages === 0) return null;
+
+  const mergedBytes = await mergedPdf.save();
+  const file = new File(
+    [Buffer.from(mergedBytes)],
+    `ch${chapterNum}_complete_${totalPages}pages.pdf`,
+    { type: "application/pdf" }
+  );
+  const uploaded = await client.beta.files.upload({ file });
+  return uploaded.id;
 }
 
 /**
@@ -1395,40 +1425,38 @@ Requirements:
 - Target length: 2000-4000 words
 - Do NOT wrap the output in code fences — return raw markdown only`;
 
-        // Build comprehensive metadata from ALL processed data (every page)
+        // Merge all chunks into ONE PDF so Claude sees every page, image, table
+        sendEvent({ status: "generating-guide", message: "Merging all PDF pages..." });
         const fullChapterData = await buildFullChapterContext(chapter.id, chapter.bookSource, chapter.number, chapter.title);
-
-        // Try sending ALL PDF files for complete visual coverage
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const guideContent: any[] = [];
-        for (const fid of fileIds) {
-          guideContent.push({
-            type: "document",
-            source: { type: "file", file_id: fid },
-          });
-        }
-        guideContent.push({
-          type: "text",
-          text: `You are an expert radiology educator. You can see ALL pages of this radiology textbook chapter above. Use EVERY detail you see — every image, diagram, table, and text — to create the most complete study guide possible.${crossRefBlock}\n\n${guidePrompt}`,
-        });
 
         let studyGuide = "";
 
         try {
+          const mergedFileId = await mergeAndUploadChapterPdf(client, chapter.bookSource, chapter.number);
+          if (!mergedFileId) throw new Error("Failed to merge PDF chunks");
+
+          sendEvent({ status: "generating-guide", message: "Claude is reading the complete chapter..." });
+
           const guideResponse = await callClaudeWithRetry(() =>
             client.beta.messages.create({
               model: "claude-sonnet-4-20250514",
               max_tokens: 16000,
               betas: ["files-api-2025-04-14"],
-              messages: [{ role: "user", content: guideContent }],
+              messages: [{
+                role: "user",
+                content: [
+                  { type: "document", source: { type: "file", file_id: mergedFileId } },
+                  { type: "text", text: `You are an expert radiology educator. You can see EVERY page of this radiology textbook chapter above — all images, diagrams, tables, and text. Use ALL of it to create the most complete study guide possible. Do not skip any topic or imaging finding.${crossRefBlock}\n\n${guidePrompt}` },
+                ],
+              }],
             })
           );
 
           studyGuide = (guideResponse.content[0] as { type: "text"; text: string }).text.trim();
         } catch (guideErr) {
-          // All-files approach failed — use complete processed data from every chunk
-          console.error("All-files study guide failed, using full processed data:", guideErr);
-          sendEvent({ status: "generating-guide", message: "Generating study guide from complete processed data..." });
+          // Merged PDF approach failed — use complete processed data from every chunk
+          console.error("Merged PDF study guide failed, using full processed data:", guideErr);
+          sendEvent({ status: "generating-guide", message: "Generating from complete processed data..." });
 
           const fallbackResponse = await callClaudeWithRetry(() =>
             client.messages.create({

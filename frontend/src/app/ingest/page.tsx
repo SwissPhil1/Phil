@@ -63,7 +63,25 @@ export default function IngestPage() {
   // Manual page-range input (fallback)
   const [manualMode, setManualMode] = useState(false);
 
+  // API key diagnostic
+  const [keyTest, setKeyTest] = useState<{ testing: boolean; result?: Record<string, unknown> }>({ testing: false });
+
   const PAGES_PER_CHUNK = 15; // Max pages sent to Claude per request
+
+  const testApiKey = useCallback(async () => {
+    setKeyTest({ testing: true });
+    try {
+      const res = await fetch("/api/ingest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "test-key" }),
+      });
+      const data = await res.json();
+      setKeyTest({ testing: false, result: data });
+    } catch (err) {
+      setKeyTest({ testing: false, result: { error: err instanceof Error ? err.message : "Request failed" } });
+    }
+  }, []);
 
   // ─── Step 1: Load PDF ─────────────────────────────────────────────────
   const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -334,6 +352,36 @@ export default function IngestPage() {
             </button>
           ))}
         </div>
+      </div>
+
+      {/* API Key Test */}
+      <div className="rounded-lg border bg-card p-6 space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="font-semibold text-sm">API Connection Test</h2>
+          <button
+            onClick={testApiKey}
+            disabled={keyTest.testing}
+            className="px-3 py-1.5 rounded-lg border text-xs font-medium hover:bg-accent disabled:opacity-50 flex items-center gap-1.5"
+          >
+            {keyTest.testing ? (
+              <>
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Testing...
+              </>
+            ) : (
+              "Test API Key"
+            )}
+          </button>
+        </div>
+        {keyTest.result && (
+          <pre className={`text-xs p-3 rounded-lg overflow-auto ${
+            keyTest.result.success
+              ? "bg-green-50 text-green-800 dark:bg-green-950/20 dark:text-green-300"
+              : "bg-red-50 text-red-800 dark:bg-red-950/20 dark:text-red-300"
+          }`}>
+            {JSON.stringify(keyTest.result, null, 2)}
+          </pre>
+        )}
       </div>
 
       {/* File upload */}

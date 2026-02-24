@@ -38,7 +38,9 @@ export async function POST(request: Request) {
     const body = await request.json();
     const { action } = body;
 
-    if (action === "detect-chapters") {
+    if (action === "test-key") {
+      return handleTestKey();
+    } else if (action === "detect-chapters") {
       return handleDetectChapters(body);
     } else if (action === "process-pdf") {
       return handleProcessPdf(body);
@@ -52,10 +54,58 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("Ingest error:", error);
+
+    // Extract detailed info from Anthropic API errors
+    const anthropicError = error as { status?: number; error?: { type?: string; message?: string } };
+    if (anthropicError.status && anthropicError.error) {
+      return NextResponse.json(
+        {
+          error: `Anthropic API error (${anthropicError.status}): ${anthropicError.error.message || "Unknown"}`,
+          errorType: anthropicError.error.type,
+          status: anthropicError.status,
+        },
+        { status: anthropicError.status }
+      );
+    }
+
     const message = error instanceof Error ? error.message : "Internal error";
     return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+/**
+ * Quick diagnostic: test that the API key works by sending a trivial message.
+ */
+async function handleTestKey() {
+  const keyPreview = process.env.ANTHROPIC_API_KEY
+    ? `${process.env.ANTHROPIC_API_KEY.slice(0, 10)}...${process.env.ANTHROPIC_API_KEY.slice(-4)} (${process.env.ANTHROPIC_API_KEY.length} chars)`
+    : "NOT SET";
+
+  try {
+    const client = getClient();
+    const response = await client.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 20,
+      messages: [{ role: "user", content: "Reply with just the word: OK" }],
+    });
+    const text = (response.content[0] as { type: "text"; text: string }).text;
+    return NextResponse.json({
+      success: true,
+      keyPreview,
+      model: response.model,
+      reply: text,
+    });
+  } catch (error: unknown) {
+    const apiErr = error as { status?: number; error?: { type?: string; message?: string }; message?: string };
+    return NextResponse.json({
+      success: false,
+      keyPreview,
+      errorStatus: apiErr.status,
+      errorType: apiErr.error?.type,
+      errorMessage: apiErr.error?.message || apiErr.message || String(error),
+    });
   }
 }
 

@@ -39,19 +39,32 @@ function getClient(): Anthropic {
  * Retries on transient errors: 429 (rate limit), 529 (overloaded), 500+ (server errors).
  * Uses exponential backoff: 5s, 10s, 20s.
  */
+/** Race a promise against a timeout. */
+function withTimeout<T>(promise: Promise<T>, ms: number, label = "operation"): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms);
+    promise.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); },
+    );
+  });
+}
+
 async function callClaudeWithRetry<T>(
   fn: () => Promise<T>,
-  maxRetries = 3
+  maxRetries = 3,
+  timeoutMs = 180_000 // 3 minute timeout per call
 ): Promise<T> {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      return await fn();
+      return await withTimeout(fn(), timeoutMs, "Claude API call");
     } catch (err: unknown) {
-      const apiErr = err as { status?: number };
-      const isRetryable = apiErr.status === 429 || apiErr.status === 529 || (apiErr.status && apiErr.status >= 500);
+      const apiErr = err as { status?: number; message?: string };
+      const isTimeout = apiErr.message?.includes("timed out");
+      const isRetryable = isTimeout || apiErr.status === 429 || apiErr.status === 529 || (apiErr.status && apiErr.status >= 500);
       if (!isRetryable || attempt === maxRetries) throw err;
       const delay = Math.pow(2, attempt) * 5000; // 5s, 10s, 20s
-      console.warn(`Claude API returned ${apiErr.status}, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})...`);
+      console.warn(`Claude API ${isTimeout ? "timed out" : `returned ${apiErr.status}`}, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})...`);
       await new Promise((r) => setTimeout(r, delay));
     }
   }
@@ -1560,13 +1573,27 @@ async function handleGenerateContent(body: { chapterId: number }) {
 
         sendEvent({ status: "uploading", message: `${fileIds.length} chunks uploaded to Claude.` });
 
-        // ── Step 2: Process each chunk for Q/F/summary ────────────────
-        const numChunks = fileIds.length;
+        // ── Step 2: Process chunks in batches for Q/F/summary ────────────────
+        // Group file IDs into batches of 5 to reduce total API calls
+        // (e.g. 45 chunks → 9 batches instead of 45 individual calls)
+        const BATCH_SIZE = 5;
+        const batches: string[][] = [];
+        for (let i = 0; i < fileIds.length; i += BATCH_SIZE) {
+          batches.push(fileIds.slice(i, i + BATCH_SIZE));
+        }
 
-        for (let i = 0; i < numChunks; i++) {
-          sendEvent({ status: "processing", chunk: i + 1, total: numChunks });
+        for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
+          const batch = batches[batchIdx];
+          sendEvent({ status: "processing", chunk: batchIdx + 1, total: batches.length });
 
-          const isAppend = i > 0;
+          const isAppend = batchIdx > 0;
+
+          // Build content array: attach all file IDs in this batch as documents
+          const contentParts: Array<{ type: "document"; source: { type: "file"; file_id: string } } | { type: "text"; text: string }> = [];
+          for (const fid of batch) {
+            contentParts.push({ type: "document", source: { type: "file", file_id: fid } });
+          }
+
           const promptText = isAppend
             ? `You are an expert radiology educator helping a resident prepare for the Swiss FMH2 radiology specialty exam.
 
@@ -1650,42 +1677,45 @@ Requirements:
 - Focus on diagnostic imaging findings, differential diagnoses, and classic signs
 - Return ONLY valid JSON, no markdown fences`;
 
-          const response = await callClaudeWithRetry(() =>
-            client.beta.messages.create({
-              model: "claude-sonnet-4-20250514",
-              max_tokens: 8000,
-              betas: ["files-api-2025-04-14"],
-              messages: [{
-                role: "user",
-                content: [
-                  { type: "document", source: { type: "file", file_id: fileIds[i] } },
-                  { type: "text", text: promptText },
-                ],
-              }],
-            })
-          );
+          contentParts.push({ type: "text", text: promptText });
 
-          let responseText = (response.content[0] as { type: "text"; text: string }).text.trim();
-          if (responseText.startsWith("```")) {
-            responseText = responseText.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
-          }
-
-          let content: StudyContent;
           try {
-            content = JSON.parse(responseText);
-          } catch {
-            sendEvent({ status: "warning", message: `Chunk ${i + 1}/${numChunks}: Failed to parse JSON, skipping` });
-            continue;
+            const response = await callClaudeWithRetry(() =>
+              client.beta.messages.create({
+                model: "claude-sonnet-4-20250514",
+                max_tokens: 16000,
+                betas: ["files-api-2025-04-14"],
+                messages: [{ role: "user", content: contentParts }],
+              })
+            );
+
+            let responseText = (response.content[0] as { type: "text"; text: string }).text.trim();
+            if (responseText.startsWith("```")) {
+              responseText = responseText.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
+            }
+
+            let content: StudyContent;
+            try {
+              content = JSON.parse(responseText);
+            } catch {
+              sendEvent({ status: "warning", message: `Batch ${batchIdx + 1}/${batches.length}: Failed to parse JSON, skipping` });
+              continue;
+            }
+
+            if (isAppend) {
+              await appendContentToDB(content, chapter.number, chapter.bookSource);
+            } else {
+              await saveContentToDB(content, chapter.title, chapter.number, chapter.bookSource);
+            }
+          } catch (err) {
+            sendEvent({
+              status: "warning",
+              message: `Batch ${batchIdx + 1}/${batches.length} failed: ${err instanceof Error ? err.message : String(err)}. Skipping.`,
+            });
           }
 
-          if (isAppend) {
-            await appendContentToDB(content, chapter.number, chapter.bookSource);
-          } else {
-            await saveContentToDB(content, chapter.title, chapter.number, chapter.bookSource);
-          }
-
-          // Brief delay between chunks to avoid rate limits
-          if (i < numChunks - 1) {
+          // Brief delay between batches to avoid rate limits
+          if (batchIdx < batches.length - 1) {
             await new Promise((r) => setTimeout(r, 2000));
           }
         }

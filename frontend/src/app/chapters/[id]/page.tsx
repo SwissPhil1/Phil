@@ -13,8 +13,11 @@ import {
   Lightbulb,
   MapPin,
   ArrowLeft,
+  GraduationCap,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 interface ChapterDetail {
   id: number;
@@ -26,6 +29,7 @@ interface ChapterDetail {
   highYield: string | null;
   mnemonics: string | null;
   memoryPalace: string | null;
+  studyGuide: string | null;
   questions: Array<{
     id: number;
     questionText: string;
@@ -43,7 +47,7 @@ export default function ChapterDetailPage() {
   const params = useParams();
   const [chapter, setChapter] = useState<ChapterDetail | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState("summary");
+  const [activeTab, setActiveTab] = useState("guide");
 
   useEffect(() => {
     if (params.id) {
@@ -88,6 +92,7 @@ export default function ChapterDetailPage() {
     : [];
 
   const tabs = [
+    { key: "guide", label: "Study Guide", icon: GraduationCap },
     { key: "summary", label: "Summary", icon: BookOpen },
     { key: "keypoints", label: "Key Points", icon: Star },
     { key: "highyield", label: "High Yield", icon: Lightbulb },
@@ -159,6 +164,34 @@ export default function ChapterDetailPage() {
 
       {/* Tab Content */}
       <div className="min-h-[300px]">
+        {activeTab === "guide" && (
+          <Card>
+            <CardContent className="p-6 md:p-8">
+              {chapter.studyGuide ? (
+                <article className="prose prose-sm sm:prose-base max-w-none dark:prose-invert prose-headings:text-foreground prose-p:text-foreground/90 prose-strong:text-foreground prose-li:text-foreground/90 prose-blockquote:border-primary/40 prose-blockquote:text-primary/80 prose-blockquote:bg-primary/5 prose-blockquote:rounded-r-lg prose-blockquote:py-1 prose-blockquote:px-4 prose-th:text-foreground prose-td:text-foreground/80 prose-table:text-sm">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {chapter.studyGuide}
+                  </ReactMarkdown>
+                </article>
+              ) : (
+                <div className="text-center py-12 space-y-3">
+                  <GraduationCap className="h-12 w-12 mx-auto text-muted-foreground/40" />
+                  <p className="text-muted-foreground">
+                    Study guide not yet generated.
+                  </p>
+                  <p className="text-sm text-muted-foreground/70">
+                    Re-process this chapter from the{" "}
+                    <Link href="/ingest" className="text-primary hover:underline">
+                      Ingest page
+                    </Link>{" "}
+                    to generate a comprehensive study guide.
+                  </p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
         {activeTab === "summary" && (
           <Card>
             <CardContent className="p-6 prose prose-sm max-w-none">

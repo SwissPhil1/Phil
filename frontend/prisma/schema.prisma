@@ -18,6 +18,7 @@ model Chapter {
   highYield  String?  // JSON array of high-yield facts
   mnemonics  String?  // JSON array of mnemonics
   memoryPalace String?
+  studyGuide String?  // Rich markdown study guide (generated per-chapter)
   mindMap    String?  // JSON for mind map nodes/edges
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt

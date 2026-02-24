@@ -57,6 +57,20 @@ async function callClaudeWithRetry<T>(
   throw new Error("callClaudeWithRetry: unreachable");
 }
 
+/**
+ * Extract a useful error message from an Anthropic SDK error.
+ * The SDK puts the message in different places depending on the error type.
+ */
+function getAnthropicErrorMessage(err: unknown): string | null {
+  if (!err) return null;
+  const e = err as { status?: number; message?: string; error?: { type?: string; message?: string } };
+  const detail = e.error?.message || e.message || null;
+  if (e.status && detail) {
+    return `Anthropic API error (${e.status}): ${detail}`;
+  }
+  return detail;
+}
+
 export async function POST(request: Request) {
   try {
     const body = await request.json();
@@ -435,16 +449,9 @@ Requirements:
 
         sendEvent(result);
       } catch (err: unknown) {
-        // Surface Anthropic-specific errors clearly
-        const anthropicError = err as { status?: number; error?: { type?: string; message?: string } };
-        if (anthropicError.status && anthropicError.error) {
-          sendEvent({
-            error: `Anthropic API error (${anthropicError.status}): ${anthropicError.error.message || "Unknown"}`,
-            errorType: anthropicError.error.type,
-          });
-        } else {
-          sendEvent({ error: err instanceof Error ? err.message : "Processing failed" });
-        }
+        console.error("Process PDF error:", err);
+        const errMsg = getAnthropicErrorMessage(err) || (err instanceof Error ? err.message : "Processing failed");
+        sendEvent({ error: errMsg });
       } finally {
         clearInterval(heartbeat);
         controller.close();
@@ -945,14 +952,55 @@ ${mn.length > 0 ? mn.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(no
           })),
         });
       } catch (err: unknown) {
-        const anthropicError = err as { status?: number; error?: { type?: string; message?: string } };
-        if (anthropicError.status && anthropicError.error) {
-          sendEvent({
-            error: `Anthropic API error (${anthropicError.status}): ${anthropicError.error.message || "Unknown"}`,
-          });
-        } else {
-          sendEvent({ error: err instanceof Error ? err.message : "Study guide generation failed" });
+        console.error("Study guide generation error:", err);
+        const errMsg = getAnthropicErrorMessage(err) || "Study guide generation failed";
+
+        // Fallback: if file-based generation failed, try metadata-based
+        if (hasFileIds) {
+          console.log("File-based study guide failed, falling back to metadata-based generation...");
+          try {
+            const freshChapter = await prisma.chapter.findUnique({ where: { id: chapter.id } });
+            if (freshChapter && (freshChapter.summary || freshChapter.keyPoints)) {
+              const metaContext = formatChapterContext(freshChapter);
+              const contextBlock = `## Source Material\n\n${metaContext}${crossRefBlock}`;
+              const fallbackMessages = [{
+                role: "user" as const,
+                content: `You are an expert radiology educator. Below is the accumulated study data for a topic. Synthesize ALL sources into a comprehensive, unified study guide.\n\n${contextBlock}\n\n---\n\n${studyGuideInstructions}`,
+              }];
+
+              const fallbackResponse = await callClaudeWithRetry(() =>
+                client.messages.create({
+                  model: "claude-sonnet-4-20250514",
+                  max_tokens: 12000,
+                  messages: fallbackMessages,
+                })
+              );
+
+              let studyGuide = (fallbackResponse.content[0] as { type: "text"; text: string }).text.trim();
+              if (studyGuide.startsWith("```")) {
+                studyGuide = studyGuide.replace(/^```(?:markdown|md)?\n?/, "").replace(/\n?```$/, "");
+              }
+
+              await prisma.chapter.update({
+                where: { id: chapter.id },
+                data: { studyGuide },
+              });
+
+              sendEvent({
+                success: true,
+                chapterId: chapter.id,
+                studyGuideLength: studyGuide.length,
+                mode: "metadata-fallback",
+                sources: uniqueSources,
+              });
+              return;
+            }
+          } catch (fallbackErr) {
+            console.error("Metadata fallback also failed:", fallbackErr);
+          }
         }
+
+        sendEvent({ error: errMsg });
       } finally {
         clearInterval(heartbeat);
         controller.close();
@@ -1293,10 +1341,12 @@ Requirements:
 - Target length: 2000-4000 words
 - Do NOT wrap the output in code fences — return raw markdown only`;
 
-        // Build messages with all file IDs for full chapter context
+        // Build messages with file IDs for full chapter context
+        // Limit to first 5 file IDs to avoid exceeding API limits for large chapters
+        const guideFileIds = fileIds.slice(0, 5);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const guideContent: any[] = [];
-        for (const fid of fileIds) {
+        for (const fid of guideFileIds) {
           guideContent.push({
             type: "document",
             source: { type: "file", file_id: fid },
@@ -1307,16 +1357,55 @@ Requirements:
           text: `You are an expert radiology educator. You can see the actual pages of this radiology textbook chapter above.${crossRefBlock}\n\n${guidePrompt}`,
         });
 
-        const guideResponse = await callClaudeWithRetry(() =>
-          client.beta.messages.create({
-            model: "claude-sonnet-4-20250514",
-            max_tokens: 16000,
-            betas: ["files-api-2025-04-14"],
-            messages: [{ role: "user", content: guideContent }],
-          })
-        );
+        let studyGuide = "";
 
-        let studyGuide = (guideResponse.content[0] as { type: "text"; text: string }).text.trim();
+        try {
+          const guideResponse = await callClaudeWithRetry(() =>
+            client.beta.messages.create({
+              model: "claude-sonnet-4-20250514",
+              max_tokens: 16000,
+              betas: ["files-api-2025-04-14"],
+              messages: [{ role: "user", content: guideContent }],
+            })
+          );
+
+          studyGuide = (guideResponse.content[0] as { type: "text"; text: string }).text.trim();
+        } catch (guideErr) {
+          // File-based study guide failed — fall back to metadata-based
+          console.error("File-based study guide failed, using metadata fallback:", guideErr);
+          sendEvent({ status: "generating-guide", message: "Retrying study guide from processed data..." });
+
+          const freshChapter = await prisma.chapter.findUnique({ where: { id: chapter.id } });
+          const kp: string[] = JSON.parse(freshChapter?.keyPoints || "[]");
+          const hy: string[] = JSON.parse(freshChapter?.highYield || "[]");
+          const mn: Array<{ name: string; content: string }> = JSON.parse(freshChapter?.mnemonics || "[]");
+          const metaContext = `## Source: ${chapter.bookSource === "core_radiology" ? "Core Radiology" : "Crack the Core"} — Chapter ${chapter.number}: ${chapter.title}
+
+**Summary:** ${freshChapter?.summary || "(not available)"}
+
+**Key Points:**
+${kp.length > 0 ? kp.map((p) => `- ${p}`).join("\n") : "(none)"}
+
+**High-Yield Facts:**
+${hy.length > 0 ? hy.map((h) => `- ${h}`).join("\n") : "(none)"}
+
+**Mnemonics:**
+${mn.length > 0 ? mn.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(none)"}`;
+
+          const fallbackResponse = await callClaudeWithRetry(() =>
+            client.messages.create({
+              model: "claude-sonnet-4-20250514",
+              max_tokens: 12000,
+              messages: [{
+                role: "user",
+                content: `You are an expert radiology educator. Below is the accumulated study data for a topic. Synthesize it into a comprehensive study guide.\n\n${metaContext}${crossRefBlock}\n\n---\n\n${guidePrompt}`,
+              }],
+            })
+          );
+
+          studyGuide = (fallbackResponse.content[0] as { type: "text"; text: string }).text.trim();
+        }
+
         if (studyGuide.startsWith("```")) {
           studyGuide = studyGuide.replace(/^```(?:markdown|md)?\n?/, "").replace(/\n?```$/, "");
         }
@@ -1339,14 +1428,9 @@ Requirements:
           sources: uniqueSources,
         });
       } catch (err: unknown) {
-        const anthropicError = err as { status?: number; error?: { type?: string; message?: string } };
-        if (anthropicError.status && anthropicError.error) {
-          sendEvent({
-            error: `Anthropic API error (${anthropicError.status}): ${anthropicError.error.message || "Unknown"}`,
-          });
-        } else {
-          sendEvent({ error: err instanceof Error ? err.message : "Content generation failed" });
-        }
+        console.error("Content generation error:", err);
+        const errMsg = getAnthropicErrorMessage(err) || "Content generation failed";
+        sendEvent({ error: errMsg });
       } finally {
         clearInterval(heartbeat);
         controller.close();

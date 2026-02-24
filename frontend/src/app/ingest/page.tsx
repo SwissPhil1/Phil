@@ -172,7 +172,7 @@ export default function IngestPage() {
   }, [totalPages]);
 
   // ─── Step 3: Process a Single Chapter ──────────────────────────────────
-  // Extracts chapter pages on the client (in chunks of ≤100 pages),
+  // Extracts chapter pages on the client (in chunks of ≤30 pages),
   // uploads each chunk to the server → Files API, then processes via Claude.
   const processChapter = useCallback(
     async (chapter: DetectedChapter) => {
@@ -194,27 +194,58 @@ export default function IngestPage() {
           const pagesToCopy = chunkEnd - chunkStart;
 
           // Extract this chunk's pages on the client (lightweight pdf-lib copy)
-          setStatuses((prev) => ({ ...prev, [chapter.number]: { state: "uploading" } }));
+          setStatuses((prev) => ({
+            ...prev,
+            [chapter.number]: { state: "uploading" },
+          }));
 
-          const chunkPdf = await PDFDocument.create();
-          const indices = Array.from({ length: pagesToCopy }, (_, j) => chunkStart + j);
-          const pages = await chunkPdf.copyPages(pdfDocRef.current, indices);
-          pages.forEach((p) => chunkPdf.addPage(p));
-          const chunkBytes = await chunkPdf.save();
-          const chunkBlob = new Blob([chunkBytes.slice(0)], { type: "application/pdf" });
+          let chunkBlob: Blob;
+          try {
+            const chunkPdf = await PDFDocument.create();
+            const indices = Array.from({ length: pagesToCopy }, (_, j) => chunkStart + j);
+            const pages = await chunkPdf.copyPages(pdfDocRef.current, indices);
+            pages.forEach((p) => chunkPdf.addPage(p));
+            const chunkBytes = await chunkPdf.save();
+            chunkBlob = new Blob([chunkBytes.slice(0)], { type: "application/pdf" });
+          } catch (extractErr) {
+            throw new Error(
+              `PDF extract failed (pages ${chunkStart + 1}–${chunkEnd}): ${extractErr instanceof Error ? extractErr.message : String(extractErr)}`
+            );
+          }
+
+          const sizeMB = (chunkBlob.size / 1024 / 1024).toFixed(1);
 
           // Upload small chunk to server → Files API
           const formData = new FormData();
           formData.append("pdf", chunkBlob, `ch${chapter.number}_chunk${i + 1}.pdf`);
           formData.append("filename", `ch${chapter.number}_chunk${i + 1}.pdf`);
 
-          const uploadRes = await fetch("/api/upload-pdf", { method: "POST", body: formData });
-          const uploadData = await uploadRes.json();
+          let uploadRes: Response;
+          try {
+            uploadRes = await fetch("/api/upload-pdf", { method: "POST", body: formData });
+          } catch (fetchErr) {
+            throw new Error(
+              `Upload fetch failed (${sizeMB} MB, ${pagesToCopy}p): ${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}`
+            );
+          }
+
+          let uploadData: Record<string, unknown>;
+          try {
+            uploadData = await uploadRes.json();
+          } catch {
+            const text = await uploadRes.text().catch(() => "unreadable");
+            throw new Error(
+              `Upload response not JSON (status ${uploadRes.status}, ${sizeMB} MB): ${text.slice(0, 120)}`
+            );
+          }
 
           if (uploadData.error) {
             setStatuses((prev) => ({
               ...prev,
-              [chapter.number]: { state: "error", message: `Upload failed: ${uploadData.error}` },
+              [chapter.number]: {
+                state: "error",
+                message: `Upload failed (${sizeMB} MB): ${uploadData.error}`,
+              },
             }));
             return;
           }
@@ -226,20 +257,36 @@ export default function IngestPage() {
           }));
 
           const isAppend = i > 0;
-          const res = await fetch("/api/ingest", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              action: "process-pdf",
-              fileId: uploadData.fileId,
-              chapterTitle: chapter.title,
-              chapterNumber: chapter.number,
-              bookSource,
-              appendMode: isAppend,
-            }),
-          });
+          let res: Response;
+          try {
+            res = await fetch("/api/ingest", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                action: "process-pdf",
+                fileId: uploadData.fileId,
+                chapterTitle: chapter.title,
+                chapterNumber: chapter.number,
+                bookSource,
+                appendMode: isAppend,
+              }),
+            });
+          } catch (ingestFetchErr) {
+            throw new Error(
+              `Ingest fetch failed (chunk ${i + 1}/${numChunks}): ${ingestFetchErr instanceof Error ? ingestFetchErr.message : String(ingestFetchErr)}`
+            );
+          }
 
-          const data = await res.json();
+          let data: Record<string, unknown>;
+          try {
+            data = await res.json();
+          } catch {
+            const text = await res.text().catch(() => "unreadable");
+            throw new Error(
+              `Ingest response not JSON (status ${res.status}): ${text.slice(0, 120)}`
+            );
+          }
+
           if (data.error) {
             setStatuses((prev) => ({
               ...prev,
@@ -247,7 +294,7 @@ export default function IngestPage() {
                 state: "error",
                 message: numChunks > 1
                   ? `Chunk ${i + 1}/${numChunks}: ${data.error}`
-                  : data.error,
+                  : String(data.error),
               },
             }));
             return;
@@ -257,7 +304,7 @@ export default function IngestPage() {
           if (i === numChunks - 1) {
             setStatuses((prev) => ({
               ...prev,
-              [chapter.number]: { state: "done", result: data },
+              [chapter.number]: { state: "done", result: data as unknown as ProcessResult },
             }));
           }
 

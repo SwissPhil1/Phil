@@ -312,13 +312,23 @@ export async function POST(request: Request) {
       return handleGenerateStudyGuide(body);
     } else if (action === "store-chapter") {
       return handleStoreChapter(body);
+    } else if (action === "delete-chunks") {
+      // Delete all PDF chunks for a given bookSource + chapterNum (cleanup before re-storing)
+      const { bookSource: bs, chapterNum: cn } = body;
+      if (!bs || cn === undefined) {
+        return NextResponse.json({ error: "Missing bookSource or chapterNum" }, { status: 400 });
+      }
+      const deleted = await prisma.pdfChunk.deleteMany({
+        where: { bookSource: bs, chapterNum: cn },
+      });
+      return NextResponse.json({ success: true, deleted: deleted.count });
     } else if (action === "generate-content") {
       return handleGenerateContent(body);
     } else if (action === "seed") {
       return handleSeed();
     } else {
       return NextResponse.json(
-        { error: "Invalid action. Use 'detect-chapters', 'process-pdf', 'process', 'generate-study-guide', 'store-chapter', 'generate-content', or 'seed'." },
+        { error: "Invalid action. Use 'detect-chapters', 'process-pdf', 'process', 'generate-study-guide', 'store-chapter', 'delete-chunks', 'generate-content', or 'seed'." },
         { status: 400 }
       );
     }
@@ -415,7 +425,7 @@ async function handleDetectChapters(body: {
     );
   }
 
-  const promptText = `This is the beginning of a radiology textbook (total ${totalPages} pages).
+  const promptText = `This is the beginning of a radiology textbook PDF file (total ${totalPages} pages in the PDF file).
 Analyze the table of contents or chapter headings visible in these pages.
 
 Return a JSON array of chapters with this exact format:
@@ -424,11 +434,17 @@ Return a JSON array of chapters with this exact format:
   { "number": 2, "title": "Next Chapter", "startPage": 31, "endPage": 58 }
 ]
 
-Rules:
-- Use the actual page numbers shown in the document
-- If you can see a table of contents, use it to determine page ranges
-- If no clear chapter structure is visible, divide the ${totalPages} pages into logical sections of ~30-50 pages each
-- Return ONLY valid JSON, no markdown fences or explanation`;
+CRITICAL — Page numbering rules:
+- "startPage" and "endPage" must be PHYSICAL PDF page positions, counting from the very first page of this PDF file as page 1.
+- Do NOT use the printed/typeset page numbers shown in the headers, footers, or table of contents of the book. Those are DIFFERENT from the physical PDF page positions.
+- Most textbooks have front matter (cover, preface, table of contents, etc.) before Chapter 1 starts. So if the ToC says "Chapter 1 starts on page 1" but there are 12 pages of front matter, then the PHYSICAL PDF startPage for Chapter 1 would be 13 (not 1).
+- To figure out the correct mapping: look at what physical PDF page you are currently viewing, and what printed page number is shown on it. The difference tells you the offset.
+- Example: If you can see that the 14th physical page of this PDF shows printed page number "2", then the offset is 12 (printed + 12 = physical PDF page). Apply this offset to ALL page numbers from the table of contents.
+- Each chapter's endPage should be the last page BEFORE the next chapter starts (i.e. next chapter's startPage minus 1).
+- The last chapter's endPage should be ${totalPages} (the total page count of the PDF).
+- Your page numbers must cover the ENTIRE PDF from page 1 to ${totalPages} without gaps or overlaps.
+- If no clear chapter structure is visible, divide the ${totalPages} pages into logical sections of ~30-50 pages each.
+- Return ONLY valid JSON, no markdown fences or explanation.`;
 
   const response = fileId
     ? await callClaudeWithRetry(() =>

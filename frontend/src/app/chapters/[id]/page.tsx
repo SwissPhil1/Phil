@@ -14,8 +14,10 @@ import {
   MapPin,
   ArrowLeft,
   GraduationCap,
+  Loader2,
+  RefreshCw,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -48,6 +50,8 @@ export default function ChapterDetailPage() {
   const [chapter, setChapter] = useState<ChapterDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("guide");
+  const [generatingGuide, setGeneratingGuide] = useState(false);
+  const [guideError, setGuideError] = useState<string | null>(null);
 
   useEffect(() => {
     if (params.id) {
@@ -58,6 +62,59 @@ export default function ChapterDetailPage() {
         .finally(() => setLoading(false));
     }
   }, [params.id]);
+
+  const generateStudyGuide = useCallback(async () => {
+    if (!chapter) return;
+    setGeneratingGuide(true);
+    setGuideError(null);
+
+    try {
+      const res = await fetch("/api/ingest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "generate-study-guide",
+          chapterId: chapter.id,
+        }),
+      });
+
+      // Parse SSE stream
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("No response stream");
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let result: { success?: boolean; error?: string } | null = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try {
+              result = JSON.parse(line.slice(6));
+            } catch { /* partial */ }
+          }
+        }
+      }
+
+      if (result?.error) {
+        setGuideError(result.error);
+      } else {
+        // Refresh chapter data to get the new study guide
+        const refreshRes = await fetch(`/api/chapters/${chapter.id}`);
+        const refreshed = await refreshRes.json();
+        setChapter(refreshed);
+      }
+    } catch (err) {
+      setGuideError(err instanceof Error ? err.message : "Generation failed");
+    } finally {
+      setGeneratingGuide(false);
+    }
+  }, [chapter]);
 
   if (loading) {
     return (
@@ -167,25 +224,55 @@ export default function ChapterDetailPage() {
         {activeTab === "guide" && (
           <Card>
             <CardContent className="p-6 md:p-8">
-              {chapter.studyGuide ? (
-                <article className="prose prose-sm sm:prose-base max-w-none dark:prose-invert prose-headings:text-foreground prose-p:text-foreground/90 prose-strong:text-foreground prose-li:text-foreground/90 prose-blockquote:border-primary/40 prose-blockquote:text-primary/80 prose-blockquote:bg-primary/5 prose-blockquote:rounded-r-lg prose-blockquote:py-1 prose-blockquote:px-4 prose-th:text-foreground prose-td:text-foreground/80 prose-table:text-sm">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {chapter.studyGuide}
-                  </ReactMarkdown>
-                </article>
-              ) : (
+              {generatingGuide ? (
                 <div className="text-center py-12 space-y-3">
-                  <GraduationCap className="h-12 w-12 mx-auto text-muted-foreground/40" />
-                  <p className="text-muted-foreground">
-                    Study guide not yet generated.
+                  <Loader2 className="h-10 w-10 mx-auto text-primary animate-spin" />
+                  <p className="text-muted-foreground font-medium">
+                    Generating study guide...
                   </p>
                   <p className="text-sm text-muted-foreground/70">
-                    Re-process this chapter from the{" "}
-                    <Link href="/ingest" className="text-primary hover:underline">
-                      Ingest page
-                    </Link>{" "}
-                    to generate a comprehensive study guide.
+                    Claude is synthesizing your chapter data into a comprehensive study guide. This takes about 30-60 seconds.
                   </p>
+                </div>
+              ) : chapter.studyGuide ? (
+                <>
+                  <div className="flex justify-end mb-4">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="gap-1.5 text-muted-foreground hover:text-foreground"
+                      onClick={generateStudyGuide}
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" />
+                      Regenerate
+                    </Button>
+                  </div>
+                  <article className="prose prose-sm sm:prose-base max-w-none dark:prose-invert prose-headings:text-foreground prose-p:text-foreground/90 prose-strong:text-foreground prose-li:text-foreground/90 prose-blockquote:border-primary/40 prose-blockquote:text-primary/80 prose-blockquote:bg-primary/5 prose-blockquote:rounded-r-lg prose-blockquote:py-1 prose-blockquote:px-4 prose-th:text-foreground prose-td:text-foreground/80 prose-table:text-sm">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {chapter.studyGuide}
+                    </ReactMarkdown>
+                  </article>
+                </>
+              ) : (
+                <div className="text-center py-12 space-y-4">
+                  <GraduationCap className="h-12 w-12 mx-auto text-muted-foreground/40" />
+                  <div className="space-y-1">
+                    <p className="text-muted-foreground font-medium">
+                      No study guide yet
+                    </p>
+                    <p className="text-sm text-muted-foreground/70 max-w-md mx-auto">
+                      Generate a comprehensive, exam-focused study guide from this chapter&apos;s
+                      ingested content — with core concepts, imaging findings, mnemonics, differential
+                      diagnosis tables, and active recall prompts.
+                    </p>
+                  </div>
+                  {guideError && (
+                    <p className="text-sm text-destructive">{guideError}</p>
+                  )}
+                  <Button onClick={generateStudyGuide} className="gap-2">
+                    <GraduationCap className="h-4 w-4" />
+                    Generate Study Guide
+                  </Button>
                 </div>
               )}
             </CardContent>

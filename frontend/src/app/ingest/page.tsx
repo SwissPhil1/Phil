@@ -28,6 +28,7 @@ type ChapterStatus =
   | { state: "pending" }
   | { state: "uploading" }
   | { state: "processing"; chunk?: number; totalChunks?: number }
+  | { state: "generating-guide"; result: ProcessResult }
   | { state: "done"; result: ProcessResult }
   | { state: "error"; message: string; failedChunk?: number; totalChunks?: number };
 
@@ -396,11 +397,56 @@ export default function IngestPage() {
             return;
           }
 
-          // Final chunk → mark done
+          // Final chunk → generate study guide, then mark done
           if (i === numChunks - 1) {
+            const result = data as unknown as ProcessResult;
+
+            // Generate the study guide as a separate call
             setStatuses((prev) => ({
               ...prev,
-              [chapter.number]: { state: "done", result: data as unknown as ProcessResult },
+              [chapter.number]: { state: "generating-guide", result },
+            }));
+
+            try {
+              const guideRes = await fetchWithRetry("/api/ingest", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  action: "generate-study-guide",
+                  chapterId: result.chapterId,
+                }),
+              }, 2);
+
+              // Parse SSE response (same format as process-pdf)
+              const guideReader = guideRes.body?.getReader();
+              if (guideReader) {
+                const decoder = new TextDecoder();
+                let guideBuffer = "";
+                let guideDone = false;
+                while (!guideDone) {
+                  const { done: rDone, value } = await guideReader.read();
+                  if (rDone) break;
+                  guideBuffer += decoder.decode(value, { stream: true });
+                  const lines = guideBuffer.split("\n");
+                  guideBuffer = lines.pop() || "";
+                  for (const line of lines) {
+                    if (line.startsWith("data: ")) {
+                      try {
+                        const guideData = JSON.parse(line.slice(6));
+                        if (guideData.success || guideData.error) guideDone = true;
+                      } catch { /* partial JSON, ignore */ }
+                    }
+                  }
+                }
+              }
+            } catch {
+              // Study guide generation failed — still mark as done (Q/F succeeded)
+              console.warn("Study guide generation failed for chapter", chapter.number);
+            }
+
+            setStatuses((prev) => ({
+              ...prev,
+              [chapter.number]: { state: "done", result },
             }));
           }
 
@@ -679,7 +725,7 @@ export default function IngestPage() {
               const pageCount = ch.endPage - ch.startPage + 1;
               const isDone = status?.state === "done";
               const isError = status?.state === "error";
-              const isActive = status?.state === "processing" || status?.state === "uploading";
+              const isActive = status?.state === "processing" || status?.state === "uploading" || status?.state === "generating-guide";
 
               return (
                 <div
@@ -722,6 +768,12 @@ export default function IngestPage() {
                       {status.totalChunks && status.totalChunks > 1
                         ? `Chunk ${status.chunk}/${status.totalChunks}...`
                         : "Claude analyzing..."}
+                    </span>
+                  )}
+                  {status?.state === "generating-guide" && (
+                    <span className="flex items-center gap-1 text-sm text-purple-600">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Generating study guide...
                     </span>
                   )}
                   {isDone && (

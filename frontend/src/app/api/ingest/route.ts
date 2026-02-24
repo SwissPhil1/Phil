@@ -5,8 +5,8 @@ import { NextResponse } from "next/server";
 // Force this route to be dynamic — never pre-render at build time
 export const dynamic = "force-dynamic";
 
-// Allow up to 120s for Claude to process PDF pages (Vercel Pro default: 60s)
-export const maxDuration = 120;
+// Allow up to 300s for Claude to process PDF pages (requires Vercel Pro plan)
+export const maxDuration = 300;
 
 interface StudyContent {
   summary: string;
@@ -204,10 +204,12 @@ Rules:
 }
 
 /**
- * Process a PDF chunk: send actual PDF pages to Claude for analysis.
- * Supports two modes:
- *   1. file_id mode (new): reference a file already uploaded to Anthropic Files API
- *   2. pdfBase64 mode (legacy): send base64-encoded PDF inline
+ * Process a PDF chunk: send pages to Claude for analysis, save results.
+ *
+ * Uses SSE (Server-Sent Events) streaming to keep the HTTP connection alive
+ * during the long-running Claude API call.  Heartbeat comments are sent every
+ * 8 seconds so that proxies / gateways / Safari don't close the connection.
+ * The final result (or error) is sent as a single `data:` event.
  */
 async function handleProcessPdf(body: {
   fileId?: string;
@@ -219,6 +221,7 @@ async function handleProcessPdf(body: {
 }) {
   const { fileId, pdfBase64, chapterTitle, chapterNumber, bookSource, appendMode } = body;
 
+  // Quick validation — return normal JSON errors (fast, no streaming needed)
   if (!chapterTitle || !chapterNumber || !bookSource) {
     return NextResponse.json(
       { error: "Missing required fields: chapterTitle, chapterNumber, bookSource" },
@@ -242,6 +245,7 @@ async function handleProcessPdf(body: {
     );
   }
 
+  // ── Build prompts ──────────────────────────────────────────────────────
   const fullPrompt = `You are an expert radiology educator helping a resident prepare for the Swiss FMH2 radiology specialty exam.
 
 You are looking at actual pages from a radiology textbook — Chapter ${chapterNumber}: "${chapterTitle}".
@@ -325,52 +329,97 @@ Requirements:
 - Questions should mimic RadPrimer / FMH2 exam style
 - Return ONLY valid JSON, no markdown fences`;
 
-  // Use beta API when referencing uploaded files, standard API for base64
   const promptText = appendMode ? appendPrompt : fullPrompt;
-  const response = fileId
-    ? await client.beta.messages.create({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 8000,
-        betas: ["files-api-2025-04-14"],
-        messages: [{
-          role: "user",
-          content: [
-            { type: "document", source: { type: "file", file_id: fileId } },
-            { type: "text", text: promptText },
-          ],
-        }],
-      })
-    : await client.messages.create({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 8000,
-        messages: [{
-          role: "user",
-          content: [
-            { type: "document", source: { type: "base64", media_type: "application/pdf" as const, data: pdfBase64! } },
-            { type: "text", text: promptText },
-          ],
-        }],
-      });
 
-  let responseText = (response.content[0] as { type: "text"; text: string }).text.trim();
-  if (responseText.startsWith("```")) {
-    responseText = responseText.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
-  }
+  // ── SSE streaming response ─────────────────────────────────────────────
+  const encoder = new TextEncoder();
 
-  let content: StudyContent;
-  try {
-    content = JSON.parse(responseText);
-  } catch {
-    return NextResponse.json(
-      { error: "Failed to parse AI response as JSON", raw: responseText.slice(0, 200) },
-      { status: 500 }
-    );
-  }
+  const stream = new ReadableStream({
+    async start(controller) {
+      const sendEvent = (data: Record<string, unknown>) => {
+        try {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+        } catch { /* controller already closed */ }
+      };
 
-  if (appendMode) {
-    return await appendStudyContent(content, chapterNumber, bookSource);
-  }
-  return await saveStudyContent(content, chapterTitle, chapterNumber, bookSource);
+      // Heartbeat every 8s keeps proxies / gateways / Safari alive
+      const heartbeat = setInterval(() => {
+        try {
+          controller.enqueue(encoder.encode(`: heartbeat\n\n`));
+        } catch { /* ignore */ }
+      }, 8000);
+
+      try {
+        // Call Claude (this is the long-running part — 30-120s)
+        const response = fileId
+          ? await client.beta.messages.create({
+              model: "claude-sonnet-4-20250514",
+              max_tokens: 8000,
+              betas: ["files-api-2025-04-14"],
+              messages: [{
+                role: "user",
+                content: [
+                  { type: "document", source: { type: "file", file_id: fileId } },
+                  { type: "text", text: promptText },
+                ],
+              }],
+            })
+          : await client.messages.create({
+              model: "claude-sonnet-4-20250514",
+              max_tokens: 8000,
+              messages: [{
+                role: "user",
+                content: [
+                  { type: "document", source: { type: "base64", media_type: "application/pdf" as const, data: pdfBase64! } },
+                  { type: "text", text: promptText },
+                ],
+              }],
+            });
+
+        // Parse Claude's JSON response
+        let responseText = (response.content[0] as { type: "text"; text: string }).text.trim();
+        if (responseText.startsWith("```")) {
+          responseText = responseText.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
+        }
+
+        let content: StudyContent;
+        try {
+          content = JSON.parse(responseText);
+        } catch {
+          sendEvent({ error: "Failed to parse AI response as JSON", raw: responseText.slice(0, 200) });
+          return;
+        }
+
+        // Save to database
+        const result = appendMode
+          ? await appendContentToDB(content, chapterNumber, bookSource)
+          : await saveContentToDB(content, chapterTitle, chapterNumber, bookSource);
+
+        sendEvent(result);
+      } catch (err: unknown) {
+        // Surface Anthropic-specific errors clearly
+        const anthropicError = err as { status?: number; error?: { type?: string; message?: string } };
+        if (anthropicError.status && anthropicError.error) {
+          sendEvent({
+            error: `Anthropic API error (${anthropicError.status}): ${anthropicError.error.message || "Unknown"}`,
+            errorType: anthropicError.error.type,
+          });
+        } else {
+          sendEvent({ error: err instanceof Error ? err.message : "Processing failed" });
+        }
+      } finally {
+        clearInterval(heartbeat);
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+    },
+  });
 }
 
 /**
@@ -454,7 +503,10 @@ Important:
 /**
  * Save study content (questions, flashcards, chapter data) to the database.
  */
-async function saveStudyContent(
+/**
+ * Core DB save: upsert chapter + replace questions/flashcards. Returns plain object.
+ */
+async function saveContentToDB(
   content: StudyContent,
   chapterTitle: string,
   chapterNumber: number,
@@ -491,7 +543,6 @@ async function saveStudyContent(
   await prisma.flashcardReview.deleteMany({ where: { flashcard: { chapterId: chapter.id } } });
   await prisma.flashcard.deleteMany({ where: { chapterId: chapter.id } });
 
-  // Insert new questions
   for (const q of content.questions) {
     await prisma.question.create({
       data: {
@@ -506,7 +557,6 @@ async function saveStudyContent(
     });
   }
 
-  // Insert new flashcards
   for (const f of content.flashcards) {
     await prisma.flashcard.create({
       data: {
@@ -518,19 +568,30 @@ async function saveStudyContent(
     });
   }
 
-  return NextResponse.json({
+  return {
     success: true,
     chapterId: chapter.id,
     questionsCreated: content.questions.length,
     flashcardsCreated: content.flashcards.length,
-  });
+  };
+}
+
+/** Wrapper for non-streaming callers */
+async function saveStudyContent(
+  content: StudyContent,
+  chapterTitle: string,
+  chapterNumber: number,
+  bookSource: string,
+  rawText?: string
+) {
+  const result = await saveContentToDB(content, chapterTitle, chapterNumber, bookSource, rawText);
+  return NextResponse.json(result);
 }
 
 /**
- * Append questions/flashcards to an existing chapter (for multi-chunk processing).
- * Does NOT clear existing data — just adds more content.
+ * Core DB append: add questions/flashcards to existing chapter. Returns plain object.
  */
-async function appendStudyContent(
+async function appendContentToDB(
   content: StudyContent,
   chapterNumber: number,
   bookSource: string
@@ -540,10 +601,9 @@ async function appendStudyContent(
   });
 
   if (!chapter) {
-    return NextResponse.json({ error: "Chapter not found for appending" }, { status: 404 });
+    return { error: "Chapter not found for appending" };
   }
 
-  // Merge key points and high yield facts
   const existingKeyPoints: string[] = JSON.parse(chapter.keyPoints || "[]");
   const existingHighYield: string[] = JSON.parse(chapter.highYield || "[]");
   await prisma.chapter.update({
@@ -554,7 +614,6 @@ async function appendStudyContent(
     },
   });
 
-  // Append new questions
   for (const q of content.questions) {
     await prisma.question.create({
       data: {
@@ -569,7 +628,6 @@ async function appendStudyContent(
     });
   }
 
-  // Append new flashcards
   for (const f of content.flashcards) {
     await prisma.flashcard.create({
       data: {
@@ -584,12 +642,23 @@ async function appendStudyContent(
   const totalQuestions = await prisma.question.count({ where: { chapterId: chapter.id } });
   const totalFlashcards = await prisma.flashcard.count({ where: { chapterId: chapter.id } });
 
-  return NextResponse.json({
+  return {
     success: true,
     chapterId: chapter.id,
     questionsCreated: totalQuestions,
     flashcardsCreated: totalFlashcards,
-  });
+  };
+}
+
+/** Wrapper for non-streaming callers */
+async function appendStudyContent(
+  content: StudyContent,
+  chapterNumber: number,
+  bookSource: string
+) {
+  const result = await appendContentToDB(content, chapterNumber, bookSource);
+  if ("error" in result) return NextResponse.json(result, { status: 404 });
+  return NextResponse.json(result);
 }
 
 async function handleSeed() {

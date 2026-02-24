@@ -172,8 +172,10 @@ export default function IngestPage() {
   }, [totalPages]);
 
   // ─── Step 3: Process a Single Chapter ──────────────────────────────────
-  // Extracts chapter pages on the client (in chunks of ≤30 pages),
+  // Extracts chapter pages on the client (in chunks of ≤15 pages),
   // uploads each chunk to the server → Files API, then processes via Claude.
+  // The ingest endpoint returns an SSE stream (heartbeats keep the
+  // connection alive during the long-running Claude call).
   const processChapter = useCallback(
     async (chapter: DetectedChapter) => {
       if (!pdfDocRef.current) return;
@@ -182,7 +184,7 @@ export default function IngestPage() {
 
       try {
         const { PDFDocument } = await import("pdf-lib");
-        const maxPagesPerChunk = 30;
+        const maxPagesPerChunk = 15;
         const startIdx = Math.max(0, chapter.startPage - 1); // 1-based → 0-based
         const endIdx = Math.min(pdfDocRef.current.getPageCount(), chapter.endPage);
         const chapterPageCount = endIdx - startIdx;
@@ -193,12 +195,12 @@ export default function IngestPage() {
           const chunkEnd = Math.min(chunkStart + maxPagesPerChunk, endIdx);
           const pagesToCopy = chunkEnd - chunkStart;
 
-          // Extract this chunk's pages on the client (lightweight pdf-lib copy)
           setStatuses((prev) => ({
             ...prev,
             [chapter.number]: { state: "uploading" },
           }));
 
+          // ── Extract pages ────────────────────────────────────────────
           let chunkBlob: Blob;
           try {
             const chunkPdf = await PDFDocument.create();
@@ -215,7 +217,7 @@ export default function IngestPage() {
 
           const sizeMB = (chunkBlob.size / 1024 / 1024).toFixed(1);
 
-          // Upload small chunk to server → Files API
+          // ── Upload to Files API ──────────────────────────────────────
           const formData = new FormData();
           formData.append("pdf", chunkBlob, `ch${chapter.number}_chunk${i + 1}.pdf`);
           formData.append("filename", `ch${chapter.number}_chunk${i + 1}.pdf`);
@@ -250,16 +252,16 @@ export default function IngestPage() {
             return;
           }
 
-          // Process this chunk via Claude using file_id
+          // ── Ingest via Claude (SSE stream) ───────────────────────────
           setStatuses((prev) => ({
             ...prev,
             [chapter.number]: { state: "processing", chunk: i + 1, totalChunks: numChunks },
           }));
 
           const isAppend = i > 0;
-          let res: Response;
+          let ingestRes: Response;
           try {
-            res = await fetch("/api/ingest", {
+            ingestRes = await fetch("/api/ingest", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
@@ -277,13 +279,39 @@ export default function IngestPage() {
             );
           }
 
-          let data: Record<string, unknown>;
-          try {
-            data = await res.json();
-          } catch {
-            const text = await res.text().catch(() => "unreadable");
+          // Read SSE stream — server sends heartbeats to keep alive,
+          // then one `data: {...}` event with the final result/error.
+          const reader = ingestRes.body?.getReader();
+          if (!reader) {
+            throw new Error(`Ingest returned no body (status ${ingestRes.status})`);
+          }
+
+          const decoder = new TextDecoder();
+          let sseBuf = "";
+          let data: Record<string, unknown> | null = null;
+
+          // eslint-disable-next-line no-constant-condition
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            sseBuf += decoder.decode(value, { stream: true });
+
+            // Parse complete SSE events (separated by blank lines)
+            const parts = sseBuf.split("\n\n");
+            sseBuf = parts.pop() || "";
+            for (const part of parts) {
+              const dataLine = part.split("\n").find((l) => l.startsWith("data: "));
+              if (dataLine) {
+                try {
+                  data = JSON.parse(dataLine.slice(6));
+                } catch { /* partial data, ignore */ }
+              }
+            }
+          }
+
+          if (!data) {
             throw new Error(
-              `Ingest response not JSON (status ${res.status}): ${text.slice(0, 120)}`
+              `Ingest stream ended with no result (chunk ${i + 1}/${numChunks}, status ${ingestRes.status})`
             );
           }
 

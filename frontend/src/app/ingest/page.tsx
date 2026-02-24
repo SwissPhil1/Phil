@@ -27,6 +27,69 @@ export default function IngestPage() {
   const [uploadPercent, setUploadPercent] = useState(0);
   const [selectedChapters, setSelectedChapters] = useState<Set<number>>(new Set());
 
+  // Helper to call the extract-pdf endpoint and handle non-JSON Vercel errors
+  const callExtract = async (body: Record<string, unknown>) => {
+    const res = await fetch("/api/ingest/extract-pdf", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      // Vercel timeout/error pages return HTML, not JSON
+      const text = await res.text();
+      let errorMsg: string;
+      try {
+        const json = JSON.parse(text);
+        errorMsg = json.error || `Server error (${res.status})`;
+      } catch {
+        if (res.status === 504) {
+          errorMsg = "Server timed out processing PDF. The file may be too large for this plan.";
+        } else {
+          errorMsg = `Server error ${res.status}`;
+        }
+      }
+      throw new Error(errorMsg);
+    }
+
+    return res.json();
+  };
+
+  // Detect chapters from full text (client-side, same regex as server)
+  const detectChapters = (text: string, totalPages: number) => {
+    const chapterPattern =
+      /(?:^|\n)\s*(?:CHAPTER|Chapter)\s+(\d+)[:\s.]*([^\n]+)/gm;
+    const matches: { index: number; number: number; title: string }[] = [];
+
+    let match;
+    while ((match = chapterPattern.exec(text)) !== null) {
+      matches.push({
+        index: match.index,
+        number: parseInt(match[1], 10),
+        title: match[2].trim(),
+      });
+    }
+
+    if (matches.length === 0) {
+      return {
+        chapters: [
+          { number: 1, title: "Full Document", charCount: text.length, text: text.slice(0, 100000) },
+        ],
+        totalPages,
+        totalChars: text.length,
+      };
+    }
+
+    const chapters = matches.map((m, i) => {
+      const start = m.index;
+      const end = i + 1 < matches.length ? matches[i + 1].index : text.length;
+      const chapterText = text.slice(start, end);
+      return { number: m.number, title: m.title, charCount: chapterText.length, text: chapterText };
+    });
+
+    return { chapters, totalPages, totalChars: text.length };
+  };
+
   const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -74,30 +137,55 @@ export default function IngestPage() {
         setUploadPercent(Math.round(((i + 1) / totalChunks) * 100));
       }
 
-      // All chunks uploaded — trigger server-side extraction
+      // All chunks uploaded — extract text (may require multiple batches for large PDFs)
       setUploadPhase("extracting");
       setPdfText("Server is extracting text from PDF...");
 
-      const res = await fetch("/api/ingest/extract-pdf", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ uploadId, totalChunks }),
-      });
+      const firstBatch = await callExtract({ uploadId, totalChunks });
 
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || "Failed to extract text from PDF");
-      }
-
-      const data = await res.json();
-
-      if (data.chapters) {
+      if (firstBatch.chapters) {
+        // Small PDF — server returned chapters directly
         setPdfText(
-          `Extracted ${data.totalChars.toLocaleString()} characters from ${data.totalPages} pages — ${data.chapters.length} chapter(s) found`
+          `Extracted ${firstBatch.totalChars.toLocaleString()} characters from ${firstBatch.totalPages} pages — ${firstBatch.chapters.length} chapter(s) found`
         );
-        setChapters(data.chapters);
+        setChapters(firstBatch.chapters);
         setSelectedChapters(
-          new Set(data.chapters.map((c: ExtractedChapter) => c.number))
+          new Set(firstBatch.chapters.map((c: ExtractedChapter) => c.number))
+        );
+      } else if (firstBatch.text !== undefined) {
+        // Large PDF — need to fetch more batches
+        let allText = firstBatch.text;
+        let currentEnd = firstBatch.endPage;
+        const total = firstBatch.totalPages;
+        const BATCH_SIZE = 200;
+
+        while (currentEnd < total) {
+          const nextStart = currentEnd + 1;
+          const nextEnd = Math.min(currentEnd + BATCH_SIZE, total);
+          setPdfText(
+            `Extracting pages ${nextStart}-${nextEnd} of ${total}...`
+          );
+
+          const batch = await callExtract({
+            uploadId,
+            totalChunks,
+            startPage: nextStart,
+            endPage: nextEnd,
+          });
+
+          allText += batch.text;
+          currentEnd = nextEnd;
+        }
+
+        // All pages extracted — detect chapters client-side
+        const result = detectChapters(allText, total);
+
+        setPdfText(
+          `Extracted ${result.totalChars.toLocaleString()} characters from ${total} pages — ${result.chapters.length} chapter(s) found`
+        );
+        setChapters(result.chapters);
+        setSelectedChapters(
+          new Set(result.chapters.map((c: ExtractedChapter) => c.number))
         );
       }
     } catch (err) {

@@ -713,11 +713,12 @@ async function handleGenerateStudyGuide(body: {
   chapterNumber?: number;
   bookSource?: string;
   fileIds?: string[];
+  blobUrls?: string[];
 }) {
-  const { chapterId, chapterNumber, bookSource, fileIds } = body;
+  const { chapterId, chapterNumber, bookSource, fileIds, blobUrls } = body;
 
   // Look up the chapter
-  const chapter = chapterId
+  let chapter = chapterId
     ? await prisma.chapter.findUnique({ where: { id: chapterId } })
     : chapterNumber && bookSource
       ? await prisma.chapter.findUnique({
@@ -739,7 +740,43 @@ async function handleGenerateStudyGuide(body: {
     );
   }
 
-  const hasFileIds = Array.isArray(fileIds) && fileIds.length > 0;
+  // Save blob URLs to the chapter if provided (permanent PDF storage)
+  const incomingBlobUrls = Array.isArray(blobUrls) && blobUrls.length > 0 ? blobUrls : null;
+  if (incomingBlobUrls) {
+    // Merge with any existing blob URLs (from partial ingests / resumes)
+    const existing: string[] = JSON.parse(chapter.pdfBlobUrls || "[]");
+    const merged = [...new Set([...existing, ...incomingBlobUrls])];
+    await prisma.chapter.update({
+      where: { id: chapter.id },
+      data: { pdfBlobUrls: JSON.stringify(merged) },
+    });
+    chapter = { ...chapter, pdfBlobUrls: JSON.stringify(merged) };
+  }
+
+  // Determine file IDs for Claude: use provided ones, or re-upload from stored blobs
+  const effectiveFileIds = Array.isArray(fileIds) && fileIds.length > 0 ? [...fileIds] : [] as string[];
+
+  if (effectiveFileIds.length === 0) {
+    // No fresh file IDs — try to re-upload from stored Vercel Blob URLs
+    const storedBlobUrls: string[] = JSON.parse(chapter.pdfBlobUrls || "[]");
+    if (storedBlobUrls.length > 0) {
+      console.log(`Re-uploading ${storedBlobUrls.length} stored PDF chunks to Anthropic Files API for chapter ${chapter.number}...`);
+      for (const url of storedBlobUrls) {
+        try {
+          const pdfRes = await fetch(url);
+          if (!pdfRes.ok) continue;
+          const pdfBuffer = await pdfRes.arrayBuffer();
+          const file = new File([Buffer.from(pdfBuffer)], `ch${chapter.number}_stored.pdf`, { type: "application/pdf" });
+          const uploaded = await client.beta.files.upload({ file });
+          effectiveFileIds.push(uploaded.id);
+        } catch (err) {
+          console.warn(`Failed to re-upload blob ${url}:`, err instanceof Error ? err.message : err);
+        }
+      }
+    }
+  }
+
+  const hasFileIds = effectiveFileIds.length > 0;
 
   // ── Find related chapters from other book sources ───────────────────────
   // Match by title similarity: extract key topic words and find chapters
@@ -827,7 +864,7 @@ ${mn.length > 0 ? mn.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(no
     // MODE 1: Actual PDF pages available — Claude sees the real textbook
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const content: any[] = [];
-    for (const fid of fileIds) {
+    for (const fid of effectiveFileIds) {
       content.push({
         type: "document",
         source: { type: "file", file_id: fid },

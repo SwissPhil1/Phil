@@ -256,6 +256,7 @@ export default function IngestPage() {
         // Resume from failed chunk if specified, otherwise start from 0
         const startChunk = resumeFromChunk ?? 0;
         const collectedFileIds: string[] = [];
+        const collectedBlobUrls: string[] = [];
 
         for (let i = startChunk; i < numChunks; i++) {
           const chunkStart = startIdx + i * maxPagesPerChunk;
@@ -319,9 +320,12 @@ export default function IngestPage() {
             return;
           }
 
-          // Track the file ID for study guide generation later
+          // Track the file ID and blob URL for study guide generation later
           if (uploadData.fileId) {
             collectedFileIds.push(String(uploadData.fileId));
+          }
+          if (uploadData.blobUrl) {
+            collectedBlobUrls.push(String(uploadData.blobUrl));
           }
 
           // ── Ingest via Claude (SSE stream) ───────────────────────────
@@ -421,6 +425,7 @@ export default function IngestPage() {
                   action: "generate-study-guide",
                   chapterId: result.chapterId,
                   fileIds: collectedFileIds,
+                  blobUrls: collectedBlobUrls,
                 }),
               }, 2);
 

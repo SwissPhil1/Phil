@@ -20,8 +20,8 @@ import {
   Sparkles,
   Library,
 } from "lucide-react";
-import { useEffect, useState, useCallback, useRef } from "react";
-import ReactMarkdown from "react-markdown";
+import React, { useEffect, useState, useCallback, useRef } from "react";
+import ReactMarkdown, { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 interface ChapterDetail {
@@ -56,6 +56,85 @@ type GenerateStatus =
   | { phase: "generating-guide"; message: string }
   | { phase: "done"; questionsCreated: number; flashcardsCreated: number }
   | { phase: "error"; message: string };
+
+// ── Helper to extract text content from React children ──────────────
+function extractTextContent(node: React.ReactNode): string {
+  if (typeof node === "string") return node;
+  if (typeof node === "number") return String(node);
+  if (!node) return "";
+  if (Array.isArray(node)) return node.map(extractTextContent).join("");
+  if (React.isValidElement(node)) {
+    return extractTextContent((node.props as { children?: React.ReactNode }).children);
+  }
+  return "";
+}
+
+// ── Custom ReactMarkdown components for colored callouts & rich styling ──
+const studyGuideComponents: Components = {
+  blockquote: ({ children, ...props }) => {
+    const text = extractTextContent(children);
+    let classes = "border-l-4 rounded-r-lg py-3 px-4 my-4 ";
+
+    if (text.includes("💡") || text.includes("PEARL")) {
+      classes += "border-amber-400 bg-amber-50/80 dark:bg-amber-950/30 [&>p]:text-amber-900 dark:[&>p]:text-amber-200";
+    } else if (text.includes("🔴") || text.includes("PITFALL") || text.includes("DANGER")) {
+      classes += "border-red-400 bg-red-50/80 dark:bg-red-950/30 [&>p]:text-red-900 dark:[&>p]:text-red-200";
+    } else if (text.includes("⚡") || text.includes("HIGH YIELD")) {
+      classes += "border-orange-400 bg-orange-50/80 dark:bg-orange-950/30 [&>p]:text-orange-900 dark:[&>p]:text-orange-200";
+    } else if (text.includes("🧠") || text.includes("MNEMONIC")) {
+      classes += "border-purple-400 bg-purple-50/80 dark:bg-purple-950/30 [&>p]:text-purple-900 dark:[&>p]:text-purple-200";
+    } else if (text.includes("🎯") || text.includes("STOP & THINK") || text.includes("STOP &amp; THINK")) {
+      classes += "border-blue-400 bg-blue-50/80 dark:bg-blue-950/30 [&>p]:text-blue-900 dark:[&>p]:text-blue-200";
+    } else if (text.includes("✅") || text.includes("KEY POINT")) {
+      classes += "border-emerald-400 bg-emerald-50/80 dark:bg-emerald-950/30 [&>p]:text-emerald-900 dark:[&>p]:text-emerald-200";
+    } else if (text.includes("⚖️") || text.includes("VS:")) {
+      classes += "border-indigo-400 bg-indigo-50/80 dark:bg-indigo-950/30 [&>p]:text-indigo-900 dark:[&>p]:text-indigo-200";
+    } else if (text.includes("🏛️") || text.includes("Memory Palace")) {
+      classes += "border-violet-400 bg-violet-50/80 dark:bg-violet-950/30 [&>p]:text-violet-900 dark:[&>p]:text-violet-200";
+    } else {
+      classes += "border-primary/40 bg-primary/5 [&>p]:text-primary/80";
+    }
+
+    return <blockquote className={classes} {...props}>{children}</blockquote>;
+  },
+
+  table: ({ children, ...props }) => (
+    <div className="overflow-x-auto my-6 rounded-lg border border-border shadow-sm">
+      <table className="min-w-full text-sm" {...props}>{children}</table>
+    </div>
+  ),
+
+  thead: ({ children, ...props }) => (
+    <thead className="bg-muted/60 dark:bg-muted/20" {...props}>{children}</thead>
+  ),
+
+  th: ({ children, ...props }) => (
+    <th className="px-3 py-2.5 text-left font-semibold text-foreground border-b border-border text-xs uppercase tracking-wider" {...props}>{children}</th>
+  ),
+
+  td: ({ children, ...props }) => (
+    <td className="px-3 py-2 text-foreground/80 border-b border-border/50" {...props}>{children}</td>
+  ),
+
+  h2: ({ children, ...props }) => (
+    <h2 className="text-2xl font-bold mt-12 mb-4 pb-3 border-b-2 border-primary/20 text-foreground flex items-center gap-2" {...props}>{children}</h2>
+  ),
+
+  h3: ({ children, ...props }) => (
+    <h3 className="text-xl font-semibold mt-8 mb-3 text-foreground/95" {...props}>{children}</h3>
+  ),
+
+  hr: (props) => (
+    <hr className="my-8 border-t-2 border-dashed border-muted-foreground/20" {...props} />
+  ),
+
+  input: ({ ...props }) => (
+    <input
+      className="mr-2 h-4 w-4 rounded border-2 border-primary/40 accent-primary"
+      {...props}
+    />
+  ),
+};
 
 export default function ChapterDetailPage() {
   const params = useParams();
@@ -497,8 +576,8 @@ export default function ChapterDetailPage() {
                       Regenerate
                     </Button>
                   </div>
-                  <article className="prose prose-sm sm:prose-base max-w-none dark:prose-invert prose-headings:text-foreground prose-p:text-foreground/90 prose-strong:text-foreground prose-li:text-foreground/90 prose-blockquote:border-primary/40 prose-blockquote:text-primary/80 prose-blockquote:bg-primary/5 prose-blockquote:rounded-r-lg prose-blockquote:py-1 prose-blockquote:px-4 prose-th:text-foreground prose-td:text-foreground/80 prose-table:text-sm">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  <article className="prose prose-sm sm:prose-base max-w-none dark:prose-invert prose-headings:text-foreground prose-p:text-foreground/90 prose-strong:text-foreground prose-li:text-foreground/90 prose-th:text-foreground prose-td:text-foreground/80 prose-table:text-sm prose-blockquote:not-italic prose-blockquote:font-normal [&_ul.contains-task-list]:list-none [&_ul.contains-task-list]:pl-0">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={studyGuideComponents}>
                       {chapter.studyGuide}
                     </ReactMarkdown>
                   </article>

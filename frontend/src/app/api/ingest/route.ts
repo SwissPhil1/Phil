@@ -312,13 +312,23 @@ export async function POST(request: Request) {
       return handleGenerateStudyGuide(body);
     } else if (action === "store-chapter") {
       return handleStoreChapter(body);
+    } else if (action === "delete-chunks") {
+      // Delete all PDF chunks for a given bookSource + chapterNum (cleanup before re-storing)
+      const { bookSource: bs, chapterNum: cn } = body;
+      if (!bs || cn === undefined) {
+        return NextResponse.json({ error: "Missing bookSource or chapterNum" }, { status: 400 });
+      }
+      const deleted = await prisma.pdfChunk.deleteMany({
+        where: { bookSource: bs, chapterNum: cn },
+      });
+      return NextResponse.json({ success: true, deleted: deleted.count });
     } else if (action === "generate-content") {
       return handleGenerateContent(body);
     } else if (action === "seed") {
       return handleSeed();
     } else {
       return NextResponse.json(
-        { error: "Invalid action. Use 'detect-chapters', 'process-pdf', 'process', 'generate-study-guide', 'store-chapter', 'generate-content', or 'seed'." },
+        { error: "Invalid action. Use 'detect-chapters', 'process-pdf', 'process', 'generate-study-guide', 'store-chapter', 'delete-chunks', 'generate-content', or 'seed'." },
         { status: 400 }
       );
     }

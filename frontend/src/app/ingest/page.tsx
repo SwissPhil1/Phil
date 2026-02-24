@@ -197,6 +197,19 @@ export default function SourcesPage() {
       const chapterPageCount = endIdx - startIdx;
       const numChunks = Math.ceil(chapterPageCount / maxPagesPerChunk);
 
+      // Delete any old/stale chunks for this chapter before storing new ones
+      try {
+        await fetch("/api/ingest", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "delete-chunks",
+            bookSource: bookKey,
+            chapterNum: chapter.number,
+          }),
+        });
+      } catch { /* non-critical — upsert will still overwrite matching indices */ }
+
       let storedChunks = 0;
       let hadError = false;
 

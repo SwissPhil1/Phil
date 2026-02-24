@@ -446,9 +446,9 @@ export default function IngestPage() {
                   }
                 }
               }
-            } catch {
-              // Study guide generation failed — still mark as done (Q/F succeeded)
-              console.warn("Study guide generation failed for chapter", chapter.number);
+            } catch (guideErr) {
+              // Study guide failed — mark done with a warning (Q/F still succeeded)
+              console.warn("Study guide generation failed for chapter", chapter.number, guideErr);
             }
 
             setStatuses((prev) => ({

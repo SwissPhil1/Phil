@@ -717,12 +717,11 @@ async function handleGenerateStudyGuide(body: {
   chapterNumber?: number;
   bookSource?: string;
   fileIds?: string[];
-  blobUrls?: string[];
 }) {
-  const { chapterId, chapterNumber, bookSource, fileIds, blobUrls } = body;
+  const { chapterId, chapterNumber, bookSource, fileIds } = body;
 
   // Look up the chapter
-  let chapter = chapterId
+  const chapter = chapterId
     ? await prisma.chapter.findUnique({ where: { id: chapterId } })
     : chapterNumber && bookSource
       ? await prisma.chapter.findUnique({
@@ -744,37 +743,30 @@ async function handleGenerateStudyGuide(body: {
     );
   }
 
-  // Save blob URLs to the chapter if provided (permanent PDF storage)
-  const incomingBlobUrls = Array.isArray(blobUrls) && blobUrls.length > 0 ? blobUrls : null;
-  if (incomingBlobUrls) {
-    // Merge with any existing blob URLs (from partial ingests / resumes)
-    const existing: string[] = JSON.parse(chapter.pdfBlobUrls || "[]");
-    const merged = [...new Set([...existing, ...incomingBlobUrls])];
-    await prisma.chapter.update({
-      where: { id: chapter.id },
-      data: { pdfBlobUrls: JSON.stringify(merged) },
-    });
-    chapter = { ...chapter, pdfBlobUrls: JSON.stringify(merged) };
-  }
-
-  // Determine file IDs for Claude: use provided ones, or re-upload from stored blobs
+  // Determine file IDs for Claude: use provided ones, or re-upload from stored DB chunks
   const effectiveFileIds = Array.isArray(fileIds) && fileIds.length > 0 ? [...fileIds] : [] as string[];
 
   if (effectiveFileIds.length === 0) {
-    // No fresh file IDs — try to re-upload from stored Vercel Blob URLs
-    const storedBlobUrls: string[] = JSON.parse(chapter.pdfBlobUrls || "[]");
-    if (storedBlobUrls.length > 0) {
-      console.log(`Re-uploading ${storedBlobUrls.length} stored PDF chunks to Anthropic Files API for chapter ${chapter.number}...`);
-      for (const url of storedBlobUrls) {
+    // No fresh file IDs — re-upload from stored PDF chunks in DB
+    const pdfChunks = await prisma.pdfChunk.findMany({
+      where: { bookSource: chapter.bookSource, chapterNum: chapter.number },
+      orderBy: { chunkIndex: "asc" },
+    });
+
+    if (pdfChunks.length > 0) {
+      console.log(`Re-uploading ${pdfChunks.length} stored PDF chunks to Anthropic Files API for chapter ${chapter.number}...`);
+      for (let i = 0; i < pdfChunks.length; i++) {
         try {
-          const pdfRes = await fetch(url);
-          if (!pdfRes.ok) continue;
-          const pdfBuffer = await pdfRes.arrayBuffer();
-          const file = new File([Buffer.from(pdfBuffer)], `ch${chapter.number}_stored.pdf`, { type: "application/pdf" });
+          const chunk = pdfChunks[i];
+          const file = new File(
+            [Buffer.from(chunk.data)],
+            `ch${chapter.number}_chunk${i + 1}.pdf`,
+            { type: "application/pdf" }
+          );
           const uploaded = await client.beta.files.upload({ file });
           effectiveFileIds.push(uploaded.id);
         } catch (err) {
-          console.warn(`Failed to re-upload blob ${url}:`, err instanceof Error ? err.message : err);
+          console.warn(`Failed to re-upload chunk ${i + 1}:`, err instanceof Error ? err.message : err);
         }
       }
     }
@@ -977,49 +969,45 @@ ${mn.length > 0 ? mn.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(no
 }
 
 /**
- * Store chapter metadata + blob URLs without any AI processing.
- * Called during source upload to save PDF chunk locations for later generation.
+ * Store chapter metadata without any AI processing.
+ * Called during source upload to create/update the chapter record.
+ * PDF chunks are stored separately in the PdfChunk table via /api/store-pdf.
  */
 async function handleStoreChapter(body: {
   chapterNumber: number;
   chapterTitle: string;
   bookSource: string;
-  blobUrls: string[];
 }) {
-  const { chapterNumber, chapterTitle, bookSource, blobUrls } = body;
+  const { chapterNumber, chapterTitle, bookSource } = body;
 
-  if (!chapterNumber || !chapterTitle || !bookSource || !Array.isArray(blobUrls)) {
+  if (!chapterNumber || !chapterTitle || !bookSource) {
     return NextResponse.json(
-      { error: "Missing required fields: chapterNumber, chapterTitle, bookSource, blobUrls" },
+      { error: "Missing required fields: chapterNumber, chapterTitle, bookSource" },
       { status: 400 }
     );
   }
-
-  // Merge with any existing blob URLs (supports re-uploading)
-  const existing = await prisma.chapter.findUnique({
-    where: { bookSource_number: { bookSource: String(bookSource), number: Number(chapterNumber) } },
-  });
-  const existingUrls: string[] = existing?.pdfBlobUrls ? JSON.parse(existing.pdfBlobUrls) : [];
-  const mergedUrls = [...new Set([...existingUrls, ...blobUrls])];
 
   const chapter = await prisma.chapter.upsert({
     where: { bookSource_number: { bookSource: String(bookSource), number: Number(chapterNumber) } },
     update: {
       title: String(chapterTitle),
-      pdfBlobUrls: JSON.stringify(mergedUrls),
     },
     create: {
       bookSource: String(bookSource),
       number: Number(chapterNumber),
       title: String(chapterTitle),
-      pdfBlobUrls: JSON.stringify(mergedUrls),
     },
+  });
+
+  // Count stored PDF chunks for this chapter
+  const pdfChunkCount = await prisma.pdfChunk.count({
+    where: { bookSource: String(bookSource), chapterNum: Number(chapterNumber) },
   });
 
   return NextResponse.json({
     success: true,
     chapterId: chapter.id,
-    blobUrlsStored: mergedUrls.length,
+    pdfChunksStored: pdfChunkCount,
   });
 }
 
@@ -1043,10 +1031,15 @@ async function handleGenerateContent(body: { chapterId: number }) {
     return NextResponse.json({ error: "Chapter not found" }, { status: 404 });
   }
 
-  const blobUrls: string[] = JSON.parse(chapter.pdfBlobUrls || "[]");
-  if (blobUrls.length === 0) {
+  // Load stored PDF chunks from the database
+  const pdfChunks = await prisma.pdfChunk.findMany({
+    where: { bookSource: chapter.bookSource, chapterNum: chapter.number },
+    orderBy: { chunkIndex: "asc" },
+  });
+
+  if (pdfChunks.length === 0) {
     return NextResponse.json(
-      { error: "No stored PDF pages for this chapter. Upload the source PDF first." },
+      { error: "No stored PDF pages for this chapter. Upload the source PDF first on the Sources page." },
       { status: 400 }
     );
   }
@@ -1078,21 +1071,15 @@ async function handleGenerateContent(body: { chapterId: number }) {
       }, 8000);
 
       try {
-        // ── Step 1: Re-upload all blob chunks to Anthropic Files API ──
-        sendEvent({ status: "uploading", message: `Re-uploading ${blobUrls.length} PDF chunks to Claude...` });
+        // ── Step 1: Upload stored DB chunks to Anthropic Files API ──
+        sendEvent({ status: "uploading", message: `Uploading ${pdfChunks.length} PDF chunks to Claude...` });
         const fileIds: string[] = [];
 
-        for (let i = 0; i < blobUrls.length; i++) {
-          const url = blobUrls[i];
+        for (let i = 0; i < pdfChunks.length; i++) {
           try {
-            const pdfRes = await fetch(url);
-            if (!pdfRes.ok) {
-              sendEvent({ status: "warning", message: `Failed to fetch blob chunk ${i + 1}: HTTP ${pdfRes.status}` });
-              continue;
-            }
-            const pdfBuffer = await pdfRes.arrayBuffer();
+            const chunk = pdfChunks[i];
             const file = new File(
-              [Buffer.from(pdfBuffer)],
+              [Buffer.from(chunk.data)],
               `ch${chapter.number}_chunk${i + 1}.pdf`,
               { type: "application/pdf" }
             );
@@ -1104,7 +1091,7 @@ async function handleGenerateContent(body: { chapterId: number }) {
         }
 
         if (fileIds.length === 0) {
-          sendEvent({ error: "All PDF chunk uploads failed. Check your blob storage configuration." });
+          sendEvent({ error: "All PDF chunk uploads to Claude failed." });
           return;
         }
 

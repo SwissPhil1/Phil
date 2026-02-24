@@ -88,6 +88,17 @@ model QuestionAttempt {
   attemptedAt    DateTime @default(now())
 }
 
+model PdfChunk {
+  id         Int      @id @default(autoincrement())
+  bookSource String
+  chapterNum Int
+  chunkIndex Int
+  data       Bytes    // raw PDF bytes stored directly in Postgres
+  createdAt  DateTime @default(now())
+
+  @@unique([bookSource, chapterNum, chunkIndex])
+}
+
 model StudySession {
   id            Int       @id @default(autoincrement())
   chapterId     Int?

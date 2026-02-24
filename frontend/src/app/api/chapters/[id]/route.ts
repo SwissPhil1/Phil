@@ -37,5 +37,10 @@ export async function GET(
     return NextResponse.json({ error: "Chapter not found" }, { status: 404 });
   }
 
-  return NextResponse.json(chapter);
+  // Count stored PDF chunks for this chapter
+  const pdfChunkCount = await prisma.pdfChunk.count({
+    where: { bookSource: chapter.bookSource, chapterNum: chapter.number },
+  });
+
+  return NextResponse.json({ ...chapter, pdfChunkCount });
 }

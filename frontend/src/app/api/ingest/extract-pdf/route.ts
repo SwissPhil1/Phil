@@ -1,10 +1,41 @@
 import { NextResponse } from "next/server";
 import { PDFParse } from "pdf-parse";
-import { readFile, rm } from "fs/promises";
-import { existsSync } from "fs";
+import { readFile, rm, writeFile } from "fs/promises";
+import { existsSync, createWriteStream } from "fs";
 import path from "path";
 
 export const maxDuration = 60;
+
+// Assemble chunk files into a single PDF on disk
+async function assembleChunks(
+  uploadDir: string,
+  totalChunks: number
+): Promise<string> {
+  const assembledPath = path.join(uploadDir, "assembled.pdf");
+  if (existsSync(assembledPath)) return assembledPath;
+
+  const writeStream = createWriteStream(assembledPath);
+
+  for (let i = 0; i < totalChunks; i++) {
+    const chunkPath = path.join(uploadDir, `chunk-${i}`);
+    if (!existsSync(chunkPath)) {
+      writeStream.destroy();
+      throw new Error(
+        `Missing chunk ${i}/${totalChunks}. The server instance may have changed. Please try again.`
+      );
+    }
+    const chunkData = await readFile(chunkPath);
+    writeStream.write(chunkData);
+  }
+
+  writeStream.end();
+  await new Promise<void>((resolve, reject) => {
+    writeStream.on("finish", resolve);
+    writeStream.on("error", reject);
+  });
+
+  return assembledPath;
+}
 
 export async function POST(request: Request) {
   let uploadDir: string | null = null;
@@ -12,12 +43,9 @@ export async function POST(request: Request) {
   try {
     const contentType = request.headers.get("content-type") || "";
 
-    let pdfBuffer: Buffer;
-
     if (contentType.includes("application/json")) {
-      // Chunked upload mode: reassemble from /tmp
       const body = await request.json();
-      const { uploadId, totalChunks } = body;
+      const { uploadId, totalChunks, startPage, endPage } = body;
 
       if (!uploadId || !totalChunks) {
         return NextResponse.json(
@@ -38,28 +66,64 @@ export async function POST(request: Request) {
         return NextResponse.json(
           {
             error:
-              "Upload not found. Chunks may have been stored on a different server instance. Please try uploading again.",
+              "Upload not found. The server instance changed between upload and extraction. Please try again.",
           },
           { status: 404 }
         );
       }
 
-      // Read and concatenate all chunks in order
-      const chunks: Buffer[] = [];
-      for (let i = 0; i < totalChunks; i++) {
-        const chunkPath = path.join(uploadDir, `chunk-${i}`);
-        if (!existsSync(chunkPath)) {
-          return NextResponse.json(
-            {
-              error: `Missing chunk ${i}/${totalChunks}. Please try uploading again.`,
-            },
-            { status: 404 }
-          );
-        }
-        chunks.push(await readFile(chunkPath));
-      }
+      // Assemble chunks into single file (idempotent — skips if already done)
+      const assembledPath = await assembleChunks(uploadDir, totalChunks);
 
-      pdfBuffer = Buffer.concat(chunks);
+      // Read the assembled PDF
+      const buffer = await readFile(assembledPath);
+
+      PDFParse.setWorker();
+      const parser = new PDFParse({ data: buffer });
+
+      if (startPage && endPage) {
+        // Batch mode: extract a specific page range
+        const pageNumbers: number[] = [];
+        for (let p = startPage; p <= endPage; p++) pageNumbers.push(p);
+
+        const result = await parser.getText({ partial: pageNumbers });
+        const text = result.text;
+        const totalPages = result.total;
+        await parser.destroy();
+
+        return NextResponse.json({
+          text,
+          totalPages,
+          startPage,
+          endPage,
+          done: endPage >= totalPages,
+        });
+      } else {
+        // Discovery mode: get page count + extract first batch
+        const BATCH_SIZE = 200;
+        const result = await parser.getText({ first: BATCH_SIZE });
+        const text = result.text;
+        const totalPages = result.total;
+        await parser.destroy();
+
+        if (totalPages <= BATCH_SIZE) {
+          // Small enough PDF — we got everything, cleanup and return
+          await rm(uploadDir, { recursive: true, force: true }).catch(
+            () => {}
+          );
+          uploadDir = null;
+          return NextResponse.json(formatChapters(text, totalPages));
+        }
+
+        // Large PDF — return first batch + page count for client to fetch more
+        return NextResponse.json({
+          text,
+          totalPages,
+          startPage: 1,
+          endPage: BATCH_SIZE,
+          done: false,
+        });
+      }
     } else {
       // Direct upload mode (small files under 4.5MB)
       const formData = await request.formData();
@@ -72,94 +136,84 @@ export async function POST(request: Request) {
         );
       }
 
-      pdfBuffer = Buffer.from(await file.arrayBuffer());
+      const arrayBuffer = await file.arrayBuffer();
+      const data = new Uint8Array(arrayBuffer);
+
+      PDFParse.setWorker();
+      const parser = new PDFParse({ data });
+      const result = await parser.getText();
+      const text = result.text;
+      const totalPages = result.total;
+      await parser.destroy();
+
+      return NextResponse.json(formatChapters(text, totalPages));
     }
-
-    // Parse PDF
-    const data = new Uint8Array(pdfBuffer);
-    PDFParse.setWorker();
-    const parser = new PDFParse({ data });
-    const result = await parser.getText();
-    const text = result.text;
-    const totalPages = result.total;
-    await parser.destroy();
-
-    // Cleanup /tmp chunks
-    if (uploadDir && existsSync(uploadDir)) {
-      await rm(uploadDir, { recursive: true, force: true }).catch(() => {});
-    }
-
-    if (!text || text.trim().length === 0) {
-      return NextResponse.json(
-        {
-          error:
-            "Could not extract any text from this PDF. It may be image-based (scanned).",
-        },
-        { status: 422 }
-      );
-    }
-
-    // Detect chapters
-    const chapterPattern =
-      /(?:^|\n)\s*(?:CHAPTER|Chapter)\s+(\d+)[:\s.]*([^\n]+)/gm;
-    const matches: { index: number; number: number; title: string }[] = [];
-
-    let match;
-    while ((match = chapterPattern.exec(text)) !== null) {
-      matches.push({
-        index: match.index,
-        number: parseInt(match[1], 10),
-        title: match[2].trim(),
-      });
-    }
-
-    if (matches.length === 0) {
-      return NextResponse.json({
-        chapters: [
-          {
-            number: 1,
-            title: "Full Document",
-            charCount: text.length,
-            text: text.slice(0, 100000),
-          },
-        ],
-        totalPages,
-        totalChars: text.length,
-      });
-    }
-
-    const chapters = matches.map((m, i) => {
-      const start = m.index;
-      const end = i + 1 < matches.length ? matches[i + 1].index : text.length;
-      const chapterText = text.slice(start, end);
-      return {
-        number: m.number,
-        title: m.title,
-        charCount: chapterText.length,
-        text: chapterText,
-      };
-    });
-
-    return NextResponse.json({
-      chapters,
-      totalPages,
-      totalChars: text.length,
-    });
   } catch (error) {
-    // Cleanup on error
+    // Cleanup on error (but don't clean up if we need more batches)
     if (uploadDir && existsSync(uploadDir)) {
       await rm(uploadDir, { recursive: true, force: true }).catch(() => {});
     }
 
-    console.error("PDF extraction error:", error);
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("PDF extraction error:", message);
     return NextResponse.json(
-      {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Failed to extract text from PDF",
-      },
+      { error: `PDF extraction failed: ${message}` },
       { status: 500 }
     );
   }
+}
+
+function formatChapters(text: string, totalPages: number) {
+  if (!text || text.trim().length === 0) {
+    return {
+      error:
+        "Could not extract any text from this PDF. It may be image-based (scanned).",
+    };
+  }
+
+  const chapterPattern =
+    /(?:^|\n)\s*(?:CHAPTER|Chapter)\s+(\d+)[:\s.]*([^\n]+)/gm;
+  const matches: { index: number; number: number; title: string }[] = [];
+
+  let match;
+  while ((match = chapterPattern.exec(text)) !== null) {
+    matches.push({
+      index: match.index,
+      number: parseInt(match[1], 10),
+      title: match[2].trim(),
+    });
+  }
+
+  if (matches.length === 0) {
+    return {
+      chapters: [
+        {
+          number: 1,
+          title: "Full Document",
+          charCount: text.length,
+          text: text.slice(0, 100000),
+        },
+      ],
+      totalPages,
+      totalChars: text.length,
+    };
+  }
+
+  const chapters = matches.map((m, i) => {
+    const start = m.index;
+    const end = i + 1 < matches.length ? matches[i + 1].index : text.length;
+    const chapterText = text.slice(start, end);
+    return {
+      number: m.number,
+      title: m.title,
+      charCount: chapterText.length,
+      text: chapterText,
+    };
+  });
+
+  return {
+    chapters,
+    totalPages,
+    totalChars: text.length,
+  };
 }

@@ -859,31 +859,35 @@ ${mn.length > 0 ? mn.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(no
 - Target length: 2000-4000 words
 - Do NOT wrap the output in code fences — return raw markdown only`;
 
-  // Build messages depending on whether we have actual PDF pages
+  // Always include full-chapter metadata (covers ALL pages) as primary context,
+  // plus a few PDF files for visual reference (imaging examples, diagrams).
+  const primaryContext = formatChapterContext(chapter);
+  const contextBlock = `## Source Material\n\n${primaryContext}${crossRefBlock}`;
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let messages: any[];
 
   if (hasFileIds) {
-    // MODE 1: Actual PDF pages available — Claude sees the real textbook
+    // Hybrid mode: full metadata for complete coverage + limited PDF files for visuals
+    const maxPdfFiles = 5;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const content: any[] = [];
-    for (const fid of effectiveFileIds) {
+    for (const fid of effectiveFileIds.slice(0, maxPdfFiles)) {
       content.push({
         type: "document",
         source: { type: "file", file_id: fid },
       });
     }
+    const extraNote = effectiveFileIds.length > maxPdfFiles
+      ? `\n\nNote: You see ${maxPdfFiles} of ${effectiveFileIds.length} PDF chunks above for visual reference. The full chapter content is provided in the text data below.`
+      : "";
     content.push({
       type: "text",
-      text: `You are an expert radiology educator. You can see the actual pages of this radiology textbook chapter above.${crossRefBlock}\n\n${studyGuideInstructions}`,
+      text: `You are an expert radiology educator. You can see actual pages from this radiology textbook chapter above for visual reference (imaging examples, diagrams).${extraNote}\n\nBelow is the complete processed data covering ALL pages of this chapter:\n\n${contextBlock}\n\n---\n\n${studyGuideInstructions}`,
     });
     messages = [{ role: "user", content }];
   } else {
-    // MODE 2: No PDF pages — use accumulated metadata as context
-    const primaryContext = formatChapterContext(chapter);
-
-    const contextBlock = `## Source Material\n\n${primaryContext}${crossRefBlock}`;
-
+    // Metadata-only mode: no PDF pages available
     messages = [{
       role: "user",
       content: `You are an expert radiology educator. Below is the accumulated study data for a topic. Synthesize ALL sources into a comprehensive, unified study guide.\n\n${contextBlock}\n\n---\n\n${studyGuideInstructions}`,
@@ -1341,9 +1345,28 @@ Requirements:
 - Target length: 2000-4000 words
 - Do NOT wrap the output in code fences — return raw markdown only`;
 
-        // Build messages with file IDs for full chapter context
-        // Limit to first 5 file IDs to avoid exceeding API limits for large chapters
-        const guideFileIds = fileIds.slice(0, 5);
+        // Hybrid approach: full-chapter metadata (covers ALL pages) + limited PDF visuals
+        // Re-read the chapter to get the just-saved metadata from Step 2
+        const freshChapter = await prisma.chapter.findUnique({ where: { id: chapter.id } });
+        const kp: string[] = JSON.parse(freshChapter?.keyPoints || "[]");
+        const hy: string[] = JSON.parse(freshChapter?.highYield || "[]");
+        const mn: Array<{ name: string; content: string }> = JSON.parse(freshChapter?.mnemonics || "[]");
+        const chapterMeta = `## Complete Chapter Data — ${chapter.bookSource === "core_radiology" ? "Core Radiology" : "Crack the Core"} Ch. ${chapter.number}: ${chapter.title}
+
+**Summary:** ${freshChapter?.summary || "(not available)"}
+
+**Key Points:**
+${kp.length > 0 ? kp.map((p) => `- ${p}`).join("\n") : "(none)"}
+
+**High-Yield Facts:**
+${hy.length > 0 ? hy.map((h) => `- ${h}`).join("\n") : "(none)"}
+
+**Mnemonics:**
+${mn.length > 0 ? mn.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(none)"}`;
+
+        // Attach up to 5 PDF chunks for visual reference (imaging examples)
+        const maxPdfFiles = 5;
+        const guideFileIds = fileIds.slice(0, maxPdfFiles);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const guideContent: any[] = [];
         for (const fid of guideFileIds) {
@@ -1352,9 +1375,12 @@ Requirements:
             source: { type: "file", file_id: fid },
           });
         }
+        const extraNote = fileIds.length > maxPdfFiles
+          ? `\n\nNote: You see ${maxPdfFiles} of ${fileIds.length} PDF chunks above for visual reference. The full chapter content is provided in the text data below.`
+          : "";
         guideContent.push({
           type: "text",
-          text: `You are an expert radiology educator. You can see the actual pages of this radiology textbook chapter above.${crossRefBlock}\n\n${guidePrompt}`,
+          text: `You are an expert radiology educator. You can see actual pages from this chapter above for visual reference.${extraNote}\n\nBelow is the complete processed data covering ALL pages of this chapter:\n\n${chapterMeta}${crossRefBlock}\n\n---\n\n${guidePrompt}`,
         });
 
         let studyGuide = "";
@@ -1371,26 +1397,9 @@ Requirements:
 
           studyGuide = (guideResponse.content[0] as { type: "text"; text: string }).text.trim();
         } catch (guideErr) {
-          // File-based study guide failed — fall back to metadata-based
-          console.error("File-based study guide failed, using metadata fallback:", guideErr);
+          // File-based failed — fall back to metadata-only (no PDFs attached)
+          console.error("File-based study guide failed, using metadata-only fallback:", guideErr);
           sendEvent({ status: "generating-guide", message: "Retrying study guide from processed data..." });
-
-          const freshChapter = await prisma.chapter.findUnique({ where: { id: chapter.id } });
-          const kp: string[] = JSON.parse(freshChapter?.keyPoints || "[]");
-          const hy: string[] = JSON.parse(freshChapter?.highYield || "[]");
-          const mn: Array<{ name: string; content: string }> = JSON.parse(freshChapter?.mnemonics || "[]");
-          const metaContext = `## Source: ${chapter.bookSource === "core_radiology" ? "Core Radiology" : "Crack the Core"} — Chapter ${chapter.number}: ${chapter.title}
-
-**Summary:** ${freshChapter?.summary || "(not available)"}
-
-**Key Points:**
-${kp.length > 0 ? kp.map((p) => `- ${p}`).join("\n") : "(none)"}
-
-**High-Yield Facts:**
-${hy.length > 0 ? hy.map((h) => `- ${h}`).join("\n") : "(none)"}
-
-**Mnemonics:**
-${mn.length > 0 ? mn.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(none)"}`;
 
           const fallbackResponse = await callClaudeWithRetry(() =>
             client.messages.create({
@@ -1398,7 +1407,7 @@ ${mn.length > 0 ? mn.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(no
               max_tokens: 12000,
               messages: [{
                 role: "user",
-                content: `You are an expert radiology educator. Below is the accumulated study data for a topic. Synthesize it into a comprehensive study guide.\n\n${metaContext}${crossRefBlock}\n\n---\n\n${guidePrompt}`,
+                content: `You are an expert radiology educator. Below is the complete processed data for a chapter. Synthesize it into a comprehensive study guide.\n\n${chapterMeta}${crossRefBlock}\n\n---\n\n${guidePrompt}`,
               }],
             })
           );

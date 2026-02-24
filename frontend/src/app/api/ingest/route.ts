@@ -125,15 +125,16 @@ async function handleTestKey() {
 
 /**
  * Detect chapters by sending the first pages of the PDF to Claude.
- * Claude reads the table of contents / first pages and identifies chapter structure.
+ * Supports both fileId (Files API) and pdfBase64 (legacy) modes.
  */
 async function handleDetectChapters(body: {
-  pdfBase64: string;
+  fileId?: string;
+  pdfBase64?: string;
   totalPages: number;
 }) {
-  const { pdfBase64, totalPages } = body;
-  if (!pdfBase64) {
-    return NextResponse.json({ error: "Missing 'pdfBase64' field" }, { status: 400 });
+  const { fileId, pdfBase64, totalPages } = body;
+  if (!fileId && !pdfBase64) {
+    return NextResponse.json({ error: "Must provide either 'fileId' or 'pdfBase64'" }, { status: 400 });
   }
 
   let client: Anthropic;
@@ -146,24 +147,7 @@ async function handleDetectChapters(body: {
     );
   }
 
-  const response = await client.messages.create({
-    model: "claude-sonnet-4-20250514",
-    max_tokens: 4000,
-    messages: [
-      {
-        role: "user",
-        content: [
-          {
-            type: "document",
-            source: {
-              type: "base64",
-              media_type: "application/pdf",
-              data: pdfBase64,
-            },
-          },
-          {
-            type: "text",
-            text: `This is the beginning of a radiology textbook (total ${totalPages} pages).
+  const promptText = `This is the beginning of a radiology textbook (total ${totalPages} pages).
 Analyze the table of contents or chapter headings visible in these pages.
 
 Return a JSON array of chapters with this exact format:
@@ -176,12 +160,32 @@ Rules:
 - Use the actual page numbers shown in the document
 - If you can see a table of contents, use it to determine page ranges
 - If no clear chapter structure is visible, divide the ${totalPages} pages into logical sections of ~30-50 pages each
-- Return ONLY valid JSON, no markdown fences or explanation`,
-          },
-        ],
-      },
-    ],
-  });
+- Return ONLY valid JSON, no markdown fences or explanation`;
+
+  const response = fileId
+    ? await client.beta.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 4000,
+        betas: ["files-api-2025-04-14"],
+        messages: [{
+          role: "user",
+          content: [
+            { type: "document", source: { type: "file", file_id: fileId } },
+            { type: "text", text: promptText },
+          ],
+        }],
+      })
+    : await client.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 4000,
+        messages: [{
+          role: "user",
+          content: [
+            { type: "document", source: { type: "base64", media_type: "application/pdf" as const, data: pdfBase64! } },
+            { type: "text", text: promptText },
+          ],
+        }],
+      });
 
   let responseText = (response.content[0] as { type: "text"; text: string }).text.trim();
   if (responseText.startsWith("```")) {
@@ -201,20 +205,29 @@ Rules:
 
 /**
  * Process a PDF chunk: send actual PDF pages to Claude for analysis.
- * Claude sees text, tables, AND images (X-rays, CT, MRI, diagrams).
+ * Supports two modes:
+ *   1. file_id mode (new): reference a file already uploaded to Anthropic Files API
+ *   2. pdfBase64 mode (legacy): send base64-encoded PDF inline
  */
 async function handleProcessPdf(body: {
-  pdfBase64: string;
+  fileId?: string;
+  pdfBase64?: string;
   chapterTitle: string;
   chapterNumber: number;
   bookSource: string;
   appendMode?: boolean;
 }) {
-  const { pdfBase64, chapterTitle, chapterNumber, bookSource, appendMode } = body;
+  const { fileId, pdfBase64, chapterTitle, chapterNumber, bookSource, appendMode } = body;
 
-  if (!pdfBase64 || !chapterTitle || !chapterNumber || !bookSource) {
+  if (!chapterTitle || !chapterNumber || !bookSource) {
     return NextResponse.json(
-      { error: "Missing required fields: pdfBase64, chapterTitle, chapterNumber, bookSource" },
+      { error: "Missing required fields: chapterTitle, chapterNumber, bookSource" },
+      { status: 400 }
+    );
+  }
+  if (!fileId && !pdfBase64) {
+    return NextResponse.json(
+      { error: "Must provide either 'fileId' or 'pdfBase64'" },
       { status: 400 }
     );
   }
@@ -312,29 +325,32 @@ Requirements:
 - Questions should mimic RadPrimer / FMH2 exam style
 - Return ONLY valid JSON, no markdown fences`;
 
-  const response = await client.messages.create({
-    model: "claude-sonnet-4-20250514",
-    max_tokens: 8000,
-    messages: [
-      {
-        role: "user",
-        content: [
-          {
-            type: "document",
-            source: {
-              type: "base64",
-              media_type: "application/pdf",
-              data: pdfBase64,
-            },
-          },
-          {
-            type: "text",
-            text: appendMode ? appendPrompt : fullPrompt,
-          },
-        ],
-      },
-    ],
-  });
+  // Use beta API when referencing uploaded files, standard API for base64
+  const promptText = appendMode ? appendPrompt : fullPrompt;
+  const response = fileId
+    ? await client.beta.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 8000,
+        betas: ["files-api-2025-04-14"],
+        messages: [{
+          role: "user",
+          content: [
+            { type: "document", source: { type: "file", file_id: fileId } },
+            { type: "text", text: promptText },
+          ],
+        }],
+      })
+    : await client.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 8000,
+        messages: [{
+          role: "user",
+          content: [
+            { type: "document", source: { type: "base64", media_type: "application/pdf" as const, data: pdfBase64! } },
+            { type: "text", text: promptText },
+          ],
+        }],
+      });
 
   let responseText = (response.content[0] as { type: "text"; text: string }).text.trim();
   if (responseText.startsWith("```")) {

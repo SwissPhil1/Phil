@@ -24,41 +24,24 @@ interface ProcessResult {
   flashcardsCreated: number;
 }
 
+interface UploadedChunk {
+  fileId: string;
+  chapterNumber: number;
+  chunkIndex: number;
+  totalChunks: number;
+  pageStart: number;
+  pageEnd: number;
+}
+
 type ChapterStatus =
   | { state: "pending" }
-  | { state: "splitting" }
+  | { state: "uploading" }
   | { state: "processing"; chunk?: number; totalChunks?: number }
   | { state: "done"; result: ProcessResult }
   | { state: "error"; message: string };
 
-/** Convert a Uint8Array to a base64 string — avoids btoa() which crashes on iPad Safari */
-function uint8ToBase64(bytes: Uint8Array): string {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-  const len = bytes.length;
-  const segments: string[] = [];
-
-  // Process in 12288-byte segments (divisible by 3) for memory efficiency
-  for (let offset = 0; offset < len; offset += 12288) {
-    let segment = '';
-    const end = Math.min(offset + 12288, len);
-    for (let i = offset; i < end; i += 3) {
-      const b0 = bytes[i];
-      const b1 = i + 1 < len ? bytes[i + 1] : 0;
-      const b2 = i + 2 < len ? bytes[i + 2] : 0;
-      segment +=
-        chars[b0 >> 2] +
-        chars[((b0 & 3) << 4) | (b1 >> 4)] +
-        (i + 1 < len ? chars[((b1 & 15) << 2) | (b2 >> 6)] : '=') +
-        (i + 2 < len ? chars[b2 & 63] : '=');
-    }
-    segments.push(segment);
-  }
-
-  return segments.join('');
-}
-
 export default function IngestPage() {
-  const [pdfBytes, setPdfBytes] = useState<Uint8Array | null>(null);
+  const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [pdfName, setPdfName] = useState("");
   const [totalPages, setTotalPages] = useState(0);
   const [bookSource, setBookSource] = useState("core_radiology");
@@ -81,8 +64,6 @@ export default function IngestPage() {
   // API key diagnostic
   const [keyTest, setKeyTest] = useState<{ testing: boolean; result?: Record<string, unknown> }>({ testing: false });
 
-  const PAGES_PER_CHUNK = 10; // Max pages per Claude request (kept small for Vercel 4.5MB body limit)
-
   const testApiKey = useCallback(async () => {
     setKeyTest({ testing: true });
     try {
@@ -99,6 +80,7 @@ export default function IngestPage() {
   }, []);
 
   // ─── Step 1: Load PDF ─────────────────────────────────────────────────
+  // Only reads the File object + page count. No base64, no heavy memory use.
   const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -109,14 +91,13 @@ export default function IngestPage() {
     setSelectedChapters(new Set());
 
     try {
-      const arrayBuffer = await file.arrayBuffer();
-      const bytes = new Uint8Array(arrayBuffer);
-      setPdfBytes(bytes);
+      setPdfFile(file);
       setPdfName(file.name);
 
-      // Use pdf-lib to get page count
+      // Use pdf-lib just to get page count (lightweight)
+      const arrayBuffer = await file.arrayBuffer();
       const { PDFDocument } = await import("pdf-lib");
-      const pdf = await PDFDocument.load(bytes, { ignoreEncryption: true });
+      const pdf = await PDFDocument.load(new Uint8Array(arrayBuffer), { ignoreEncryption: true });
       const pages = pdf.getPageCount();
       setTotalPages(pages);
       setStatusMsg(`Loaded "${file.name}" — ${pages} pages, ${(file.size / 1024 / 1024).toFixed(1)} MB`);
@@ -126,33 +107,44 @@ export default function IngestPage() {
   }, []);
 
   // ─── Step 2: Detect Chapters via Claude ────────────────────────────────
+  // Uploads first 15 pages server-side via Files API, then asks Claude to detect chapters.
   const detectChapters = useCallback(async () => {
-    if (!pdfBytes || totalPages === 0) return;
+    if (!pdfFile || totalPages === 0) return;
 
     setDetecting(true);
-    setStatusMsg("Sending first pages to Claude for chapter detection...");
+    setStatusMsg("Uploading PDF to server for chapter detection...");
 
     try {
-      const { PDFDocument } = await import("pdf-lib");
-      const fullPdf = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+      // Upload the first 15 pages for TOC detection
+      const tocChapter = { number: 0, title: "TOC", startPage: 1, endPage: Math.min(15, totalPages) };
+      const formData = new FormData();
+      formData.append("pdf", pdfFile);
+      formData.append("chapters", JSON.stringify([tocChapter]));
+      formData.append("maxPagesPerChunk", "15");
 
-      // Extract first 15 pages (likely cover + table of contents)
-      const tocPages = Math.min(15, totalPages);
-      const tocPdf = await PDFDocument.create();
-      const copied = await tocPdf.copyPages(
-        fullPdf,
-        Array.from({ length: tocPages }, (_, i) => i)
-      );
-      copied.forEach((p) => tocPdf.addPage(p));
-      const tocBytes = await tocPdf.save();
-      const tocBase64 = uint8ToBase64(new Uint8Array(tocBytes));
+      const uploadRes = await fetch("/api/upload-pdf", { method: "POST", body: formData });
+      const uploadData = await uploadRes.json();
 
+      if (uploadData.error) {
+        setStatusMsg(`Upload error: ${uploadData.error}`);
+        return;
+      }
+
+      const tocFileId = uploadData.chunks[0]?.fileId;
+      if (!tocFileId) {
+        setStatusMsg("Upload succeeded but no file ID returned");
+        return;
+      }
+
+      setStatusMsg("Claude is analyzing the table of contents...");
+
+      // Now call detect-chapters with the file ID
       const res = await fetch("/api/ingest", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "detect-chapters",
-          pdfBase64: tocBase64,
+          fileId: tocFileId,
           totalPages,
         }),
       });
@@ -172,50 +164,52 @@ export default function IngestPage() {
     } finally {
       setDetecting(false);
     }
-  }, [pdfBytes, totalPages]);
+  }, [pdfFile, totalPages]);
 
-  // ─── Step 3: Process a Single Chapter (all chunks) ─────────────────────
+  // ─── Step 3: Process a Single Chapter ──────────────────────────────────
+  // Uploads chapter pages server-side, then processes each chunk via file_id.
   const processChapter = useCallback(
     async (chapter: DetectedChapter) => {
-      if (!pdfBytes) return;
+      if (!pdfFile) return;
 
-      const { PDFDocument } = await import("pdf-lib");
-      const fullPdf = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
-
-      // Chapter page range (1-based in the chapter data, 0-based for pdf-lib)
-      const startIdx = Math.max(0, chapter.startPage - 1);
-      const endIdx = Math.min(totalPages, chapter.endPage);
-      const chapterPageCount = endIdx - startIdx;
-      const numChunks = Math.ceil(chapterPageCount / PAGES_PER_CHUNK);
-
-      setStatuses((prev) => ({ ...prev, [chapter.number]: { state: "splitting" } }));
+      setStatuses((prev) => ({ ...prev, [chapter.number]: { state: "uploading" } }));
 
       try {
-        for (let chunkIdx = 0; chunkIdx < numChunks; chunkIdx++) {
-          const chunkStart = startIdx + chunkIdx * PAGES_PER_CHUNK;
-          const chunkEnd = Math.min(chunkStart + PAGES_PER_CHUNK, endIdx);
-          const pagesToSend = chunkEnd - chunkStart;
+        // Step A: Upload this chapter's pages to server → Files API
+        const formData = new FormData();
+        formData.append("pdf", pdfFile);
+        formData.append("chapters", JSON.stringify([chapter]));
+        formData.append("maxPagesPerChunk", "100");
 
-          // Extract this chunk's pages into a new PDF
-          const chunkPdf = await PDFDocument.create();
-          const indices = Array.from({ length: pagesToSend }, (_, i) => chunkStart + i);
-          const pages = await chunkPdf.copyPages(fullPdf, indices);
-          pages.forEach((p) => chunkPdf.addPage(p));
-          const chunkBytes = await chunkPdf.save();
-          const chunkBase64 = uint8ToBase64(new Uint8Array(chunkBytes));
+        const uploadRes = await fetch("/api/upload-pdf", { method: "POST", body: formData });
+        const uploadData = await uploadRes.json();
+
+        if (uploadData.error) {
+          setStatuses((prev) => ({
+            ...prev,
+            [chapter.number]: { state: "error", message: `Upload failed: ${uploadData.error}` },
+          }));
+          return;
+        }
+
+        const chunks: UploadedChunk[] = uploadData.chunks;
+
+        // Step B: Process each chunk via Claude using file_id
+        for (let i = 0; i < chunks.length; i++) {
+          const chunk = chunks[i];
 
           setStatuses((prev) => ({
             ...prev,
-            [chapter.number]: { state: "processing", chunk: chunkIdx + 1, totalChunks: numChunks },
+            [chapter.number]: { state: "processing", chunk: i + 1, totalChunks: chunks.length },
           }));
 
-          const isAppend = chunkIdx > 0;
+          const isAppend = i > 0;
           const res = await fetch("/api/ingest", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               action: "process-pdf",
-              pdfBase64: chunkBase64,
+              fileId: chunk.fileId,
               chapterTitle: chapter.title,
               chapterNumber: chapter.number,
               bookSource,
@@ -229,16 +223,16 @@ export default function IngestPage() {
               ...prev,
               [chapter.number]: {
                 state: "error",
-                message: numChunks > 1
-                  ? `Chunk ${chunkIdx + 1}/${numChunks}: ${data.error}`
+                message: chunks.length > 1
+                  ? `Chunk ${i + 1}/${chunks.length}: ${data.error}`
                   : data.error,
               },
             }));
             return;
           }
 
-          // Update with latest totals after each chunk
-          if (chunkIdx === numChunks - 1) {
+          // Final chunk → mark done
+          if (i === chunks.length - 1) {
             setStatuses((prev) => ({
               ...prev,
               [chapter.number]: { state: "done", result: data },
@@ -246,7 +240,7 @@ export default function IngestPage() {
           }
 
           // Small delay between chunks to avoid rate limits
-          if (chunkIdx < numChunks - 1) {
+          if (i < chunks.length - 1) {
             await new Promise((r) => setTimeout(r, 1500));
           }
         }
@@ -260,7 +254,7 @@ export default function IngestPage() {
         }));
       }
     },
-    [pdfBytes, totalPages, bookSource]
+    [pdfFile, bookSource]
   );
 
   // ─── Process All Selected ──────────────────────────────────────────────
@@ -311,7 +305,7 @@ export default function IngestPage() {
     });
   };
 
-  const isAnyProcessing = processingAll || Object.values(statuses).some((s) => s.state === "processing" || s.state === "splitting");
+  const isAnyProcessing = processingAll || Object.values(statuses).some((s) => s.state === "processing" || s.state === "uploading");
 
   // ─── Render ────────────────────────────────────────────────────────────
   return (
@@ -508,8 +502,8 @@ export default function IngestPage() {
           </div>
 
           <p className="text-xs text-muted-foreground">
-            Each chapter&apos;s PDF pages are sent directly to Claude — text, tables, and images are all analyzed.
-            Large chapters are split into {PAGES_PER_CHUNK}-page chunks and processed sequentially.
+            PDF is uploaded to the server and processed via the Anthropic Files API — no base64 encoding on your device.
+            Large chapters (&gt;100 pages) are split into chunks automatically.
           </p>
 
           <div className="space-y-2">
@@ -518,7 +512,7 @@ export default function IngestPage() {
               const pageCount = ch.endPage - ch.startPage + 1;
               const isDone = status?.state === "done";
               const isError = status?.state === "error";
-              const isActive = status?.state === "processing" || status?.state === "splitting";
+              const isActive = status?.state === "processing" || status?.state === "uploading";
 
               return (
                 <div
@@ -549,10 +543,10 @@ export default function IngestPage() {
                     </span>
                   </div>
 
-                  {status?.state === "splitting" && (
+                  {status?.state === "uploading" && (
                     <span className="flex items-center gap-1 text-sm text-blue-600">
                       <Loader2 className="h-4 w-4 animate-spin" />
-                      Splitting PDF...
+                      Uploading to server...
                     </span>
                   )}
                   {status?.state === "processing" && (

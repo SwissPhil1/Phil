@@ -513,27 +513,28 @@ async function saveContentToDB(
   bookSource: string,
   rawText?: string
 ) {
+  // Defensive coercion — Claude's JSON might have unexpected types
   const chapter = await prisma.chapter.upsert({
-    where: { bookSource_number: { bookSource, number: chapterNumber } },
+    where: { bookSource_number: { bookSource: String(bookSource), number: Number(chapterNumber) } },
     update: {
-      title: chapterTitle,
+      title: String(chapterTitle),
       rawText: rawText || null,
-      summary: content.summary,
-      keyPoints: JSON.stringify(content.keyPoints),
-      highYield: JSON.stringify(content.highYield),
-      mnemonics: JSON.stringify(content.mnemonics),
-      memoryPalace: content.memoryPalace,
+      summary: content.summary != null ? String(content.summary) : null,
+      keyPoints: JSON.stringify(content.keyPoints || []),
+      highYield: JSON.stringify(content.highYield || []),
+      mnemonics: JSON.stringify(content.mnemonics || []),
+      memoryPalace: content.memoryPalace != null ? String(content.memoryPalace) : null,
     },
     create: {
-      bookSource,
-      number: chapterNumber,
-      title: chapterTitle,
+      bookSource: String(bookSource),
+      number: Number(chapterNumber),
+      title: String(chapterTitle),
       rawText: rawText || null,
-      summary: content.summary,
-      keyPoints: JSON.stringify(content.keyPoints),
-      highYield: JSON.stringify(content.highYield),
-      mnemonics: JSON.stringify(content.mnemonics),
-      memoryPalace: content.memoryPalace,
+      summary: content.summary != null ? String(content.summary) : null,
+      keyPoints: JSON.stringify(content.keyPoints || []),
+      highYield: JSON.stringify(content.highYield || []),
+      mnemonics: JSON.stringify(content.mnemonics || []),
+      memoryPalace: content.memoryPalace != null ? String(content.memoryPalace) : null,
     },
   });
 
@@ -543,27 +544,29 @@ async function saveContentToDB(
   await prisma.flashcardReview.deleteMany({ where: { flashcard: { chapterId: chapter.id } } });
   await prisma.flashcard.deleteMany({ where: { chapterId: chapter.id } });
 
-  for (const q of content.questions) {
+  const questions = Array.isArray(content.questions) ? content.questions : [];
+  for (const q of questions) {
     await prisma.question.create({
       data: {
         chapterId: chapter.id,
-        questionText: q.questionText,
-        options: JSON.stringify(q.options),
-        correctAnswer: q.correctAnswer,
-        explanation: q.explanation,
-        difficulty: q.difficulty || "medium",
-        category: q.category,
+        questionText: String(q.questionText || ""),
+        options: JSON.stringify(q.options || []),
+        correctAnswer: Number(q.correctAnswer) || 0,
+        explanation: String(q.explanation || ""),
+        difficulty: String(q.difficulty || "medium"),
+        category: q.category ? String(q.category) : null,
       },
     });
   }
 
-  for (const f of content.flashcards) {
+  const flashcards = Array.isArray(content.flashcards) ? content.flashcards : [];
+  for (const f of flashcards) {
     await prisma.flashcard.create({
       data: {
         chapterId: chapter.id,
-        front: f.front,
-        back: f.back,
-        category: f.category,
+        front: String(f.front || ""),
+        back: String(f.back || ""),
+        category: f.category ? String(f.category) : null,
       },
     });
   }
@@ -571,8 +574,8 @@ async function saveContentToDB(
   return {
     success: true,
     chapterId: chapter.id,
-    questionsCreated: content.questions.length,
-    flashcardsCreated: content.flashcards.length,
+    questionsCreated: questions.length,
+    flashcardsCreated: flashcards.length,
   };
 }
 
@@ -597,7 +600,7 @@ async function appendContentToDB(
   bookSource: string
 ) {
   const chapter = await prisma.chapter.findUnique({
-    where: { bookSource_number: { bookSource, number: chapterNumber } },
+    where: { bookSource_number: { bookSource: String(bookSource), number: Number(chapterNumber) } },
   });
 
   if (!chapter) {
@@ -609,32 +612,34 @@ async function appendContentToDB(
   await prisma.chapter.update({
     where: { id: chapter.id },
     data: {
-      keyPoints: JSON.stringify([...existingKeyPoints, ...content.keyPoints]),
-      highYield: JSON.stringify([...existingHighYield, ...content.highYield]),
+      keyPoints: JSON.stringify([...existingKeyPoints, ...(content.keyPoints || [])]),
+      highYield: JSON.stringify([...existingHighYield, ...(content.highYield || [])]),
     },
   });
 
-  for (const q of content.questions) {
+  const questions = Array.isArray(content.questions) ? content.questions : [];
+  for (const q of questions) {
     await prisma.question.create({
       data: {
         chapterId: chapter.id,
-        questionText: q.questionText,
-        options: JSON.stringify(q.options),
-        correctAnswer: q.correctAnswer,
-        explanation: q.explanation,
-        difficulty: q.difficulty || "medium",
-        category: q.category,
+        questionText: String(q.questionText || ""),
+        options: JSON.stringify(q.options || []),
+        correctAnswer: Number(q.correctAnswer) || 0,
+        explanation: String(q.explanation || ""),
+        difficulty: String(q.difficulty || "medium"),
+        category: q.category ? String(q.category) : null,
       },
     });
   }
 
-  for (const f of content.flashcards) {
+  const flashcards = Array.isArray(content.flashcards) ? content.flashcards : [];
+  for (const f of flashcards) {
     await prisma.flashcard.create({
       data: {
         chapterId: chapter.id,
-        front: f.front,
-        back: f.back,
-        category: f.category,
+        front: String(f.front || ""),
+        back: String(f.back || ""),
+        category: f.category ? String(f.category) : null,
       },
     });
   }

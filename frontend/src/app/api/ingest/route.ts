@@ -186,9 +186,9 @@ Rules:
 - If no clear chapter structure is visible, divide the ${totalPages} pages into logical sections of ~30-50 pages each
 - Return ONLY valid JSON, no markdown fences or explanation`;
 
-  const response = await callClaudeWithRetry(() =>
-    fileId
-      ? client.beta.messages.create({
+  const response = fileId
+    ? await callClaudeWithRetry(() =>
+        client.beta.messages.create({
           model: "claude-sonnet-4-20250514",
           max_tokens: 4000,
           betas: ["files-api-2025-04-14"],
@@ -200,7 +200,9 @@ Rules:
             ],
           }],
         })
-      : client.messages.create({
+      )
+    : await callClaudeWithRetry(() =>
+        client.messages.create({
           model: "claude-sonnet-4-20250514",
           max_tokens: 4000,
           messages: [{
@@ -211,7 +213,7 @@ Rules:
             ],
           }],
         })
-  );
+      );
 
   let responseText = (response.content[0] as { type: "text"; text: string }).text.trim();
   if (responseText.startsWith("```")) {
@@ -377,9 +379,9 @@ Requirements:
 
       try {
         // Call Claude with retry on transient errors (529 overloaded, 429 rate limit)
-        const response = await callClaudeWithRetry(() =>
-          fileId
-            ? client.beta.messages.create({
+        const response = fileId
+          ? await callClaudeWithRetry(() =>
+              client.beta.messages.create({
                 model: "claude-sonnet-4-20250514",
                 max_tokens: 8000,
                 betas: ["files-api-2025-04-14"],
@@ -391,7 +393,9 @@ Requirements:
                   ],
                 }],
               })
-            : client.messages.create({
+            )
+          : await callClaudeWithRetry(() =>
+              client.messages.create({
                 model: "claude-sonnet-4-20250514",
                 max_tokens: 8000,
                 messages: [{
@@ -402,7 +406,7 @@ Requirements:
                   ],
                 }],
               })
-        );
+            );
 
         // Parse Claude's JSON response
         let responseText = (response.content[0] as { type: "text"; text: string }).text.trim();

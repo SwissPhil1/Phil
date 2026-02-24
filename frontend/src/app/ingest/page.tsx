@@ -23,7 +23,8 @@ export default function IngestPage() {
   const [processing, setProcessing] = useState<number | null>(null);
   const [results, setResults] = useState<Record<number, ProcessResult | { error: string }>>({});
   const [extracting, setExtracting] = useState(false);
-  const [extractProgress, setExtractProgress] = useState<{ current: number; total: number } | null>(null);
+  const [uploadPhase, setUploadPhase] = useState<"uploading" | "extracting" | null>(null);
+  const [uploadPercent, setUploadPercent] = useState(0);
   const [selectedChapters, setSelectedChapters] = useState<Set<number>>(new Set());
 
   const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -31,71 +32,83 @@ export default function IngestPage() {
     if (!file) return;
 
     setExtracting(true);
-    setExtractProgress(null);
+    setUploadPhase("uploading");
+    setUploadPercent(0);
     setChapters([]);
     setResults({});
+    setPdfText("");
 
     try {
-      // Read PDF as text using FileReader
-      // For PDF files, we need to extract text client-side
-      // Using pdf.js via dynamic import for browser-based extraction
-      const arrayBuffer = await file.arrayBuffer();
+      const CHUNK_SIZE = 3.5 * 1024 * 1024; // 3.5MB per chunk (under Vercel's 4.5MB body limit)
+      const uploadId = crypto.randomUUID();
+      const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
 
-      // Use pdf.js to extract text in the browser
-      const pdfjsLib = await import("pdfjs-dist");
-      pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
+      setPdfText(
+        `Uploading ${(file.size / 1024 / 1024).toFixed(1)} MB in ${totalChunks} chunk${totalChunks > 1 ? "s" : ""}...`
+      );
 
-      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-      let text = "";
-      setExtractProgress({ current: 0, total: pdf.numPages });
+      // Upload file in chunks
+      for (let i = 0; i < totalChunks; i++) {
+        const start = i * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, file.size);
+        const chunk = file.slice(start, end);
 
-      for (let i = 1; i <= pdf.numPages; i++) {
-        setExtractProgress({ current: i, total: pdf.numPages });
-        const page = await pdf.getPage(i);
-        const content = await page.getTextContent();
-        const pageText = content.items
-          .map((item) => ("str" in item ? item.str : ""))
-          .join(" ");
-        text += `\n--- PAGE ${i} ---\n${pageText}`;
-      }
+        const formData = new FormData();
+        formData.append("chunk", chunk);
+        formData.append("uploadId", uploadId);
+        formData.append("chunkIndex", String(i));
+        formData.append("totalChunks", String(totalChunks));
 
-      setPdfText(`Extracted ${text.length} characters from ${pdf.numPages} pages`);
-
-      // Send to API for chapter detection
-      const res = await fetch("/api/ingest", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "extract", text }),
-      });
-
-      const data = await res.json();
-      if (data.chapters) {
-        // Attach actual text to each chapter
-        const chapterPattern = /(?:^|\n)\s*(?:CHAPTER|Chapter)\s+(\d+)[:\s.]*([^\n]+)/gm;
-        const matches: { index: number; number: number }[] = [];
-        let match;
-        while ((match = chapterPattern.exec(text)) !== null) {
-          matches.push({ index: match.index, number: parseInt(match[1], 10) });
-        }
-
-        const chaptersWithText = data.chapters.map((ch: ExtractedChapter, i: number) => {
-          if (matches.length === 0) {
-            return { ...ch, text: text.slice(0, 50000) };
-          }
-          const start = matches[i]?.index ?? 0;
-          const end = i + 1 < matches.length ? matches[i + 1].index : text.length;
-          return { ...ch, text: text.slice(start, end) };
+        const res = await fetch("/api/ingest/upload-chunk", {
+          method: "POST",
+          body: formData,
         });
 
-        setChapters(chaptersWithText);
-        setSelectedChapters(new Set(chaptersWithText.map((c: ExtractedChapter) => c.number)));
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(
+            data.error || `Failed to upload chunk ${i + 1}/${totalChunks}`
+          );
+        }
+
+        setUploadPercent(Math.round(((i + 1) / totalChunks) * 100));
+      }
+
+      // All chunks uploaded — trigger server-side extraction
+      setUploadPhase("extracting");
+      setPdfText("Server is extracting text from PDF...");
+
+      const res = await fetch("/api/ingest/extract-pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uploadId, totalChunks }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to extract text from PDF");
+      }
+
+      const data = await res.json();
+
+      if (data.chapters) {
+        setPdfText(
+          `Extracted ${data.totalChars.toLocaleString()} characters from ${data.totalPages} pages — ${data.chapters.length} chapter(s) found`
+        );
+        setChapters(data.chapters);
+        setSelectedChapters(
+          new Set(data.chapters.map((c: ExtractedChapter) => c.number))
+        );
       }
     } catch (err) {
-      console.error("PDF extraction error:", err);
-      setPdfText(`Error: ${err instanceof Error ? err.message : "Failed to read PDF"}`);
+      console.error("PDF upload error:", err);
+      setPdfText(
+        `Error: ${err instanceof Error ? err.message : "Upload failed"}. Try using "Paste Chapter Text" below.`
+      );
     } finally {
       setExtracting(false);
-      setExtractProgress(null);
+      setUploadPhase(null);
+      setUploadPercent(0);
     }
   }, []);
 
@@ -200,21 +213,27 @@ export default function IngestPage() {
             )}
             <p className="text-sm text-muted-foreground">
               {extracting
-                ? extractProgress
-                  ? `Extracting page ${extractProgress.current} of ${extractProgress.total}...`
-                  : "Loading PDF..."
+                ? uploadPhase === "uploading"
+                  ? `Uploading PDF... ${uploadPercent}%`
+                  : "Server is extracting text from PDF..."
                 : "Click to upload a PDF file"}
             </p>
-            {extracting && extractProgress && extractProgress.total > 0 && (
+            {extracting && (
               <div className="w-64 mt-2">
                 <div className="h-2 bg-muted rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-primary rounded-full transition-all duration-200"
-                    style={{ width: `${Math.round((extractProgress.current / extractProgress.total) * 100)}%` }}
-                  />
+                  {uploadPhase === "uploading" ? (
+                    <div
+                      className="h-full bg-primary rounded-full transition-all duration-200"
+                      style={{ width: `${uploadPercent}%` }}
+                    />
+                  ) : (
+                    <div className="h-full bg-primary rounded-full animate-pulse" style={{ width: "100%" }} />
+                  )}
                 </div>
                 <p className="text-xs text-muted-foreground mt-1 text-center">
-                  {Math.round((extractProgress.current / extractProgress.total) * 100)}%
+                  {uploadPhase === "uploading"
+                    ? `${uploadPercent}% uploaded`
+                    : "Extracting text on server..."}
                 </p>
               </div>
             )}

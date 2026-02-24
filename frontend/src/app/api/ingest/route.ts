@@ -694,22 +694,27 @@ async function appendContentToDB(
 
 /**
  * Generate a comprehensive study guide for an existing chapter.
- * Uses the chapter's accumulated data (summary, key points, high yield, mnemonics)
- * as context, then generates a cohesive markdown study guide in a dedicated call.
+ *
+ * Two modes:
+ * 1. With fileIds (right after ingest): sends actual PDF pages to Claude →
+ *    study guide based on the REAL textbook content.
+ * 2. Without fileIds (regenerate from chapter page): uses the chapter's
+ *    accumulated metadata (summary, key points, etc.) as context.
  *
  * This is separate from chunk processing because:
- * 1. Markdown inside JSON is fragile (quotes, newlines break parsing)
- * 2. The study guide should be holistic (full chapter context), not per-chunk fragments
- * 3. It can use the full token budget for quality content
+ * - Markdown inside JSON is fragile (quotes, newlines break parsing)
+ * - The study guide should be holistic (full chapter context)
+ * - Raw markdown output avoids all JSON escaping issues
  *
- * Uses SSE streaming (heartbeats) like process-pdf to survive long Claude calls.
+ * Uses SSE streaming (heartbeats) to survive long Claude calls.
  */
 async function handleGenerateStudyGuide(body: {
   chapterId?: number;
   chapterNumber?: number;
   bookSource?: string;
+  fileIds?: string[];
 }) {
-  const { chapterId, chapterNumber, bookSource } = body;
+  const { chapterId, chapterNumber, bookSource, fileIds } = body;
 
   // Look up the chapter
   const chapter = chapterId
@@ -734,13 +739,59 @@ async function handleGenerateStudyGuide(body: {
     );
   }
 
-  // Build context from the chapter's accumulated data
-  const keyPoints: string[] = JSON.parse(chapter.keyPoints || "[]");
-  const highYield: string[] = JSON.parse(chapter.highYield || "[]");
-  const mnemonics: Array<{ name: string; content: string }> = JSON.parse(chapter.mnemonics || "[]");
+  const hasFileIds = Array.isArray(fileIds) && fileIds.length > 0;
 
-  const contextBlock = `
-## Chapter Context
+  // ── Build the prompt ────────────────────────────────────────────────────
+  const studyGuideInstructions = `Write a comprehensive study guide for Chapter ${chapter.number}: "${chapter.title}". This should be a single, cohesive document that a radiology resident would actually want to read the night before the Swiss FMH2 radiology specialty exam.
+
+## Structure:
+1. **## Overview** — 2-3 sentence orientation: what this chapter covers and why it matters clinically.
+2. **## Core Concepts** — Walk through the key topics systematically. Use ### subheadings for each major concept. For each:
+   - Explain the pathophysiology/anatomy briefly
+   - Describe the **imaging appearance** on each relevant modality (CT, MRI, US, X-ray) using bullet points
+   - Note **classic signs** (e.g., "double duct sign", "target sign") in **bold**
+   - Include differential diagnosis where relevant
+3. **## High-Yield Exam Points** — A clearly marked section with the facts most likely to appear on exams. Use ⚡ bullet markers.
+4. **## Mnemonics & Memory Aids** — Create memorable mnemonics for key concepts. Format each as a bold title followed by explanation.
+5. **## Differential Diagnosis Tables** — Where applicable, use markdown tables comparing entities (columns: Entity | Key Finding | Distinguishing Feature).
+6. **## Active Recall** — End with 8-10 "Stop and think" questions (no answers — force the reader to recall). Format as a blockquote section with > markers.
+
+## Style rules:
+- Use **bold** for critical terms and classic signs
+- Use *italics* for modality-specific descriptions
+- Use markdown tables for comparisons
+- Use > blockquotes for active recall prompts
+- Keep it dense but readable — no filler
+- Reference specific imaging findings from the chapter content
+- Target length: 2000-4000 words
+- Do NOT wrap the output in code fences — return raw markdown only`;
+
+  // Build messages depending on whether we have actual PDF pages
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let messages: any[];
+
+  if (hasFileIds) {
+    // MODE 1: Actual PDF pages available — Claude sees the real textbook
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const content: any[] = [];
+    for (const fid of fileIds) {
+      content.push({
+        type: "document",
+        source: { type: "file", file_id: fid },
+      });
+    }
+    content.push({
+      type: "text",
+      text: `You are an expert radiology educator. You can see the actual pages of this radiology textbook chapter above.\n\n${studyGuideInstructions}`,
+    });
+    messages = [{ role: "user", content }];
+  } else {
+    // MODE 2: No PDF pages — use accumulated metadata as context
+    const keyPoints: string[] = JSON.parse(chapter.keyPoints || "[]");
+    const highYield: string[] = JSON.parse(chapter.highYield || "[]");
+    const mnemonics: Array<{ name: string; content: string }> = JSON.parse(chapter.mnemonics || "[]");
+
+    const contextBlock = `## Chapter Data
 **Book:** ${chapter.bookSource}
 **Chapter ${chapter.number}:** ${chapter.title}
 
@@ -757,39 +808,13 @@ ${highYield.length > 0 ? highYield.map((h) => `- ${h}`).join("\n") : "(none)"}
 ${mnemonics.length > 0 ? mnemonics.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(none)"}
 
 ### Memory Palace
-${chapter.memoryPalace || "(not available)"}
-`.trim();
+${chapter.memoryPalace || "(not available)"}`;
 
-  const prompt = `You are an expert radiology educator helping a resident prepare for the Swiss FMH2 radiology specialty exam.
-
-Below is the accumulated study data for a chapter. Your task is to synthesize this into a **comprehensive, exam-focused study guide** in markdown format.
-
-${contextBlock}
-
----
-
-Write a comprehensive study guide for this chapter. This should be a single, cohesive document that a radiology resident would actually want to read the night before the FMH2 exam.
-
-## Structure:
-1. **## Overview** — 2-3 sentence orientation: what this chapter covers and why it matters clinically.
-2. **## Core Concepts** — Walk through the key topics systematically. Use ### subheadings for each major concept. For each:
-   - Explain the pathophysiology/anatomy briefly
-   - Describe the **imaging appearance** on each relevant modality (CT, MRI, US, X-ray) using bullet points
-   - Note **classic signs** (e.g., "double duct sign", "target sign") in **bold**
-   - Include differential diagnosis where relevant
-3. **## High-Yield Exam Points** — A clearly marked section with the facts most likely to appear on exams. Use ⚡ bullet markers.
-4. **## Mnemonics & Memory Aids** — Integrate the mnemonics from above naturally, plus add new ones. Format each as a bold title followed by explanation.
-5. **## Differential Diagnosis Tables** — Where applicable, use markdown tables comparing entities (columns: Entity | Key Finding | Distinguishing Feature).
-6. **## Active Recall** — End with 8-10 "Stop and think" questions (no answers — force the reader to recall). Format as a blockquote section with > markers.
-
-## Style rules:
-- Use **bold** for critical terms and classic signs
-- Use *italics* for modality-specific descriptions
-- Use markdown tables for comparisons
-- Use > blockquotes for active recall prompts
-- Keep it dense but readable — no filler
-- Target length: 2000-4000 words
-- Do NOT wrap the output in code fences — return raw markdown only`;
+    messages = [{
+      role: "user",
+      content: `You are an expert radiology educator. Below is the accumulated study data for a chapter. Synthesize this into a comprehensive study guide.\n\n${contextBlock}\n\n---\n\n${studyGuideInstructions}`,
+    }];
+  }
 
   // ── SSE streaming response ─────────────────────────────────────────────
   const encoder = new TextEncoder();
@@ -809,15 +834,29 @@ Write a comprehensive study guide for this chapter. This should be a single, coh
       }, 8000);
 
       try {
-        const response = await callClaudeWithRetry(() =>
-          client.messages.create({
-            model: "claude-sonnet-4-20250514",
-            max_tokens: 12000,
-            messages: [{ role: "user", content: prompt }],
-          })
-        );
+        const response = hasFileIds
+          ? await callClaudeWithRetry(() =>
+              client.beta.messages.create({
+                model: "claude-sonnet-4-20250514",
+                max_tokens: 16000,
+                betas: ["files-api-2025-04-14"],
+                messages,
+              })
+            )
+          : await callClaudeWithRetry(() =>
+              client.messages.create({
+                model: "claude-sonnet-4-20250514",
+                max_tokens: 12000,
+                messages,
+              })
+            );
 
-        const studyGuide = (response.content[0] as { type: "text"; text: string }).text.trim();
+        let studyGuide = (response.content[0] as { type: "text"; text: string }).text.trim();
+
+        // Strip code fences if Claude wraps the output anyway
+        if (studyGuide.startsWith("```")) {
+          studyGuide = studyGuide.replace(/^```(?:markdown|md)?\n?/, "").replace(/\n?```$/, "");
+        }
 
         // Save directly to the chapter
         await prisma.chapter.update({
@@ -829,6 +868,7 @@ Write a comprehensive study guide for this chapter. This should be a single, coh
           success: true,
           chapterId: chapter.id,
           studyGuideLength: studyGuide.length,
+          mode: hasFileIds ? "pdf" : "metadata",
         });
       } catch (err: unknown) {
         const anthropicError = err as { status?: number; error?: { type?: string; message?: string } };

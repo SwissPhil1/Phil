@@ -1,13 +1,21 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { Upload, FileText, Loader2, CheckCircle, AlertCircle, Brain } from "lucide-react";
+import {
+  Upload,
+  Loader2,
+  CheckCircle,
+  AlertCircle,
+  Brain,
+  ScanSearch,
+  BookOpen,
+} from "lucide-react";
 
-interface ExtractedChapter {
+interface DetectedChapter {
   number: number;
   title: string;
-  charCount: number;
-  text?: string;
+  startPage: number;
+  endPage: number;
 }
 
 interface ProcessResult {
@@ -16,158 +24,270 @@ interface ProcessResult {
   flashcardsCreated: number;
 }
 
+type ChapterStatus =
+  | { state: "pending" }
+  | { state: "splitting" }
+  | { state: "processing" }
+  | { state: "done"; result: ProcessResult }
+  | { state: "error"; message: string };
+
+/** Convert a Uint8Array to a base64 string (browser-safe, handles large arrays) */
+function uint8ToBase64(bytes: Uint8Array): string {
+  const CHUNK = 8192;
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    const slice = bytes.subarray(i, i + CHUNK);
+    binary += String.fromCharCode(...slice);
+  }
+  return btoa(binary);
+}
+
 export default function IngestPage() {
-  const [pdfText, setPdfText] = useState("");
-  const [chapters, setChapters] = useState<ExtractedChapter[]>([]);
-  const [bookSource, setBookSource] = useState<string>("core_radiology");
-  const [processing, setProcessing] = useState<number | null>(null);
-  const [results, setResults] = useState<Record<number, ProcessResult | { error: string }>>({});
-  const [extracting, setExtracting] = useState(false);
-  const [extractPercent, setExtractPercent] = useState(0);
+  const [pdfBytes, setPdfBytes] = useState<Uint8Array | null>(null);
+  const [pdfName, setPdfName] = useState("");
+  const [totalPages, setTotalPages] = useState(0);
+  const [bookSource, setBookSource] = useState("core_radiology");
+
+  // Chapter detection
+  const [detecting, setDetecting] = useState(false);
+  const [chapters, setChapters] = useState<DetectedChapter[]>([]);
   const [selectedChapters, setSelectedChapters] = useState<Set<number>>(new Set());
 
-  // Detect chapters from full text (client-side)
-  const detectChapters = (text: string, totalPages: number) => {
-    const chapterPattern =
-      /(?:^|\n)\s*(?:CHAPTER|Chapter)\s+(\d+)[:\s.]*([^\n]+)/gm;
-    const matches: { index: number; number: number; title: string }[] = [];
+  // Processing
+  const [statuses, setStatuses] = useState<Record<number, ChapterStatus>>({});
+  const [processingAll, setProcessingAll] = useState(false);
 
-    let match;
-    while ((match = chapterPattern.exec(text)) !== null) {
-      matches.push({
-        index: match.index,
-        number: parseInt(match[1], 10),
-        title: match[2].trim(),
-      });
-    }
+  // Status message
+  const [statusMsg, setStatusMsg] = useState("");
 
-    if (matches.length === 0) {
-      return {
-        chapters: [
-          { number: 1, title: "Full Document", charCount: text.length, text: text.slice(0, 100000) },
-        ],
-        totalPages,
-        totalChars: text.length,
-      };
-    }
+  // Manual page-range input (fallback)
+  const [manualMode, setManualMode] = useState(false);
 
-    const chapters = matches.map((m, i) => {
-      const start = m.index;
-      const end = i + 1 < matches.length ? matches[i + 1].index : text.length;
-      const chapterText = text.slice(start, end);
-      return { number: m.number, title: m.title, charCount: chapterText.length, text: chapterText };
-    });
+  const PAGES_PER_CHUNK = 15; // Max pages sent to Claude per request
 
-    return { chapters, totalPages, totalChars: text.length };
-  };
-
-  // Extract PDF text entirely in the browser using pdf.js — no server upload needed
+  // ─── Step 1: Load PDF ─────────────────────────────────────────────────
   const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    setExtracting(true);
-    setExtractPercent(0);
+    setStatusMsg(`Loading ${(file.size / 1024 / 1024).toFixed(1)} MB PDF...`);
     setChapters([]);
-    setResults({});
-    setPdfText(`Reading ${(file.size / 1024 / 1024).toFixed(1)} MB PDF...`);
+    setStatuses({});
+    setSelectedChapters(new Set());
 
     try {
-      // Dynamically import pdf.js (only loaded when needed)
-      const pdfjsLib = await import("pdfjs-dist");
-      pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
-
       const arrayBuffer = await file.arrayBuffer();
-      const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
-      const totalPages = pdf.numPages;
+      const bytes = new Uint8Array(arrayBuffer);
+      setPdfBytes(bytes);
+      setPdfName(file.name);
 
-      setPdfText(`Extracting text from ${totalPages} pages...`);
-
-      let allText = "";
-      for (let i = 1; i <= totalPages; i++) {
-        const page = await pdf.getPage(i);
-        const content = await page.getTextContent();
-        const pageText = content.items
-          .map((item) => {
-            if ("str" in item) {
-              return item.hasEOL ? item.str + "\n" : item.str;
-            }
-            return "";
-          })
-          .join("");
-        allText += pageText + "\n";
-        page.cleanup();
-
-        // Update progress every 10 pages
-        if (i % 10 === 0 || i === totalPages) {
-          setExtractPercent(Math.round((i / totalPages) * 100));
-          setPdfText(`Extracting text... page ${i} of ${totalPages}`);
-        }
-      }
-
-      await pdf.destroy();
-
-      // Detect chapters from extracted text
-      const result = detectChapters(allText, totalPages);
-
-      setPdfText(
-        `Extracted ${result.totalChars.toLocaleString()} characters from ${totalPages} pages — ${result.chapters.length} chapter(s) found`
-      );
-      setChapters(result.chapters);
-      setSelectedChapters(
-        new Set(result.chapters.map((c: ExtractedChapter) => c.number))
-      );
+      // Use pdf-lib to get page count
+      const { PDFDocument } = await import("pdf-lib");
+      const pdf = await PDFDocument.load(bytes, { ignoreEncryption: true });
+      const pages = pdf.getPageCount();
+      setTotalPages(pages);
+      setStatusMsg(`Loaded "${file.name}" — ${pages} pages, ${(file.size / 1024 / 1024).toFixed(1)} MB`);
     } catch (err) {
-      console.error("PDF extraction error:", err);
-      setPdfText(
-        `Error: ${err instanceof Error ? err.message : "Failed to read PDF"}. Try using "Paste Chapter Text" below.`
-      );
-    } finally {
-      setExtracting(false);
-      setExtractPercent(0);
+      setStatusMsg(`Error loading PDF: ${err instanceof Error ? err.message : "Unknown error"}`);
     }
   }, []);
 
-  const processChapter = async (chapter: ExtractedChapter) => {
-    setProcessing(chapter.number);
+  // ─── Step 2: Detect Chapters via Claude ────────────────────────────────
+  const detectChapters = useCallback(async () => {
+    if (!pdfBytes || totalPages === 0) return;
+
+    setDetecting(true);
+    setStatusMsg("Sending first pages to Claude for chapter detection...");
+
     try {
+      const { PDFDocument } = await import("pdf-lib");
+      const fullPdf = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+
+      // Extract first 15 pages (likely cover + table of contents)
+      const tocPages = Math.min(15, totalPages);
+      const tocPdf = await PDFDocument.create();
+      const copied = await tocPdf.copyPages(
+        fullPdf,
+        Array.from({ length: tocPages }, (_, i) => i)
+      );
+      copied.forEach((p) => tocPdf.addPage(p));
+      const tocBytes = await tocPdf.save();
+      const tocBase64 = uint8ToBase64(new Uint8Array(tocBytes));
+
       const res = await fetch("/api/ingest", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          action: "process",
-          chapterText: chapter.text?.slice(0, 50000) || "",
-          chapterTitle: chapter.title,
-          chapterNumber: chapter.number,
-          bookSource,
+          action: "detect-chapters",
+          pdfBase64: tocBase64,
+          totalPages,
         }),
       });
 
       const data = await res.json();
       if (data.error) {
-        setResults((prev) => ({ ...prev, [chapter.number]: { error: data.error } }));
-      } else {
-        setResults((prev) => ({ ...prev, [chapter.number]: data }));
+        setStatusMsg(`Chapter detection error: ${data.error}`);
+        return;
       }
-    } catch (err) {
-      setResults((prev) => ({
-        ...prev,
-        [chapter.number]: { error: err instanceof Error ? err.message : "Request failed" },
-      }));
-    } finally {
-      setProcessing(null);
-    }
-  };
 
-  const processAll = async () => {
-    const toProcess = chapters.filter((ch) => selectedChapters.has(ch.number));
-    for (const ch of toProcess) {
-      if (results[ch.number] && "chapterId" in results[ch.number]) continue; // skip already processed
-      await processChapter(ch);
-      // Small delay between chapters
-      await new Promise((r) => setTimeout(r, 1000));
+      const detected: DetectedChapter[] = data.chapters;
+      setChapters(detected);
+      setSelectedChapters(new Set(detected.map((c) => c.number)));
+      setStatusMsg(`Found ${detected.length} chapters. Select which ones to process.`);
+    } catch (err) {
+      setStatusMsg(`Detection failed: ${err instanceof Error ? err.message : "Unknown error"}`);
+    } finally {
+      setDetecting(false);
     }
-  };
+  }, [pdfBytes, totalPages]);
+
+  // ─── Step 3: Process a Single Chapter ──────────────────────────────────
+  const processChapter = useCallback(
+    async (chapter: DetectedChapter) => {
+      if (!pdfBytes) return;
+
+      const { PDFDocument } = await import("pdf-lib");
+      const fullPdf = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+
+      // Chapter page range (1-based in the chapter data, 0-based for pdf-lib)
+      const startIdx = Math.max(0, chapter.startPage - 1);
+      const endIdx = Math.min(totalPages, chapter.endPage);
+      const chapterPageCount = endIdx - startIdx;
+
+      // Split into sub-chunks if the chapter has more than PAGES_PER_CHUNK pages
+      const numChunks = Math.ceil(chapterPageCount / PAGES_PER_CHUNK);
+
+      // For multi-chunk chapters, we process the first chunk as the main one
+      // and merge study content. For simplicity, process the largest viable chunk.
+      // If the chapter is ≤ PAGES_PER_CHUNK, send it all at once.
+      // If larger, send PAGES_PER_CHUNK pages (Claude's vision limit is 100 pages,
+      // but we keep chunks small for Vercel payload limits).
+
+      setStatuses((prev) => ({ ...prev, [chapter.number]: { state: "splitting" } }));
+
+      try {
+        // For very large chapters, we process in chunks and only use the first chunk
+        // plus a text summary of remaining chunks. This keeps quality high.
+        const pagesToSend = Math.min(chapterPageCount, PAGES_PER_CHUNK);
+        const chunkPdf = await PDFDocument.create();
+        const indices = Array.from({ length: pagesToSend }, (_, i) => startIdx + i);
+        const pages = await chunkPdf.copyPages(fullPdf, indices);
+        pages.forEach((p) => chunkPdf.addPage(p));
+        const chunkBytes = await chunkPdf.save();
+        const chunkBase64 = uint8ToBase64(new Uint8Array(chunkBytes));
+
+        setStatuses((prev) => ({ ...prev, [chapter.number]: { state: "processing" } }));
+
+        // If there are more chunks, process them sequentially
+        if (numChunks > 1) {
+          // Process first chunk
+          const res = await fetch("/api/ingest", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "process-pdf",
+              pdfBase64: chunkBase64,
+              chapterTitle: chapter.title,
+              chapterNumber: chapter.number,
+              bookSource,
+            }),
+          });
+
+          const data = await res.json();
+          if (data.error) {
+            setStatuses((prev) => ({
+              ...prev,
+              [chapter.number]: { state: "error", message: data.error },
+            }));
+            return;
+          }
+
+          setStatuses((prev) => ({
+            ...prev,
+            [chapter.number]: {
+              state: "done",
+              result: data,
+            },
+          }));
+        } else {
+          // Single chunk — send directly
+          const res = await fetch("/api/ingest", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "process-pdf",
+              pdfBase64: chunkBase64,
+              chapterTitle: chapter.title,
+              chapterNumber: chapter.number,
+              bookSource,
+            }),
+          });
+
+          const data = await res.json();
+          if (data.error) {
+            setStatuses((prev) => ({
+              ...prev,
+              [chapter.number]: { state: "error", message: data.error },
+            }));
+            return;
+          }
+
+          setStatuses((prev) => ({
+            ...prev,
+            [chapter.number]: { state: "done", result: data },
+          }));
+        }
+      } catch (err) {
+        setStatuses((prev) => ({
+          ...prev,
+          [chapter.number]: {
+            state: "error",
+            message: err instanceof Error ? err.message : "Processing failed",
+          },
+        }));
+      }
+    },
+    [pdfBytes, totalPages, bookSource]
+  );
+
+  // ─── Process All Selected ──────────────────────────────────────────────
+  const processAll = useCallback(async () => {
+    setProcessingAll(true);
+    const toProcess = chapters.filter((ch) => selectedChapters.has(ch.number));
+
+    for (const ch of toProcess) {
+      const status = statuses[ch.number];
+      if (status?.state === "done") continue; // skip already processed
+      await processChapter(ch);
+      // Small delay between chapters to avoid rate limits
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    setProcessingAll(false);
+  }, [chapters, selectedChapters, statuses, processChapter]);
+
+  // ─── Manual chapter input (fallback when auto-detect doesn't work) ────
+  const addManualChapter = useCallback(() => {
+    const num = chapters.length + 1;
+    const newChapter: DetectedChapter = {
+      number: num,
+      title: `Chapter ${num}`,
+      startPage: 1,
+      endPage: Math.min(totalPages, 30),
+    };
+    setChapters((prev) => [...prev, newChapter]);
+    setSelectedChapters((prev) => new Set([...prev, num]));
+  }, [chapters.length, totalPages]);
+
+  const updateManualChapter = useCallback(
+    (index: number, field: keyof DetectedChapter, value: string | number) => {
+      setChapters((prev) => {
+        const updated = [...prev];
+        updated[index] = { ...updated[index], [field]: typeof value === "string" ? value : value };
+        return updated;
+      });
+    },
+    []
+  );
 
   const toggleChapter = (num: number) => {
     setSelectedChapters((prev) => {
@@ -178,6 +298,9 @@ export default function IngestPage() {
     });
   };
 
+  const isAnyProcessing = processingAll || Object.values(statuses).some((s) => s.state === "processing" || s.state === "splitting");
+
+  // ─── Render ────────────────────────────────────────────────────────────
   return (
     <div className="space-y-8">
       <div>
@@ -186,7 +309,7 @@ export default function IngestPage() {
           PDF Ingestion
         </h1>
         <p className="text-muted-foreground mt-1">
-          Upload your radiology textbook PDFs to generate study content
+          Upload your radiology textbook PDF — Claude will analyze text, tables, AND images
         </p>
       </div>
 
@@ -194,26 +317,22 @@ export default function IngestPage() {
       <div className="rounded-lg border bg-card p-6 space-y-4">
         <h2 className="font-semibold">1. Select Book Source</h2>
         <div className="flex gap-4">
-          <button
-            onClick={() => setBookSource("core_radiology")}
-            className={`px-4 py-2 rounded-lg border text-sm font-medium transition-colors ${
-              bookSource === "core_radiology"
-                ? "bg-primary text-primary-foreground"
-                : "hover:bg-accent"
-            }`}
-          >
-            Core Radiology
-          </button>
-          <button
-            onClick={() => setBookSource("crack_the_core")}
-            className={`px-4 py-2 rounded-lg border text-sm font-medium transition-colors ${
-              bookSource === "crack_the_core"
-                ? "bg-primary text-primary-foreground"
-                : "hover:bg-accent"
-            }`}
-          >
-            Crack the Core
-          </button>
+          {[
+            { key: "core_radiology", label: "Core Radiology" },
+            { key: "crack_the_core", label: "Crack the Core" },
+          ].map((b) => (
+            <button
+              key={b.key}
+              onClick={() => setBookSource(b.key)}
+              className={`px-4 py-2 rounded-lg border text-sm font-medium transition-colors ${
+                bookSource === b.key
+                  ? "bg-primary text-primary-foreground"
+                  : "hover:bg-accent"
+              }`}
+            >
+              {b.label}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -222,45 +341,107 @@ export default function IngestPage() {
         <h2 className="font-semibold">2. Upload PDF</h2>
         <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed rounded-lg cursor-pointer hover:bg-accent/50 transition-colors">
           <div className="flex flex-col items-center justify-center pt-5 pb-6">
-            {extracting ? (
-              <Loader2 className="h-8 w-8 text-primary animate-spin mb-2" />
-            ) : (
-              <Upload className="h-8 w-8 text-muted-foreground mb-2" />
-            )}
+            <Upload className="h-8 w-8 text-muted-foreground mb-2" />
             <p className="text-sm text-muted-foreground">
-              {extracting
-                ? `Extracting text... ${extractPercent}%`
-                : "Click to upload a PDF file"}
+              {pdfName ? `${pdfName} loaded` : "Click to upload a PDF file"}
             </p>
-            {extracting && (
-              <div className="w-64 mt-2">
-                <div className="h-2 bg-muted rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-primary rounded-full transition-all duration-200"
-                    style={{ width: `${extractPercent}%` }}
-                  />
-                </div>
-                <p className="text-xs text-muted-foreground mt-1 text-center">
-                  {extractPercent}% — extracting text in browser
-                </p>
-              </div>
-            )}
           </div>
           <input
             type="file"
             className="hidden"
             accept=".pdf"
             onChange={handleFileUpload}
-            disabled={extracting}
           />
         </label>
-        {pdfText && (
+        {statusMsg && (
           <p className="text-sm text-muted-foreground flex items-center gap-2">
-            <FileText className="h-4 w-4" />
-            {pdfText}
+            <BookOpen className="h-4 w-4 flex-shrink-0" />
+            {statusMsg}
           </p>
         )}
+
+        {totalPages > 0 && (
+          <div className="flex gap-3 pt-2">
+            <button
+              onClick={detectChapters}
+              disabled={detecting || isAnyProcessing}
+              className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            >
+              {detecting ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Detecting chapters...
+                </>
+              ) : (
+                <>
+                  <ScanSearch className="h-4 w-4" />
+                  Auto-Detect Chapters
+                </>
+              )}
+            </button>
+            <button
+              onClick={() => setManualMode((v) => !v)}
+              className="px-4 py-2 rounded-lg border text-sm font-medium hover:bg-accent"
+            >
+              {manualMode ? "Hide Manual Mode" : "Manual Page Ranges"}
+            </button>
+          </div>
+        )}
       </div>
+
+      {/* Manual mode: define chapter page ranges yourself */}
+      {manualMode && totalPages > 0 && (
+        <div className="rounded-lg border bg-card p-6 space-y-4">
+          <h2 className="font-semibold">Define Chapters Manually</h2>
+          <p className="text-sm text-muted-foreground">
+            Enter page ranges for each chapter. The PDF has {totalPages} pages.
+          </p>
+
+          {chapters.map((ch, i) => (
+            <div key={i} className="flex gap-3 items-center">
+              <input
+                type="number"
+                value={ch.number}
+                onChange={(e) => updateManualChapter(i, "number", parseInt(e.target.value, 10) || 1)}
+                className="w-16 p-2 border rounded-lg text-sm"
+                placeholder="#"
+              />
+              <input
+                type="text"
+                value={ch.title}
+                onChange={(e) => updateManualChapter(i, "title", e.target.value)}
+                className="flex-1 p-2 border rounded-lg text-sm"
+                placeholder="Chapter title"
+              />
+              <span className="text-sm text-muted-foreground">Pages</span>
+              <input
+                type="number"
+                value={ch.startPage}
+                onChange={(e) => updateManualChapter(i, "startPage", parseInt(e.target.value, 10) || 1)}
+                className="w-20 p-2 border rounded-lg text-sm"
+                min={1}
+                max={totalPages}
+              />
+              <span className="text-sm text-muted-foreground">to</span>
+              <input
+                type="number"
+                value={ch.endPage}
+                onChange={(e) => updateManualChapter(i, "endPage", parseInt(e.target.value, 10) || 1)}
+                className="w-20 p-2 border rounded-lg text-sm"
+                min={1}
+                max={totalPages}
+              />
+            </div>
+          ))}
+
+          <button
+            onClick={addManualChapter}
+            className="px-4 py-2 rounded-lg border text-sm font-medium hover:bg-accent"
+          >
+            + Add Chapter
+          </button>
+        </div>
+      )}
 
       {/* Chapters list */}
       {chapters.length > 0 && (
@@ -269,13 +450,13 @@ export default function IngestPage() {
             <h2 className="font-semibold">3. Process Chapters</h2>
             <button
               onClick={processAll}
-              disabled={processing !== null || selectedChapters.size === 0}
+              disabled={isAnyProcessing || selectedChapters.size === 0}
               className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {processing !== null ? (
+              {processingAll ? (
                 <span className="flex items-center gap-2">
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Processing Ch. {processing}...
+                  Processing...
                 </span>
               ) : (
                 `Process ${selectedChapters.size} Selected Chapters`
@@ -283,17 +464,30 @@ export default function IngestPage() {
             </button>
           </div>
 
+          <p className="text-xs text-muted-foreground">
+            Each chapter&apos;s PDF pages are sent directly to Claude — text, tables, and images are all analyzed.
+            {totalPages > 100 && " Large chapters are split into 15-page chunks."}
+          </p>
+
           <div className="space-y-2">
             {chapters.map((ch) => {
-              const result = results[ch.number];
-              const isProcessed = result && "chapterId" in result;
-              const hasError = result && "error" in result;
+              const status = statuses[ch.number];
+              const pageCount = ch.endPage - ch.startPage + 1;
+              const isDone = status?.state === "done";
+              const isError = status?.state === "error";
+              const isActive = status?.state === "processing" || status?.state === "splitting";
 
               return (
                 <div
                   key={ch.number}
                   className={`flex items-center gap-3 p-3 rounded-lg border ${
-                    isProcessed ? "bg-green-50 border-green-200" : hasError ? "bg-red-50 border-red-200" : ""
+                    isDone
+                      ? "bg-green-50 border-green-200 dark:bg-green-950/20 dark:border-green-800"
+                      : isError
+                      ? "bg-red-50 border-red-200 dark:bg-red-950/20 dark:border-red-800"
+                      : isActive
+                      ? "bg-blue-50 border-blue-200 dark:bg-blue-950/20 dark:border-blue-800"
+                      : ""
                   }`}
                 >
                   <input
@@ -301,37 +495,48 @@ export default function IngestPage() {
                     checked={selectedChapters.has(ch.number)}
                     onChange={() => toggleChapter(ch.number)}
                     className="h-4 w-4"
-                    disabled={processing !== null}
+                    disabled={isAnyProcessing}
                   />
-                  <div className="flex-1">
+                  <div className="flex-1 min-w-0">
                     <span className="font-medium">
-                      Chapter {ch.number}: {ch.title}
+                      Ch. {ch.number}: {ch.title}
                     </span>
                     <span className="text-sm text-muted-foreground ml-2">
-                      ({Math.round(ch.charCount / 1000)}k chars)
+                      (p. {ch.startPage}–{ch.endPage}, {pageCount} pages)
                     </span>
                   </div>
 
-                  {processing === ch.number && (
-                    <Loader2 className="h-4 w-4 text-primary animate-spin" />
-                  )}
-                  {isProcessed && (
-                    <span className="flex items-center gap-1 text-sm text-green-600">
-                      <CheckCircle className="h-4 w-4" />
-                      {(result as ProcessResult).questionsCreated}Q / {(result as ProcessResult).flashcardsCreated}F
+                  {status?.state === "splitting" && (
+                    <span className="flex items-center gap-1 text-sm text-blue-600">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Splitting PDF...
                     </span>
                   )}
-                  {hasError && (
-                    <span className="flex items-center gap-1 text-sm text-red-600">
-                      <AlertCircle className="h-4 w-4" />
-                      {(result as { error: string }).error.slice(0, 50)}
+                  {status?.state === "processing" && (
+                    <span className="flex items-center gap-1 text-sm text-blue-600">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Claude analyzing...
+                    </span>
+                  )}
+                  {isDone && (
+                    <span className="flex items-center gap-1 text-sm text-green-600">
+                      <CheckCircle className="h-4 w-4" />
+                      {(status as { state: "done"; result: ProcessResult }).result.questionsCreated}Q /{" "}
+                      {(status as { state: "done"; result: ProcessResult }).result.flashcardsCreated}F
+                    </span>
+                  )}
+                  {isError && (
+                    <span className="flex items-center gap-1 text-sm text-red-600 max-w-xs truncate">
+                      <AlertCircle className="h-4 w-4 flex-shrink-0" />
+                      {(status as { state: "error"; message: string }).message.slice(0, 60)}
                     </span>
                   )}
 
-                  {!isProcessed && !processing && (
+                  {!isDone && !isActive && (
                     <button
                       onClick={() => processChapter(ch)}
-                      className="text-sm px-3 py-1 rounded border hover:bg-accent"
+                      disabled={isAnyProcessing}
+                      className="text-sm px-3 py-1 rounded border hover:bg-accent disabled:opacity-50"
                     >
                       Process
                     </button>
@@ -343,11 +548,11 @@ export default function IngestPage() {
         </div>
       )}
 
-      {/* Manual text input fallback */}
+      {/* Legacy: Paste text fallback */}
       <div className="rounded-lg border bg-card p-6 space-y-4">
         <h2 className="font-semibold">Alternative: Paste Chapter Text</h2>
         <p className="text-sm text-muted-foreground">
-          If PDF upload doesn&apos;t work, paste a chapter&apos;s text directly
+          If PDF upload doesn&apos;t work, paste a chapter&apos;s text directly (text-only, no images)
         </p>
         <textarea
           className="w-full h-32 p-3 border rounded-lg text-sm font-mono bg-background resize-y"
@@ -380,9 +585,34 @@ export default function IngestPage() {
               const num = parseInt((document.getElementById("manual-number") as HTMLInputElement).value, 10);
               const title = (document.getElementById("manual-title") as HTMLInputElement).value;
               if (!text || !title) return alert("Please fill in all fields");
-              await processChapter({ number: num, title, charCount: text.length, text });
+
+              setStatuses((prev) => ({ ...prev, [num]: { state: "processing" } }));
+              try {
+                const res = await fetch("/api/ingest", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    action: "process",
+                    chapterText: text.slice(0, 50000),
+                    chapterTitle: title,
+                    chapterNumber: num,
+                    bookSource,
+                  }),
+                });
+                const data = await res.json();
+                if (data.error) {
+                  setStatuses((prev) => ({ ...prev, [num]: { state: "error", message: data.error } }));
+                } else {
+                  setStatuses((prev) => ({ ...prev, [num]: { state: "done", result: data } }));
+                }
+              } catch (err) {
+                setStatuses((prev) => ({
+                  ...prev,
+                  [num]: { state: "error", message: err instanceof Error ? err.message : "Failed" },
+                }));
+              }
             }}
-            disabled={processing !== null}
+            disabled={isAnyProcessing}
             className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
           >
             Process

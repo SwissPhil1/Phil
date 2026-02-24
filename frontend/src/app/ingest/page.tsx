@@ -48,6 +48,7 @@ export default function SourcesPage() {
   const [customName, setCustomName] = useState("");
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const pdfDocRef = useRef<any>(null);
+  const fileRef = useRef<File | null>(null); // Keep File reference for reloading between chapters
   const [pdfName, setPdfName] = useState("");
   const [totalPages, setTotalPages] = useState(0);
   const [statusMsg, setStatusMsg] = useState("");
@@ -97,9 +98,11 @@ export default function SourcesPage() {
     setChapters([]);
     setStoreStatuses({});
     pdfDocRef.current = null;
+    fileRef.current = null;
 
     try {
       setPdfName(file.name);
+      fileRef.current = file; // Keep for reloading between chapters
 
       const arrayBuffer = await file.arrayBuffer();
       const { PDFDocument } = await import("pdf-lib");
@@ -187,11 +190,33 @@ export default function SourcesPage() {
     } catch { /* non-critical */ }
 
     const { PDFDocument } = await import("pdf-lib");
-    const maxPagesPerChunk = 5;
+    const maxPagesPerChunk = 3; // Smaller chunks to reduce iPad memory pressure
     let completedChapters = 0;
     setOverallProgress({ current: 0, total: chapters.length });
 
     for (const chapter of chapters) {
+      // ── Reload PDF between chapters to free accumulated memory ──
+      // iPad Safari leaks memory on repeated copyPages calls. Reloading
+      // the source PDF releases all internal references from prior chapters.
+      if (fileRef.current) {
+        try {
+          pdfDocRef.current = null; // Release old reference for GC
+          await new Promise((r) => setTimeout(r, 300)); // Give GC a moment
+          const ab = await fileRef.current.arrayBuffer();
+          pdfDocRef.current = await PDFDocument.load(new Uint8Array(ab), { ignoreEncryption: true });
+        } catch (reloadErr) {
+          console.warn("PDF reload failed, using existing reference:", reloadErr);
+        }
+      }
+
+      if (!pdfDocRef.current) {
+        setStoreStatuses((prev) => ({
+          ...prev,
+          [chapter.number]: { state: "error", message: "PDF reference lost" },
+        }));
+        continue;
+      }
+
       const startIdx = Math.max(0, chapter.startPage - 1);
       const endIdx = Math.min(pdfDocRef.current.getPageCount(), chapter.endPage);
       const chapterPageCount = endIdx - startIdx;
@@ -223,40 +248,57 @@ export default function SourcesPage() {
         const chunkEnd = Math.min(chunkStart + maxPagesPerChunk, endIdx);
         const pagesToCopy = chunkEnd - chunkStart;
 
-        try {
-          // Extract pages
-          const chunkPdf = await PDFDocument.create();
-          const indices = Array.from({ length: pagesToCopy }, (_, j) => chunkStart + j);
-          const pages = await chunkPdf.copyPages(pdfDocRef.current, indices);
-          pages.forEach((p) => chunkPdf.addPage(p));
-          const chunkBytes = await chunkPdf.save();
-          const chunkBlob = new Blob([chunkBytes.slice(0)], { type: "application/pdf" });
+        // Retry each chunk up to 2 times (memory errors can be transient after GC)
+        let chunkSuccess = false;
+        for (let attempt = 0; attempt < 2 && !chunkSuccess; attempt++) {
+          try {
+            // Extract pages into a small PDF
+            const chunkPdf = await PDFDocument.create();
+            const indices = Array.from({ length: pagesToCopy }, (_, j) => chunkStart + j);
+            const pages = await chunkPdf.copyPages(pdfDocRef.current, indices);
+            pages.forEach((p) => chunkPdf.addPage(p));
+            const chunkBytes = await chunkPdf.save();
+            const chunkBlob = new Blob([chunkBytes.slice(0)], { type: "application/pdf" });
 
-          // Store chunk in Postgres database
-          const formData = new FormData();
-          formData.append("pdf", chunkBlob, `${bookKey}_ch${chapter.number}_chunk${i}.pdf`);
-          formData.append("bookSource", bookKey);
-          formData.append("chapterNum", String(chapter.number));
-          formData.append("chunkIndex", String(i));
+            // Store chunk in Postgres database
+            const formData = new FormData();
+            formData.append("pdf", chunkBlob, `${bookKey}_ch${chapter.number}_chunk${i}.pdf`);
+            formData.append("bookSource", bookKey);
+            formData.append("chapterNum", String(chapter.number));
+            formData.append("chunkIndex", String(i));
 
-          const res = await fetch("/api/store-pdf", { method: "POST", body: formData });
-          const data = await res.json();
+            const res = await fetch("/api/store-pdf", { method: "POST", body: formData });
+            const data = await res.json();
 
-          if (data.success) {
-            storedChunks++;
-          } else {
-            throw new Error(data.error || "Storage failed");
+            if (data.success) {
+              storedChunks++;
+              chunkSuccess = true;
+            } else {
+              throw new Error(data.error || "Storage failed");
+            }
+          } catch (err) {
+            if (attempt === 0) {
+              // First failure: give GC time and retry
+              console.warn(`Chunk ${i + 1} failed (attempt 1), retrying after GC pause...`);
+              await new Promise((r) => setTimeout(r, 500));
+              continue;
+            }
+            setStoreStatuses((prev) => ({
+              ...prev,
+              [chapter.number]: {
+                state: "error",
+                message: `Chunk ${i + 1}: ${err instanceof Error ? err.message : "Upload failed"}`,
+              },
+            }));
+            hadError = true;
           }
-        } catch (err) {
-          setStoreStatuses((prev) => ({
-            ...prev,
-            [chapter.number]: {
-              state: "error",
-              message: `Chunk ${i + 1}: ${err instanceof Error ? err.message : "Upload failed"}`,
-            },
-          }));
-          hadError = true;
-          break;
+        }
+
+        if (hadError) break;
+
+        // Brief pause between chunks to let iPad Safari GC run
+        if (i < numChunks - 1) {
+          await new Promise((r) => setTimeout(r, 100));
         }
       }
 

@@ -35,7 +35,7 @@ function getClient(): Anthropic {
 }
 
 /**
- * Retry wrapper for Anthropic API calls.
+ * Retry wrapper for Anthropic API calls (non-streaming).
  * Retries on transient errors: 429 (rate limit), 529 (overloaded), 500+ (server errors).
  * Uses exponential backoff: 5s, 10s, 20s.
  */
@@ -56,6 +56,49 @@ async function callClaudeWithRetry<T>(
     }
   }
   throw new Error("callClaudeWithRetry: unreachable");
+}
+
+/**
+ * Streaming wrapper for Anthropic API calls.
+ * Uses stream: true to support long-running requests (>10 min) like large PDF study guides.
+ * Collects streamed text deltas into the full response string.
+ * Retries on transient errors with exponential backoff.
+ */
+async function callClaudeStreamingWithRetry(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  fn: () => Promise<any>,
+  onTextDelta?: (text: string) => void,
+  maxRetries = 3
+): Promise<string> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      let fullText = "";
+      const stream = await fn();
+      for await (const event of stream) {
+        if (
+          event.type === "content_block_delta" &&
+          event.delta?.type === "text_delta"
+        ) {
+          fullText += event.delta.text;
+          onTextDelta?.(event.delta.text);
+        }
+      }
+      return fullText;
+    } catch (err: unknown) {
+      const apiErr = err as { status?: number };
+      const isRetryable =
+        apiErr.status === 429 ||
+        apiErr.status === 529 ||
+        (apiErr.status && apiErr.status >= 500);
+      if (!isRetryable || attempt === maxRetries) throw err;
+      const delay = Math.pow(2, attempt) * 5000;
+      console.warn(
+        `Claude streaming returned ${apiErr.status}, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})...`
+      );
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw new Error("callClaudeStreamingWithRetry: unreachable");
 }
 
 /**
@@ -1122,24 +1165,27 @@ ${mn.length > 0 ? mn.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(no
       }, 8000);
 
       try {
-        const response = hasFileIds
-          ? await callClaudeWithRetry(() =>
+        // Use streaming to support long-running requests (>10 min for large PDFs)
+        let studyGuide = hasFileIds
+          ? await callClaudeStreamingWithRetry(() =>
               client.beta.messages.create({
                 model: "claude-sonnet-4-20250514",
                 max_tokens: 32000,
+                stream: true,
                 betas: ["files-api-2025-04-14"],
                 messages,
               })
             )
-          : await callClaudeWithRetry(() =>
+          : await callClaudeStreamingWithRetry(() =>
               client.messages.create({
                 model: "claude-sonnet-4-20250514",
                 max_tokens: 32000,
+                stream: true,
                 messages,
               })
             );
 
-        let studyGuide = (response.content[0] as { type: "text"; text: string }).text.trim();
+        studyGuide = studyGuide.trim();
 
         // Strip code fences if Claude wraps the output anyway
         if (studyGuide.startsWith("```")) {
@@ -1173,10 +1219,11 @@ ${mn.length > 0 ? mn.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(no
         if (hasFileIds) {
           console.log("File-based study guide failed, falling back to full processed data...");
           try {
-            const fallbackResponse = await callClaudeWithRetry(() =>
+            let studyGuide = await callClaudeStreamingWithRetry(() =>
               client.messages.create({
                 model: "claude-sonnet-4-20250514",
                 max_tokens: 32000,
+                stream: true,
                 messages: [{
                   role: "user",
                   content: `You are an expert radiology educator. Below is the COMPLETE processed data from every page of this chapter — including all questions, flashcards, key points, and high-yield facts. Use ALL of this data to create a comprehensive study guide. Do not skip any topic.\n\n${fullContextBlock}\n\n---\n\n${studyGuideInstructions}`,
@@ -1184,7 +1231,7 @@ ${mn.length > 0 ? mn.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(no
               })
             );
 
-            let studyGuide = (fallbackResponse.content[0] as { type: "text"; text: string }).text.trim();
+            studyGuide = studyGuide.trim();
             if (studyGuide.startsWith("```")) {
               studyGuide = studyGuide.replace(/^```(?:markdown|md)?\n?/, "").replace(/\n?```$/, "");
             }
@@ -1645,10 +1692,11 @@ Requirements:
 
           sendEvent({ status: "generating-guide", message: "Claude is reading the complete chapter..." });
 
-          const guideResponse = await callClaudeWithRetry(() =>
+          studyGuide = await callClaudeStreamingWithRetry(() =>
             client.beta.messages.create({
               model: "claude-sonnet-4-20250514",
               max_tokens: 32000,
+              stream: true,
               betas: ["files-api-2025-04-14"],
               messages: [{
                 role: "user",
@@ -1660,16 +1708,17 @@ Requirements:
             })
           );
 
-          studyGuide = (guideResponse.content[0] as { type: "text"; text: string }).text.trim();
+          studyGuide = studyGuide.trim();
         } catch (guideErr) {
           // Merged PDF approach failed — use complete processed data from every chunk
           console.error("Merged PDF study guide failed, using full processed data:", guideErr);
           sendEvent({ status: "generating-guide", message: "Generating from complete processed data..." });
 
-          const fallbackResponse = await callClaudeWithRetry(() =>
+          studyGuide = await callClaudeStreamingWithRetry(() =>
             client.messages.create({
               model: "claude-sonnet-4-20250514",
               max_tokens: 32000,
+              stream: true,
               messages: [{
                 role: "user",
                 content: `You are an expert radiology educator. Below is the COMPLETE processed data from every page of this chapter — including all questions, flashcards, key points, and high-yield facts extracted from the textbook. Use ALL of this data to create a comprehensive study guide. Do not skip any topic.\n\n${fullChapterData}${crossRefBlock}\n\n---\n\n${guidePrompt}`,
@@ -1677,7 +1726,7 @@ Requirements:
             })
           );
 
-          studyGuide = (fallbackResponse.content[0] as { type: "text"; text: string }).text.trim();
+          studyGuide = studyGuide.trim();
         }
 
         if (studyGuide.startsWith("```")) {

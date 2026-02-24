@@ -23,7 +23,8 @@ export default function IngestPage() {
   const [processing, setProcessing] = useState<number | null>(null);
   const [results, setResults] = useState<Record<number, ProcessResult | { error: string }>>({});
   const [extracting, setExtracting] = useState(false);
-  const [extractProgress, setExtractProgress] = useState<{ current: number; total: number } | null>(null);
+  const [uploadPhase, setUploadPhase] = useState<"uploading" | "extracting" | null>(null);
+  const [uploadPercent, setUploadPercent] = useState(0);
   const [selectedChapters, setSelectedChapters] = useState<Set<number>>(new Set());
 
   const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -31,71 +32,77 @@ export default function IngestPage() {
     if (!file) return;
 
     setExtracting(true);
-    setExtractProgress(null);
+    setUploadPhase("uploading");
+    setUploadPercent(0);
     setChapters([]);
     setResults({});
+    setPdfText("");
 
     try {
-      // Read PDF as text using FileReader
-      // For PDF files, we need to extract text client-side
-      // Using pdf.js via dynamic import for browser-based extraction
-      const arrayBuffer = await file.arrayBuffer();
+      const formData = new FormData();
+      formData.append("file", file);
 
-      // Use pdf.js to extract text in the browser
-      const pdfjsLib = await import("pdfjs-dist");
-      pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
+      // Use XMLHttpRequest for upload progress tracking
+      const data = await new Promise<{
+        chapters: ExtractedChapter[];
+        totalPages: number;
+        totalChars: number;
+      }>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
 
-      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-      let text = "";
-      setExtractProgress({ current: 0, total: pdf.numPages });
-
-      for (let i = 1; i <= pdf.numPages; i++) {
-        setExtractProgress({ current: i, total: pdf.numPages });
-        const page = await pdf.getPage(i);
-        const content = await page.getTextContent();
-        const pageText = content.items
-          .map((item) => ("str" in item ? item.str : ""))
-          .join(" ");
-        text += `\n--- PAGE ${i} ---\n${pageText}`;
-      }
-
-      setPdfText(`Extracted ${text.length} characters from ${pdf.numPages} pages`);
-
-      // Send to API for chapter detection
-      const res = await fetch("/api/ingest", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "extract", text }),
-      });
-
-      const data = await res.json();
-      if (data.chapters) {
-        // Attach actual text to each chapter
-        const chapterPattern = /(?:^|\n)\s*(?:CHAPTER|Chapter)\s+(\d+)[:\s.]*([^\n]+)/gm;
-        const matches: { index: number; number: number }[] = [];
-        let match;
-        while ((match = chapterPattern.exec(text)) !== null) {
-          matches.push({ index: match.index, number: parseInt(match[1], 10) });
-        }
-
-        const chaptersWithText = data.chapters.map((ch: ExtractedChapter, i: number) => {
-          if (matches.length === 0) {
-            return { ...ch, text: text.slice(0, 50000) };
+        xhr.upload.addEventListener("progress", (evt) => {
+          if (evt.lengthComputable) {
+            setUploadPercent(Math.round((evt.loaded / evt.total) * 100));
           }
-          const start = matches[i]?.index ?? 0;
-          const end = i + 1 < matches.length ? matches[i + 1].index : text.length;
-          return { ...ch, text: text.slice(start, end) };
         });
 
-        setChapters(chaptersWithText);
-        setSelectedChapters(new Set(chaptersWithText.map((c: ExtractedChapter) => c.number)));
+        xhr.upload.addEventListener("load", () => {
+          setUploadPhase("extracting");
+        });
+
+        xhr.addEventListener("load", () => {
+          try {
+            const json = JSON.parse(xhr.responseText);
+            if (xhr.status >= 200 && xhr.status < 300) {
+              resolve(json);
+            } else {
+              reject(new Error(json.error || `Server error (${xhr.status})`));
+            }
+          } catch {
+            reject(new Error(`Server error (${xhr.status})`));
+          }
+        });
+
+        xhr.addEventListener("error", () =>
+          reject(new Error("Upload failed — check your connection"))
+        );
+        xhr.addEventListener("timeout", () =>
+          reject(new Error("Upload timed out"))
+        );
+
+        xhr.open("POST", "/api/ingest/extract-pdf");
+        xhr.timeout = 120000;
+        xhr.send(formData);
+      });
+
+      if (data.chapters) {
+        setPdfText(
+          `Extracted ${data.totalChars.toLocaleString()} characters from ${data.totalPages} pages — ${data.chapters.length} chapter(s) found`
+        );
+        setChapters(data.chapters);
+        setSelectedChapters(
+          new Set(data.chapters.map((c: ExtractedChapter) => c.number))
+        );
       }
     } catch (err) {
-      console.error("PDF extraction error:", err);
-      setPdfText(`Error: ${err instanceof Error ? err.message : "Failed to read PDF"}`);
+      console.error("PDF upload error:", err);
+      setPdfText(
+        `Error: ${err instanceof Error ? err.message : "Upload failed"}. Try using "Paste Chapter Text" below.`
+      );
     } finally {
       setExtracting(false);
-      setExtractProgress(null);
+      setUploadPhase(null);
+      setUploadPercent(0);
     }
   }, []);
 
@@ -200,21 +207,27 @@ export default function IngestPage() {
             )}
             <p className="text-sm text-muted-foreground">
               {extracting
-                ? extractProgress
-                  ? `Extracting page ${extractProgress.current} of ${extractProgress.total}...`
-                  : "Loading PDF..."
+                ? uploadPhase === "uploading"
+                  ? `Uploading PDF... ${uploadPercent}%`
+                  : "Server is extracting text from PDF..."
                 : "Click to upload a PDF file"}
             </p>
-            {extracting && extractProgress && extractProgress.total > 0 && (
+            {extracting && (
               <div className="w-64 mt-2">
                 <div className="h-2 bg-muted rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-primary rounded-full transition-all duration-200"
-                    style={{ width: `${Math.round((extractProgress.current / extractProgress.total) * 100)}%` }}
-                  />
+                  {uploadPhase === "uploading" ? (
+                    <div
+                      className="h-full bg-primary rounded-full transition-all duration-200"
+                      style={{ width: `${uploadPercent}%` }}
+                    />
+                  ) : (
+                    <div className="h-full bg-primary rounded-full animate-pulse" style={{ width: "100%" }} />
+                  )}
                 </div>
                 <p className="text-xs text-muted-foreground mt-1 text-center">
-                  {Math.round((extractProgress.current / extractProgress.total) * 100)}%
+                  {uploadPhase === "uploading"
+                    ? `${uploadPercent}% uploaded`
+                    : "Extracting text on server..."}
                 </p>
               </div>
             )}

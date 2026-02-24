@@ -19,6 +19,7 @@
     "@prisma/client": "^6.5.0",
     "@tailwindcss/typography": "^0.5.19",
     "@types/pdf-parse": "^1.1.5",
+    "@vercel/blob": "^2.3.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",

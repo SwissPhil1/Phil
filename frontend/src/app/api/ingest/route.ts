@@ -72,11 +72,15 @@ export async function POST(request: Request) {
       return handleProcessText(body);
     } else if (action === "generate-study-guide") {
       return handleGenerateStudyGuide(body);
+    } else if (action === "store-chapter") {
+      return handleStoreChapter(body);
+    } else if (action === "generate-content") {
+      return handleGenerateContent(body);
     } else if (action === "seed") {
       return handleSeed();
     } else {
       return NextResponse.json(
-        { error: "Invalid action. Use 'detect-chapters', 'process-pdf', 'process', 'generate-study-guide', or 'seed'." },
+        { error: "Invalid action. Use 'detect-chapters', 'process-pdf', 'process', 'generate-study-guide', 'store-chapter', 'generate-content', or 'seed'." },
         { status: 400 }
       );
     }
@@ -713,11 +717,12 @@ async function handleGenerateStudyGuide(body: {
   chapterNumber?: number;
   bookSource?: string;
   fileIds?: string[];
+  blobUrls?: string[];
 }) {
-  const { chapterId, chapterNumber, bookSource, fileIds } = body;
+  const { chapterId, chapterNumber, bookSource, fileIds, blobUrls } = body;
 
   // Look up the chapter
-  const chapter = chapterId
+  let chapter = chapterId
     ? await prisma.chapter.findUnique({ where: { id: chapterId } })
     : chapterNumber && bookSource
       ? await prisma.chapter.findUnique({
@@ -739,7 +744,43 @@ async function handleGenerateStudyGuide(body: {
     );
   }
 
-  const hasFileIds = Array.isArray(fileIds) && fileIds.length > 0;
+  // Save blob URLs to the chapter if provided (permanent PDF storage)
+  const incomingBlobUrls = Array.isArray(blobUrls) && blobUrls.length > 0 ? blobUrls : null;
+  if (incomingBlobUrls) {
+    // Merge with any existing blob URLs (from partial ingests / resumes)
+    const existing: string[] = JSON.parse(chapter.pdfBlobUrls || "[]");
+    const merged = [...new Set([...existing, ...incomingBlobUrls])];
+    await prisma.chapter.update({
+      where: { id: chapter.id },
+      data: { pdfBlobUrls: JSON.stringify(merged) },
+    });
+    chapter = { ...chapter, pdfBlobUrls: JSON.stringify(merged) };
+  }
+
+  // Determine file IDs for Claude: use provided ones, or re-upload from stored blobs
+  const effectiveFileIds = Array.isArray(fileIds) && fileIds.length > 0 ? [...fileIds] : [] as string[];
+
+  if (effectiveFileIds.length === 0) {
+    // No fresh file IDs — try to re-upload from stored Vercel Blob URLs
+    const storedBlobUrls: string[] = JSON.parse(chapter.pdfBlobUrls || "[]");
+    if (storedBlobUrls.length > 0) {
+      console.log(`Re-uploading ${storedBlobUrls.length} stored PDF chunks to Anthropic Files API for chapter ${chapter.number}...`);
+      for (const url of storedBlobUrls) {
+        try {
+          const pdfRes = await fetch(url);
+          if (!pdfRes.ok) continue;
+          const pdfBuffer = await pdfRes.arrayBuffer();
+          const file = new File([Buffer.from(pdfBuffer)], `ch${chapter.number}_stored.pdf`, { type: "application/pdf" });
+          const uploaded = await client.beta.files.upload({ file });
+          effectiveFileIds.push(uploaded.id);
+        } catch (err) {
+          console.warn(`Failed to re-upload blob ${url}:`, err instanceof Error ? err.message : err);
+        }
+      }
+    }
+  }
+
+  const hasFileIds = effectiveFileIds.length > 0;
 
   // ── Find related chapters from other book sources ───────────────────────
   // Match by title similarity: extract key topic words and find chapters
@@ -827,7 +868,7 @@ ${mn.length > 0 ? mn.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(no
     // MODE 1: Actual PDF pages available — Claude sees the real textbook
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const content: any[] = [];
-    for (const fid of fileIds) {
+    for (const fid of effectiveFileIds) {
       content.push({
         type: "document",
         source: { type: "file", file_id: fid },
@@ -919,6 +960,405 @@ ${mn.length > 0 ? mn.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(no
           });
         } else {
           sendEvent({ error: err instanceof Error ? err.message : "Study guide generation failed" });
+        }
+      } finally {
+        clearInterval(heartbeat);
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+    },
+  });
+}
+
+/**
+ * Store chapter metadata + blob URLs without any AI processing.
+ * Called during source upload to save PDF chunk locations for later generation.
+ */
+async function handleStoreChapter(body: {
+  chapterNumber: number;
+  chapterTitle: string;
+  bookSource: string;
+  blobUrls: string[];
+}) {
+  const { chapterNumber, chapterTitle, bookSource, blobUrls } = body;
+
+  if (!chapterNumber || !chapterTitle || !bookSource || !Array.isArray(blobUrls)) {
+    return NextResponse.json(
+      { error: "Missing required fields: chapterNumber, chapterTitle, bookSource, blobUrls" },
+      { status: 400 }
+    );
+  }
+
+  // Merge with any existing blob URLs (supports re-uploading)
+  const existing = await prisma.chapter.findUnique({
+    where: { bookSource_number: { bookSource: String(bookSource), number: Number(chapterNumber) } },
+  });
+  const existingUrls: string[] = existing?.pdfBlobUrls ? JSON.parse(existing.pdfBlobUrls) : [];
+  const mergedUrls = [...new Set([...existingUrls, ...blobUrls])];
+
+  const chapter = await prisma.chapter.upsert({
+    where: { bookSource_number: { bookSource: String(bookSource), number: Number(chapterNumber) } },
+    update: {
+      title: String(chapterTitle),
+      pdfBlobUrls: JSON.stringify(mergedUrls),
+    },
+    create: {
+      bookSource: String(bookSource),
+      number: Number(chapterNumber),
+      title: String(chapterTitle),
+      pdfBlobUrls: JSON.stringify(mergedUrls),
+    },
+  });
+
+  return NextResponse.json({
+    success: true,
+    chapterId: chapter.id,
+    blobUrlsStored: mergedUrls.length,
+  });
+}
+
+/**
+ * Generate ALL content for a chapter from stored blob URLs.
+ * This is the "one button press" action: re-uploads blobs to Anthropic,
+ * processes each chunk for Q/F/summary, then generates a study guide.
+ *
+ * SSE events:
+ *   { status: "uploading", message: "..." }
+ *   { status: "processing", chunk: N, total: M }
+ *   { status: "generating-guide" }
+ *   { success: true, questionsCreated: N, flashcardsCreated: M }
+ *   { error: "..." }
+ */
+async function handleGenerateContent(body: { chapterId: number }) {
+  const { chapterId } = body;
+
+  const chapter = await prisma.chapter.findUnique({ where: { id: chapterId } });
+  if (!chapter) {
+    return NextResponse.json({ error: "Chapter not found" }, { status: 404 });
+  }
+
+  const blobUrls: string[] = JSON.parse(chapter.pdfBlobUrls || "[]");
+  if (blobUrls.length === 0) {
+    return NextResponse.json(
+      { error: "No stored PDF pages for this chapter. Upload the source PDF first." },
+      { status: 400 }
+    );
+  }
+
+  let client: Anthropic;
+  try {
+    client = getClient();
+  } catch {
+    return NextResponse.json(
+      { error: "ANTHROPIC_API_KEY is not configured." },
+      { status: 500 }
+    );
+  }
+
+  const encoder = new TextEncoder();
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      const sendEvent = (data: Record<string, unknown>) => {
+        try {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+        } catch { /* closed */ }
+      };
+
+      const heartbeat = setInterval(() => {
+        try {
+          controller.enqueue(encoder.encode(`: heartbeat\n\n`));
+        } catch { /* ignore */ }
+      }, 8000);
+
+      try {
+        // ── Step 1: Re-upload all blob chunks to Anthropic Files API ──
+        sendEvent({ status: "uploading", message: `Re-uploading ${blobUrls.length} PDF chunks to Claude...` });
+        const fileIds: string[] = [];
+
+        for (let i = 0; i < blobUrls.length; i++) {
+          const url = blobUrls[i];
+          try {
+            const pdfRes = await fetch(url);
+            if (!pdfRes.ok) {
+              sendEvent({ status: "warning", message: `Failed to fetch blob chunk ${i + 1}: HTTP ${pdfRes.status}` });
+              continue;
+            }
+            const pdfBuffer = await pdfRes.arrayBuffer();
+            const file = new File(
+              [Buffer.from(pdfBuffer)],
+              `ch${chapter.number}_chunk${i + 1}.pdf`,
+              { type: "application/pdf" }
+            );
+            const uploaded = await client.beta.files.upload({ file });
+            fileIds.push(uploaded.id);
+          } catch (err) {
+            sendEvent({ status: "warning", message: `Chunk ${i + 1} upload failed: ${err instanceof Error ? err.message : String(err)}` });
+          }
+        }
+
+        if (fileIds.length === 0) {
+          sendEvent({ error: "All PDF chunk uploads failed. Check your blob storage configuration." });
+          return;
+        }
+
+        sendEvent({ status: "uploading", message: `${fileIds.length} chunks uploaded to Claude.` });
+
+        // ── Step 2: Process each chunk for Q/F/summary ────────────────
+        const numChunks = fileIds.length;
+
+        for (let i = 0; i < numChunks; i++) {
+          sendEvent({ status: "processing", chunk: i + 1, total: numChunks });
+
+          const isAppend = i > 0;
+          const promptText = isAppend
+            ? `You are an expert radiology educator helping a resident prepare for the Swiss FMH2 radiology specialty exam.
+
+You are looking at additional pages from Chapter ${chapter.number}: "${chapter.title}" of a radiology textbook.
+Earlier pages of this chapter have already been processed. Focus on generating questions and flashcards from the NEW content on these pages.
+
+IMPORTANT: You can see the IMAGES in these pages. Reference specific imaging findings you can see.
+
+Generate study materials as a JSON object with exactly these fields:
+
+{
+  "summary": "",
+  "keyPoints": ["3-5 key points from these specific pages"],
+  "highYield": ["2-4 high-yield facts from these pages"],
+  "mnemonics": [],
+  "memoryPalace": "",
+  "questions": [
+    {
+      "questionText": "MCQ question based on content from these pages",
+      "options": ["A) ...", "B) ...", "C) ...", "D) ..."],
+      "correctAnswer": 0,
+      "explanation": "Detailed explanation",
+      "difficulty": "medium",
+      "category": "topic area"
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "Question from these pages",
+      "back": "Answer with imaging characteristics",
+      "category": "topic area"
+    }
+  ]
+}
+
+Requirements:
+- Generate 8-15 questions with varying difficulty (easy/medium/hard)
+- Generate 15-25 flashcards
+- Focus on content unique to THESE pages — avoid duplicating earlier material
+- Questions should mimic RadPrimer / FMH2 exam style
+- Return ONLY valid JSON, no markdown fences`
+            : `You are an expert radiology educator helping a resident prepare for the Swiss FMH2 radiology specialty exam.
+
+You are looking at actual pages from a radiology textbook — Chapter ${chapter.number}: "${chapter.title}".
+
+IMPORTANT: You can see the IMAGES in these pages (X-rays, CT scans, MRI images, ultrasound, diagrams, anatomical illustrations). Use them to create better study materials. Reference specific imaging findings you can see.
+
+Generate comprehensive study materials as a JSON object with exactly these fields:
+
+{
+  "summary": "A detailed summary (2-3 paragraphs) covering main concepts. Reference key imaging findings visible in the chapter's figures.",
+  "keyPoints": ["8-12 key points — include imaging-specific points like 'On CT, finding X appears as...'"],
+  "highYield": ["5-8 high-yield facts for the exam, including classic imaging signs"],
+  "mnemonics": [{"name": "Mnemonic name", "content": "Explanation"}],
+  "memoryPalace": "A vivid memory palace description linking concepts to imaging findings.",
+  "questions": [
+    {
+      "questionText": "MCQ question — include image-based questions like 'A CT shows X finding. What is the most likely diagnosis?'",
+      "options": ["A) ...", "B) ...", "C) ...", "D) ..."],
+      "correctAnswer": 0,
+      "explanation": "Detailed explanation referencing the imaging appearance",
+      "difficulty": "medium",
+      "category": "topic area"
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "Question (include imaging-based cards like 'What is the classic CT appearance of X?')",
+      "back": "Detailed answer with imaging characteristics",
+      "category": "topic area"
+    }
+  ]
+}
+
+Requirements:
+- Generate 8-15 questions with varying difficulty (easy/medium/hard)
+- Generate 15-25 flashcards
+- Generate 3-5 mnemonics
+- Include image-based questions that reference imaging findings from the chapter
+- Questions should mimic RadPrimer / FMH2 exam style
+- Focus on diagnostic imaging findings, differential diagnoses, and classic signs
+- Return ONLY valid JSON, no markdown fences`;
+
+          const response = await callClaudeWithRetry(() =>
+            client.beta.messages.create({
+              model: "claude-sonnet-4-20250514",
+              max_tokens: 8000,
+              betas: ["files-api-2025-04-14"],
+              messages: [{
+                role: "user",
+                content: [
+                  { type: "document", source: { type: "file", file_id: fileIds[i] } },
+                  { type: "text", text: promptText },
+                ],
+              }],
+            })
+          );
+
+          let responseText = (response.content[0] as { type: "text"; text: string }).text.trim();
+          if (responseText.startsWith("```")) {
+            responseText = responseText.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
+          }
+
+          let content: StudyContent;
+          try {
+            content = JSON.parse(responseText);
+          } catch {
+            sendEvent({ status: "warning", message: `Chunk ${i + 1}/${numChunks}: Failed to parse JSON, skipping` });
+            continue;
+          }
+
+          if (isAppend) {
+            await appendContentToDB(content, chapter.number, chapter.bookSource);
+          } else {
+            await saveContentToDB(content, chapter.title, chapter.number, chapter.bookSource);
+          }
+
+          // Brief delay between chunks to avoid rate limits
+          if (i < numChunks - 1) {
+            await new Promise((r) => setTimeout(r, 2000));
+          }
+        }
+
+        // ── Step 3: Generate study guide ──────────────────────────────
+        sendEvent({ status: "generating-guide", message: "Generating comprehensive study guide..." });
+
+        // Find related chapters from other books for cross-referencing
+        const titleWords = chapter.title
+          .toLowerCase()
+          .replace(/[^a-z0-9\s]/g, "")
+          .split(/\s+/)
+          .filter((w) => w.length > 3 && !["chapter", "section", "part", "the", "and", "for", "with", "from"].includes(w));
+
+        const relatedChapters = titleWords.length > 0
+          ? await prisma.chapter.findMany({
+              where: {
+                bookSource: { not: chapter.bookSource },
+                OR: titleWords.map((word) => ({
+                  title: { contains: word, mode: "insensitive" as const },
+                })),
+              },
+            })
+          : [];
+
+        function formatCtx(ch: NonNullable<typeof chapter>) {
+          const kp: string[] = JSON.parse(ch.keyPoints || "[]");
+          const hy: string[] = JSON.parse(ch.highYield || "[]");
+          return `### ${ch.bookSource === "core_radiology" ? "Core Radiology" : "Crack the Core"} — Ch. ${ch.number}: ${ch.title}
+**Summary:** ${ch.summary || "(not available)"}
+**Key Points:** ${kp.length > 0 ? kp.map((p) => `- ${p}`).join("\n") : "(none)"}
+**High-Yield:** ${hy.length > 0 ? hy.map((h) => `- ${h}`).join("\n") : "(none)"}`;
+        }
+
+        const crossRefBlock = relatedChapters.length > 0
+          ? `\n\n## Additional Source Material\n\n${relatedChapters.map(formatCtx).join("\n\n---\n\n")}`
+          : "";
+
+        const uniqueSources = [...new Set([
+          chapter.bookSource === "core_radiology" ? "Core Radiology" : "Crack the Core",
+          ...relatedChapters.map((rc) => rc.bookSource === "core_radiology" ? "Core Radiology" : "Crack the Core"),
+        ])];
+
+        const crossRefNote = relatedChapters.length > 0
+          ? `\n\nIMPORTANT: You have material from multiple textbooks (${uniqueSources.join(" + ")}). Synthesize ALL sources into ONE unified guide.`
+          : "";
+
+        const guidePrompt = `Write a comprehensive study guide for the topic: "${chapter.title}". This should be a single, cohesive document that a radiology resident would actually want to read the night before the Swiss FMH2 radiology specialty exam.${crossRefNote}
+
+## Structure:
+1. **## Overview** — 2-3 sentence orientation: what this chapter covers and why it matters clinically.
+2. **## Core Concepts** — Walk through the key topics systematically. Use ### subheadings for each major concept. For each:
+   - Explain the pathophysiology/anatomy briefly
+   - Describe the **imaging appearance** on each relevant modality (CT, MRI, US, X-ray) using bullet points
+   - Note **classic signs** in **bold**
+   - Include differential diagnosis where relevant
+3. **## High-Yield Exam Points** — A clearly marked section with the facts most likely to appear on exams. Use bullet markers.
+4. **## Mnemonics & Memory Aids** — Create memorable mnemonics for key concepts.
+5. **## Differential Diagnosis Tables** — Where applicable, use markdown tables comparing entities.
+6. **## Active Recall** — End with 8-10 "Stop and think" questions (no answers). Format as blockquotes.
+
+## Style rules:
+- Use **bold** for critical terms and classic signs
+- Use *italics* for modality-specific descriptions
+- Use markdown tables for comparisons
+- Use > blockquotes for active recall prompts
+- Keep it dense but readable — no filler
+- Target length: 2000-4000 words
+- Do NOT wrap the output in code fences — return raw markdown only`;
+
+        // Build messages with all file IDs for full chapter context
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const guideContent: any[] = [];
+        for (const fid of fileIds) {
+          guideContent.push({
+            type: "document",
+            source: { type: "file", file_id: fid },
+          });
+        }
+        guideContent.push({
+          type: "text",
+          text: `You are an expert radiology educator. You can see the actual pages of this radiology textbook chapter above.${crossRefBlock}\n\n${guidePrompt}`,
+        });
+
+        const guideResponse = await callClaudeWithRetry(() =>
+          client.beta.messages.create({
+            model: "claude-sonnet-4-20250514",
+            max_tokens: 16000,
+            betas: ["files-api-2025-04-14"],
+            messages: [{ role: "user", content: guideContent }],
+          })
+        );
+
+        let studyGuide = (guideResponse.content[0] as { type: "text"; text: string }).text.trim();
+        if (studyGuide.startsWith("```")) {
+          studyGuide = studyGuide.replace(/^```(?:markdown|md)?\n?/, "").replace(/\n?```$/, "");
+        }
+
+        await prisma.chapter.update({
+          where: { id: chapter.id },
+          data: { studyGuide },
+        });
+
+        // ── Done ──────────────────────────────────────────────────────
+        const totalQ = await prisma.question.count({ where: { chapterId: chapter.id } });
+        const totalF = await prisma.flashcard.count({ where: { chapterId: chapter.id } });
+
+        sendEvent({
+          success: true,
+          chapterId: chapter.id,
+          questionsCreated: totalQ,
+          flashcardsCreated: totalF,
+          studyGuideLength: studyGuide.length,
+          sources: uniqueSources,
+        });
+      } catch (err: unknown) {
+        const anthropicError = err as { status?: number; error?: { type?: string; message?: string } };
+        if (anthropicError.status && anthropicError.error) {
+          sendEvent({
+            error: `Anthropic API error (${anthropicError.status}): ${anthropicError.error.message || "Unknown"}`,
+          });
+        } else {
+          sendEvent({ error: err instanceof Error ? err.message : "Content generation failed" });
         }
       } finally {
         clearInterval(heartbeat);

@@ -7,6 +7,14 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model Source {
+  id         Int      @id @default(autoincrement())
+  name       String   // "Core Radiology", "Crack the Core"
+  bookSource String   @unique // "core_radiology", "crack_the_core"
+  totalPages Int      @default(0)
+  createdAt  DateTime @default(now())
+}
+
 model Chapter {
   id         Int      @id @default(autoincrement())
   bookSource String   // "core_radiology" or "crack_the_core"
@@ -19,6 +27,7 @@ model Chapter {
   mnemonics  String?  // JSON array of mnemonics
   memoryPalace String?
   studyGuide String?  // Rich markdown study guide (generated per-chapter)
+  pdfBlobUrls String? // JSON array of Vercel Blob URLs for stored PDF chunks
   mindMap    String?  // JSON for mind map nodes/edges
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt

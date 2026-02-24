@@ -171,8 +171,28 @@ export default function IngestPage() {
     }
   }, [totalPages]);
 
+  // ─── Retry helper ────────────────────────────────────────────────────
+  const fetchWithRetry = useCallback(
+    async (url: string, options: RequestInit, retries = 3): Promise<Response> => {
+      for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+          const res = await fetch(url, options);
+          return res;
+        } catch (err) {
+          if (attempt === retries) throw err;
+          // Exponential backoff: 2s, 4s, 8s
+          const delay = Math.pow(2, attempt + 1) * 1000;
+          console.warn(`Fetch ${url} failed (attempt ${attempt + 1}/${retries + 1}), retrying in ${delay}ms...`, err);
+          await new Promise((r) => setTimeout(r, delay));
+        }
+      }
+      throw new Error("fetchWithRetry: unreachable");
+    },
+    []
+  );
+
   // ─── Step 3: Process a Single Chapter ──────────────────────────────────
-  // Extracts chapter pages on the client (in chunks of ≤15 pages),
+  // Extracts chapter pages on the client (in chunks of ≤8 pages),
   // uploads each chunk to the server → Files API, then processes via Claude.
   // The ingest endpoint returns an SSE stream (heartbeats keep the
   // connection alive during the long-running Claude call).
@@ -184,7 +204,7 @@ export default function IngestPage() {
 
       try {
         const { PDFDocument } = await import("pdf-lib");
-        const maxPagesPerChunk = 15;
+        const maxPagesPerChunk = 8; // Radiology PDFs are image-heavy; keep chunks small
         const startIdx = Math.max(0, chapter.startPage - 1); // 1-based → 0-based
         const endIdx = Math.min(pdfDocRef.current.getPageCount(), chapter.endPage);
         const chapterPageCount = endIdx - startIdx;
@@ -224,10 +244,10 @@ export default function IngestPage() {
 
           let uploadRes: Response;
           try {
-            uploadRes = await fetch("/api/upload-pdf", { method: "POST", body: formData });
+            uploadRes = await fetchWithRetry("/api/upload-pdf", { method: "POST", body: formData }, 3);
           } catch (fetchErr) {
             throw new Error(
-              `Upload fetch failed (${sizeMB} MB, ${pagesToCopy}p): ${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}`
+              `Upload fetch failed after retries (${sizeMB} MB, ${pagesToCopy}p): ${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}`
             );
           }
 
@@ -261,7 +281,7 @@ export default function IngestPage() {
           const isAppend = i > 0;
           let ingestRes: Response;
           try {
-            ingestRes = await fetch("/api/ingest", {
+            ingestRes = await fetchWithRetry("/api/ingest", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
@@ -272,10 +292,10 @@ export default function IngestPage() {
                 bookSource,
                 appendMode: isAppend,
               }),
-            });
+            }, 2);
           } catch (ingestFetchErr) {
             throw new Error(
-              `Ingest fetch failed (chunk ${i + 1}/${numChunks}): ${ingestFetchErr instanceof Error ? ingestFetchErr.message : String(ingestFetchErr)}`
+              `Ingest fetch failed after retries (chunk ${i + 1}/${numChunks}): ${ingestFetchErr instanceof Error ? ingestFetchErr.message : String(ingestFetchErr)}`
             );
           }
 
@@ -336,9 +356,9 @@ export default function IngestPage() {
             }));
           }
 
-          // Small delay between chunks to avoid rate limits
+          // Delay between chunks to avoid rate limits (3s)
           if (i < numChunks - 1) {
-            await new Promise((r) => setTimeout(r, 1500));
+            await new Promise((r) => setTimeout(r, 3000));
           }
         }
       } catch (err) {
@@ -351,7 +371,7 @@ export default function IngestPage() {
         }));
       }
     },
-    [bookSource]
+    [bookSource, fetchWithRetry]
   );
 
   // ─── Process All Selected ──────────────────────────────────────────────
@@ -363,8 +383,8 @@ export default function IngestPage() {
       const status = statuses[ch.number];
       if (status?.state === "done") continue; // skip already processed
       await processChapter(ch);
-      // Small delay between chapters to avoid rate limits
-      await new Promise((r) => setTimeout(r, 2000));
+      // Delay between chapters to avoid rate limits (4s)
+      await new Promise((r) => setTimeout(r, 4000));
     }
     setProcessingAll(false);
   }, [chapters, selectedChapters, statuses, processChapter]);
@@ -600,7 +620,7 @@ export default function IngestPage() {
 
           <p className="text-xs text-muted-foreground">
             Pages are extracted on your device, then uploaded to the Anthropic Files API — lightweight, no base64 encoding.
-            Large chapters (&gt;30 pages) are split into smaller chunks automatically.
+            Large chapters are split into 8-page chunks automatically. Uploads retry on failure.
           </p>
 
           <div className="space-y-2">

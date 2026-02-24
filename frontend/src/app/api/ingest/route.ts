@@ -365,6 +365,19 @@ export async function POST(request: Request) {
         where: { bookSource: bs, chapterNum: cn },
       });
       return NextResponse.json({ success: true, deleted: deleted.count });
+    } else if (action === "purge-source") {
+      // Nuclear option: delete ALL chunks + chapters for an entire book source
+      const { bookSource: bs } = body;
+      if (!bs) {
+        return NextResponse.json({ error: "Missing bookSource" }, { status: 400 });
+      }
+      const deletedChunks = await prisma.pdfChunk.deleteMany({ where: { bookSource: bs } });
+      const deletedChapters = await prisma.chapter.deleteMany({ where: { bookSource: bs } });
+      return NextResponse.json({
+        success: true,
+        deletedChunks: deletedChunks.count,
+        deletedChapters: deletedChapters.count,
+      });
     } else if (action === "generate-content") {
       return handleGenerateContent(body);
     } else if (action === "seed") {

@@ -859,38 +859,33 @@ ${mn.length > 0 ? mn.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(no
 - Target length: 2000-4000 words
 - Do NOT wrap the output in code fences — return raw markdown only`;
 
-  // Always include full-chapter metadata (covers ALL pages) as primary context,
-  // plus a few PDF files for visual reference (imaging examples, diagrams).
-  const primaryContext = formatChapterContext(chapter);
-  const contextBlock = `## Source Material\n\n${primaryContext}${crossRefBlock}`;
+  // Build complete chapter data (ALL questions, flashcards, key points from every page)
+  const fullChapterData = await buildFullChapterContext(chapter.id, chapter.bookSource, chapter.number, chapter.title);
+  const fullContextBlock = `${fullChapterData}${crossRefBlock}`;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let messages: any[];
 
   if (hasFileIds) {
-    // Hybrid mode: full metadata for complete coverage + limited PDF files for visuals
-    const maxPdfFiles = 5;
+    // Send ALL PDF files for complete visual coverage
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const content: any[] = [];
-    for (const fid of effectiveFileIds.slice(0, maxPdfFiles)) {
+    for (const fid of effectiveFileIds) {
       content.push({
         type: "document",
         source: { type: "file", file_id: fid },
       });
     }
-    const extraNote = effectiveFileIds.length > maxPdfFiles
-      ? `\n\nNote: You see ${maxPdfFiles} of ${effectiveFileIds.length} PDF chunks above for visual reference. The full chapter content is provided in the text data below.`
-      : "";
     content.push({
       type: "text",
-      text: `You are an expert radiology educator. You can see actual pages from this radiology textbook chapter above for visual reference (imaging examples, diagrams).${extraNote}\n\nBelow is the complete processed data covering ALL pages of this chapter:\n\n${contextBlock}\n\n---\n\n${studyGuideInstructions}`,
+      text: `You are an expert radiology educator. You can see ALL pages of this radiology textbook chapter above. Use EVERY detail you see — every image, diagram, table, and text — to create the most complete study guide possible.\n\n${studyGuideInstructions}`,
     });
     messages = [{ role: "user", content }];
   } else {
-    // Metadata-only mode: no PDF pages available
+    // No PDF files — use complete processed data from every page
     messages = [{
       role: "user",
-      content: `You are an expert radiology educator. Below is the accumulated study data for a topic. Synthesize ALL sources into a comprehensive, unified study guide.\n\n${contextBlock}\n\n---\n\n${studyGuideInstructions}`,
+      content: `You are an expert radiology educator. Below is the COMPLETE processed data from every page of this chapter — including all questions, flashcards, key points, and high-yield facts. Use ALL of this data to create a comprehensive study guide. Do not skip any topic.\n\n${fullContextBlock}\n\n---\n\n${studyGuideInstructions}`,
     }];
   }
 
@@ -959,48 +954,41 @@ ${mn.length > 0 ? mn.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(no
         console.error("Study guide generation error:", err);
         const errMsg = getAnthropicErrorMessage(err) || "Study guide generation failed";
 
-        // Fallback: if file-based generation failed, try metadata-based
+        // Fallback: if file-based failed, use complete processed data (every Q, F, key point)
         if (hasFileIds) {
-          console.log("File-based study guide failed, falling back to metadata-based generation...");
+          console.log("File-based study guide failed, falling back to full processed data...");
           try {
-            const freshChapter = await prisma.chapter.findUnique({ where: { id: chapter.id } });
-            if (freshChapter && (freshChapter.summary || freshChapter.keyPoints)) {
-              const metaContext = formatChapterContext(freshChapter);
-              const contextBlock = `## Source Material\n\n${metaContext}${crossRefBlock}`;
-              const fallbackMessages = [{
-                role: "user" as const,
-                content: `You are an expert radiology educator. Below is the accumulated study data for a topic. Synthesize ALL sources into a comprehensive, unified study guide.\n\n${contextBlock}\n\n---\n\n${studyGuideInstructions}`,
-              }];
+            const fallbackResponse = await callClaudeWithRetry(() =>
+              client.messages.create({
+                model: "claude-sonnet-4-20250514",
+                max_tokens: 16000,
+                messages: [{
+                  role: "user",
+                  content: `You are an expert radiology educator. Below is the COMPLETE processed data from every page of this chapter — including all questions, flashcards, key points, and high-yield facts. Use ALL of this data to create a comprehensive study guide. Do not skip any topic.\n\n${fullContextBlock}\n\n---\n\n${studyGuideInstructions}`,
+                }],
+              })
+            );
 
-              const fallbackResponse = await callClaudeWithRetry(() =>
-                client.messages.create({
-                  model: "claude-sonnet-4-20250514",
-                  max_tokens: 12000,
-                  messages: fallbackMessages,
-                })
-              );
-
-              let studyGuide = (fallbackResponse.content[0] as { type: "text"; text: string }).text.trim();
-              if (studyGuide.startsWith("```")) {
-                studyGuide = studyGuide.replace(/^```(?:markdown|md)?\n?/, "").replace(/\n?```$/, "");
-              }
-
-              await prisma.chapter.update({
-                where: { id: chapter.id },
-                data: { studyGuide },
-              });
-
-              sendEvent({
-                success: true,
-                chapterId: chapter.id,
-                studyGuideLength: studyGuide.length,
-                mode: "metadata-fallback",
-                sources: uniqueSources,
-              });
-              return;
+            let studyGuide = (fallbackResponse.content[0] as { type: "text"; text: string }).text.trim();
+            if (studyGuide.startsWith("```")) {
+              studyGuide = studyGuide.replace(/^```(?:markdown|md)?\n?/, "").replace(/\n?```$/, "");
             }
+
+            await prisma.chapter.update({
+              where: { id: chapter.id },
+              data: { studyGuide },
+            });
+
+            sendEvent({
+              success: true,
+              chapterId: chapter.id,
+              studyGuideLength: studyGuide.length,
+              mode: "data-fallback",
+              sources: uniqueSources,
+            });
+            return;
           } catch (fallbackErr) {
-            console.error("Metadata fallback also failed:", fallbackErr);
+            console.error("Data fallback also failed:", fallbackErr);
           }
         }
 
@@ -1064,8 +1052,70 @@ async function handleStoreChapter(body: {
 }
 
 /**
- * Generate ALL content for a chapter from stored blob URLs.
- * This is the "one button press" action: re-uploads blobs to Anthropic,
+ * Build comprehensive chapter context from ALL processed data.
+ * Includes summary, key points, high yield, mnemonics, AND every question
+ * and flashcard — these contain detailed knowledge from every page.
+ */
+async function buildFullChapterContext(
+  chapterId: number,
+  bookSource: string,
+  chapterNumber: number,
+  chapterTitle: string,
+): Promise<string> {
+  const ch = await prisma.chapter.findUnique({
+    where: { id: chapterId },
+    include: {
+      questions: { select: { questionText: true, options: true, explanation: true, category: true } },
+      flashcards: { select: { front: true, back: true, category: true } },
+    },
+  });
+  if (!ch) return "(chapter not found)";
+
+  const kp: string[] = JSON.parse(ch.keyPoints || "[]");
+  const hy: string[] = JSON.parse(ch.highYield || "[]");
+  const mn: Array<{ name: string; content: string }> = JSON.parse(ch.mnemonics || "[]");
+  const bookName = bookSource === "core_radiology" ? "Core Radiology" : "Crack the Core";
+
+  // Questions contain detailed knowledge from every page
+  const questionBlock = ch.questions.length > 0
+    ? ch.questions.map((q, i) => {
+        const opts: string[] = JSON.parse(q.options || "[]");
+        return `Q${i + 1}${q.category ? ` [${q.category}]` : ""}: ${q.questionText}\n${opts.join(" | ")}\nExplanation: ${q.explanation}`;
+      }).join("\n\n")
+    : "(none)";
+
+  // Flashcards cover every detail from every page
+  const flashcardBlock = ch.flashcards.length > 0
+    ? ch.flashcards.map((f) => `- **${f.front}** → ${f.back}`).join("\n")
+    : "(none)";
+
+  return `## ${bookName} — Chapter ${chapterNumber}: ${chapterTitle}
+
+### Summary
+${ch.summary || "(not available)"}
+
+### Key Points (from all pages)
+${kp.length > 0 ? kp.map((p) => `- ${p}`).join("\n") : "(none)"}
+
+### High-Yield Facts (from all pages)
+${hy.length > 0 ? hy.map((h) => `- ${h}`).join("\n") : "(none)"}
+
+### Mnemonics
+${mn.length > 0 ? mn.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(none)"}
+
+### Memory Palace
+${ch.memoryPalace || "(none)"}
+
+### All Questions (${ch.questions.length} — covering every topic in the chapter)
+${questionBlock}
+
+### All Flashcards (${ch.flashcards.length} — detailed knowledge from every page)
+${flashcardBlock}`;
+}
+
+/**
+ * Generate ALL content for a chapter from stored PDF chunks.
+ * This is the "one button press" action: re-uploads chunks to Anthropic,
  * processes each chunk for Q/F/summary, then generates a study guide.
  *
  * SSE events:
@@ -1345,42 +1395,21 @@ Requirements:
 - Target length: 2000-4000 words
 - Do NOT wrap the output in code fences — return raw markdown only`;
 
-        // Hybrid approach: full-chapter metadata (covers ALL pages) + limited PDF visuals
-        // Re-read the chapter to get the just-saved metadata from Step 2
-        const freshChapter = await prisma.chapter.findUnique({ where: { id: chapter.id } });
-        const kp: string[] = JSON.parse(freshChapter?.keyPoints || "[]");
-        const hy: string[] = JSON.parse(freshChapter?.highYield || "[]");
-        const mn: Array<{ name: string; content: string }> = JSON.parse(freshChapter?.mnemonics || "[]");
-        const chapterMeta = `## Complete Chapter Data — ${chapter.bookSource === "core_radiology" ? "Core Radiology" : "Crack the Core"} Ch. ${chapter.number}: ${chapter.title}
+        // Build comprehensive metadata from ALL processed data (every page)
+        const fullChapterData = await buildFullChapterContext(chapter.id, chapter.bookSource, chapter.number, chapter.title);
 
-**Summary:** ${freshChapter?.summary || "(not available)"}
-
-**Key Points:**
-${kp.length > 0 ? kp.map((p) => `- ${p}`).join("\n") : "(none)"}
-
-**High-Yield Facts:**
-${hy.length > 0 ? hy.map((h) => `- ${h}`).join("\n") : "(none)"}
-
-**Mnemonics:**
-${mn.length > 0 ? mn.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(none)"}`;
-
-        // Attach up to 5 PDF chunks for visual reference (imaging examples)
-        const maxPdfFiles = 5;
-        const guideFileIds = fileIds.slice(0, maxPdfFiles);
+        // Try sending ALL PDF files for complete visual coverage
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const guideContent: any[] = [];
-        for (const fid of guideFileIds) {
+        for (const fid of fileIds) {
           guideContent.push({
             type: "document",
             source: { type: "file", file_id: fid },
           });
         }
-        const extraNote = fileIds.length > maxPdfFiles
-          ? `\n\nNote: You see ${maxPdfFiles} of ${fileIds.length} PDF chunks above for visual reference. The full chapter content is provided in the text data below.`
-          : "";
         guideContent.push({
           type: "text",
-          text: `You are an expert radiology educator. You can see actual pages from this chapter above for visual reference.${extraNote}\n\nBelow is the complete processed data covering ALL pages of this chapter:\n\n${chapterMeta}${crossRefBlock}\n\n---\n\n${guidePrompt}`,
+          text: `You are an expert radiology educator. You can see ALL pages of this radiology textbook chapter above. Use EVERY detail you see — every image, diagram, table, and text — to create the most complete study guide possible.${crossRefBlock}\n\n${guidePrompt}`,
         });
 
         let studyGuide = "";
@@ -1397,17 +1426,17 @@ ${mn.length > 0 ? mn.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(no
 
           studyGuide = (guideResponse.content[0] as { type: "text"; text: string }).text.trim();
         } catch (guideErr) {
-          // File-based failed — fall back to metadata-only (no PDFs attached)
-          console.error("File-based study guide failed, using metadata-only fallback:", guideErr);
-          sendEvent({ status: "generating-guide", message: "Retrying study guide from processed data..." });
+          // All-files approach failed — use complete processed data from every chunk
+          console.error("All-files study guide failed, using full processed data:", guideErr);
+          sendEvent({ status: "generating-guide", message: "Generating study guide from complete processed data..." });
 
           const fallbackResponse = await callClaudeWithRetry(() =>
             client.messages.create({
               model: "claude-sonnet-4-20250514",
-              max_tokens: 12000,
+              max_tokens: 16000,
               messages: [{
                 role: "user",
-                content: `You are an expert radiology educator. Below is the complete processed data for a chapter. Synthesize it into a comprehensive study guide.\n\n${chapterMeta}${crossRefBlock}\n\n---\n\n${guidePrompt}`,
+                content: `You are an expert radiology educator. Below is the COMPLETE processed data from every page of this chapter — including all questions, flashcards, key points, and high-yield facts extracted from the textbook. Use ALL of this data to create a comprehensive study guide. Do not skip any topic.\n\n${fullChapterData}${crossRefBlock}\n\n---\n\n${guidePrompt}`,
               }],
             })
           );

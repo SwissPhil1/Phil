@@ -162,8 +162,42 @@ export default function IngestPage() {
 
       const detected: DetectedChapter[] = data.chapters;
       setChapters(detected);
-      setSelectedChapters(new Set(detected.map((c) => c.number)));
-      setStatusMsg(`Found ${detected.length} chapters. Select which ones to process.`);
+
+      // Check which chapters are already ingested in the DB
+      try {
+        const existingRes = await fetch(`/api/chapters?book=${bookSource}`);
+        const existingChapters: { number: number; _count: { questions: number; flashcards: number } }[] = await existingRes.json();
+        const existingMap = new Map(existingChapters.map((c) => [c.number, c._count]));
+
+        // Pre-populate statuses for already-ingested chapters
+        const preStatuses: Record<number, ChapterStatus> = {};
+        const unprocessed: number[] = [];
+        for (const ch of detected) {
+          const counts = existingMap.get(ch.number);
+          if (counts && (counts.questions > 0 || counts.flashcards > 0)) {
+            preStatuses[ch.number] = {
+              state: "done",
+              result: { chapterId: 0, questionsCreated: counts.questions, flashcardsCreated: counts.flashcards },
+            };
+          } else {
+            unprocessed.push(ch.number);
+          }
+        }
+        setStatuses(preStatuses);
+        // Only select chapters that haven't been ingested yet
+        setSelectedChapters(new Set(unprocessed));
+
+        const alreadyDone = detected.length - unprocessed.length;
+        if (alreadyDone > 0) {
+          setStatusMsg(`Found ${detected.length} chapters. ${alreadyDone} already ingested, ${unprocessed.length} remaining.`);
+        } else {
+          setStatusMsg(`Found ${detected.length} chapters. Select which ones to process.`);
+        }
+      } catch {
+        // If check fails, just select all (old behavior)
+        setSelectedChapters(new Set(detected.map((c) => c.number)));
+        setStatusMsg(`Found ${detected.length} chapters. Select which ones to process.`);
+      }
     } catch (err) {
       setStatusMsg(`Detection failed: ${err instanceof Error ? err.message : "Unknown error"}`);
     } finally {
@@ -696,13 +730,13 @@ export default function IngestPage() {
                     </span>
                   )}
 
-                  {!isDone && !isActive && (
+                  {!isActive && (
                     <button
                       onClick={() => processChapter(ch)}
                       disabled={isAnyProcessing}
                       className="text-sm px-3 py-1 rounded border hover:bg-accent disabled:opacity-50"
                     >
-                      Process
+                      {isDone ? "Re-process" : "Process"}
                     </button>
                   )}
                 </div>

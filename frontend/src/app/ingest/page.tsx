@@ -11,6 +11,7 @@ import {
   Library,
   ScanSearch,
   HardDrive,
+  Trash2,
 } from "lucide-react";
 
 interface DetectedChapter {
@@ -62,8 +63,11 @@ export default function SourcesPage() {
   const [storeStatuses, setStoreStatuses] = useState<Record<number, StoreStatus>>({});
   const [overallProgress, setOverallProgress] = useState({ current: 0, total: 0 });
 
+  // Purging
+  const [purgingSource, setPurgingSource] = useState<string | null>(null);
+
   // Load existing sources
-  useEffect(() => {
+  const loadSources = useCallback(() => {
     fetch("/api/sources")
       .then((r) => r.json())
       .then((data) => {
@@ -72,6 +76,32 @@ export default function SourcesPage() {
       .catch(console.error)
       .finally(() => setLoadingSources(false));
   }, []);
+
+  useEffect(() => { loadSources(); }, [loadSources]);
+
+  // Purge all data for a source
+  const purgeSource = useCallback(async (bs: string) => {
+    if (!confirm(`Delete ALL stored data for "${bs}"? This cannot be undone.`)) return;
+    setPurgingSource(bs);
+    try {
+      const res = await fetch("/api/ingest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "purge-source", bookSource: bs }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        alert(`Purged ${data.deletedChunks} chunks + ${data.deletedChapters} chapters.`);
+        loadSources(); // Refresh the list
+      } else {
+        alert(`Purge failed: ${data.error || "Unknown error"}`);
+      }
+    } catch (e) {
+      alert(`Purge error: ${e}`);
+    } finally {
+      setPurgingSource(null);
+    }
+  }, [loadSources]);
 
   const bookOptions = [
     { key: "core_radiology", label: "Core Radiology" },
@@ -397,9 +427,23 @@ export default function SourcesPage() {
                     )}
                   </p>
                 </div>
-                <div className="flex items-center gap-2">
-                  <CheckCircle className="h-5 w-5 text-green-500" />
-                  <span className="text-sm text-green-600 font-medium">Uploaded</span>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => purgeSource(source.bookSource)}
+                    disabled={purgingSource === source.bookSource}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-950 border border-red-200 dark:border-red-800 transition-colors disabled:opacity-50"
+                  >
+                    {purgingSource === source.bookSource ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Trash2 className="h-4 w-4" />
+                    )}
+                    Purge
+                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <CheckCircle className="h-5 w-5 text-green-500" />
+                    <span className="text-sm text-green-600 font-medium">Uploaded</span>
+                  </div>
                 </div>
               </div>
             </div>

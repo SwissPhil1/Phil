@@ -83,6 +83,11 @@ async function handleTestKey() {
     ? `${process.env.ANTHROPIC_API_KEY.slice(0, 10)}...${process.env.ANTHROPIC_API_KEY.slice(-4)} (${process.env.ANTHROPIC_API_KEY.length} chars)`
     : "NOT SET";
 
+  // Show which env vars Vercel is injecting (names only, no values)
+  const allEnvKeys = Object.keys(process.env).sort();
+  const anthropicKeys = allEnvKeys.filter((k) => k.toUpperCase().includes("ANTHRO") || k.toUpperCase().includes("API_KEY") || k.toUpperCase().includes("CLAUDE"));
+  const vercelKeys = allEnvKeys.filter((k) => k.startsWith("VERCEL") || k.startsWith("NEXT_"));
+
   try {
     const client = getClient();
     const response = await client.messages.create({
@@ -102,6 +107,9 @@ async function handleTestKey() {
     return NextResponse.json({
       success: false,
       keyPreview,
+      matchingEnvVars: anthropicKeys,
+      vercelEnvVars: vercelKeys,
+      totalEnvVars: allEnvKeys.length,
       errorStatus: apiErr.status,
       errorType: apiErr.error?.type,
       errorMessage: apiErr.error?.message || apiErr.message || String(error),

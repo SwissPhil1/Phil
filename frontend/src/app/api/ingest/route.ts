@@ -366,13 +366,43 @@ export async function POST(request: Request) {
       });
       return NextResponse.json({ success: true, deleted: deleted.count });
     } else if (action === "purge-source") {
-      // Nuclear option: delete ALL chunks + chapters for an entire book source
+      // Nuclear option: delete ALL data for an entire book source
+      // Must delete in FK order: attempts/reviews → questions/flashcards → chapters, then chunks
       const { bookSource: bs } = body;
       if (!bs) {
         return NextResponse.json({ error: "Missing bookSource" }, { status: 400 });
       }
-      const deletedChunks = await prisma.pdfChunk.deleteMany({ where: { bookSource: bs } });
+
+      // Find all chapter IDs for this source
+      const chapterIds = (
+        await prisma.chapter.findMany({ where: { bookSource: bs }, select: { id: true } })
+      ).map((c) => c.id);
+
+      if (chapterIds.length > 0) {
+        // Find question IDs to delete their attempts
+        const questionIds = (
+          await prisma.question.findMany({ where: { chapterId: { in: chapterIds } }, select: { id: true } })
+        ).map((q) => q.id);
+
+        // Find flashcard IDs to delete their reviews
+        const flashcardIds = (
+          await prisma.flashcard.findMany({ where: { chapterId: { in: chapterIds } }, select: { id: true } })
+        ).map((f) => f.id);
+
+        // Delete in FK order (deepest children first)
+        if (questionIds.length > 0) {
+          await prisma.questionAttempt.deleteMany({ where: { questionId: { in: questionIds } } });
+        }
+        if (flashcardIds.length > 0) {
+          await prisma.flashcardReview.deleteMany({ where: { flashcardId: { in: flashcardIds } } });
+        }
+        await prisma.question.deleteMany({ where: { chapterId: { in: chapterIds } } });
+        await prisma.flashcard.deleteMany({ where: { chapterId: { in: chapterIds } } });
+      }
+
       const deletedChapters = await prisma.chapter.deleteMany({ where: { bookSource: bs } });
+      const deletedChunks = await prisma.pdfChunk.deleteMany({ where: { bookSource: bs } });
+
       return NextResponse.json({
         success: true,
         deletedChunks: deletedChunks.count,

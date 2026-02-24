@@ -34,7 +34,7 @@ interface SourceInfo {
 type StoreStatus =
   | { state: "pending" }
   | { state: "storing"; chunk: number; totalChunks: number }
-  | { state: "done"; blobUrls: number }
+  | { state: "done"; chunksStored: number }
   | { state: "error"; message: string };
 
 export default function SourcesPage() {
@@ -197,7 +197,8 @@ export default function SourcesPage() {
       const chapterPageCount = endIdx - startIdx;
       const numChunks = Math.ceil(chapterPageCount / maxPagesPerChunk);
 
-      const chunkBlobUrls: string[] = [];
+      let storedChunks = 0;
+      let hadError = false;
 
       for (let i = 0; i < numChunks; i++) {
         setStoreStatuses((prev) => ({
@@ -218,18 +219,20 @@ export default function SourcesPage() {
           const chunkBytes = await chunkPdf.save();
           const chunkBlob = new Blob([chunkBytes.slice(0)], { type: "application/pdf" });
 
-          // Upload to Vercel Blob ONLY (fast, no AI)
+          // Store chunk in Postgres database
           const formData = new FormData();
-          formData.append("pdf", chunkBlob, `${bookKey}_ch${chapter.number}_chunk${i + 1}.pdf`);
-          formData.append("filename", `${bookKey}_ch${chapter.number}_chunk${i + 1}.pdf`);
+          formData.append("pdf", chunkBlob, `${bookKey}_ch${chapter.number}_chunk${i}.pdf`);
+          formData.append("bookSource", bookKey);
+          formData.append("chapterNum", String(chapter.number));
+          formData.append("chunkIndex", String(i));
 
           const res = await fetch("/api/store-pdf", { method: "POST", body: formData });
           const data = await res.json();
 
-          if (data.blobUrl) {
-            chunkBlobUrls.push(data.blobUrl);
+          if (data.success) {
+            storedChunks++;
           } else {
-            throw new Error(data.error || "No blob URL returned");
+            throw new Error(data.error || "Storage failed");
           }
         } catch (err) {
           setStoreStatuses((prev) => ({
@@ -239,12 +242,13 @@ export default function SourcesPage() {
               message: `Chunk ${i + 1}: ${err instanceof Error ? err.message : "Upload failed"}`,
             },
           }));
+          hadError = true;
           break;
         }
       }
 
-      // Save chapter record with blob URLs (no AI processing)
-      if (chunkBlobUrls.length > 0) {
+      // Save chapter record (no AI processing)
+      if (storedChunks > 0 && !hadError) {
         try {
           await fetch("/api/ingest", {
             method: "POST",
@@ -254,13 +258,12 @@ export default function SourcesPage() {
               chapterNumber: chapter.number,
               chapterTitle: chapter.title,
               bookSource: bookKey,
-              blobUrls: chunkBlobUrls,
             }),
           });
 
           setStoreStatuses((prev) => ({
             ...prev,
-            [chapter.number]: { state: "done", blobUrls: chunkBlobUrls.length },
+            [chapter.number]: { state: "done", chunksStored: storedChunks },
           }));
         } catch (err) {
           setStoreStatuses((prev) => ({
@@ -462,15 +465,13 @@ export default function SourcesPage() {
                 <div className="rounded-lg bg-red-50 dark:bg-red-950/20 border border-red-300 dark:border-red-700 p-4 space-y-2">
                   <div className="flex items-center gap-2 text-red-700 dark:text-red-400 font-medium">
                     <AlertCircle className="h-5 w-5" />
-                    Storage upload failed
+                    Storage failed
                   </div>
                   <p className="text-sm text-red-600 dark:text-red-400">
                     {(Object.values(storeStatuses)[0] as { state: "error"; message: string }).message}
                   </p>
                   <p className="text-xs text-red-500 dark:text-red-500">
-                    Make sure your Vercel Blob store is connected to this project.
-                    In Vercel Dashboard: Project → Storage → connect your blob store.
-                    This adds the <code className="bg-red-100 dark:bg-red-900/30 px-1 rounded">BLOB_READ_WRITE_TOKEN</code> environment variable automatically.
+                    Check that your database is connected and accessible.
                   </p>
                 </div>
               )}

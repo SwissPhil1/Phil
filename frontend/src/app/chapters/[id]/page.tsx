@@ -35,7 +35,7 @@ interface ChapterDetail {
   mnemonics: string | null;
   memoryPalace: string | null;
   studyGuide: string | null;
-  pdfBlobUrls: string | null;
+  pdfChunkCount: number;
   questions: Array<{
     id: number;
     questionText: string;
@@ -77,7 +77,7 @@ export default function ChapterDetailPage() {
   }, [params.id]);
 
   const hasContent = chapter && (chapter.questions.length > 0 || chapter.studyGuide || chapter.summary);
-  const hasBlobUrls = chapter?.pdfBlobUrls && JSON.parse(chapter.pdfBlobUrls || "[]").length > 0;
+  const hasPdfChunks = (chapter?.pdfChunkCount ?? 0) > 0;
   const isGenerating = generateStatus && generateStatus.phase !== "done" && generateStatus.phase !== "error";
 
   // Generate ALL content from stored blob URLs (one button press)
@@ -216,12 +216,12 @@ export default function ChapterDetailPage() {
       !autoGenerateTriggered.current &&
       activeTab === "guide" &&
       (chapter.questions.length > 0 || chapter.summary) &&
-      hasBlobUrls
+      hasPdfChunks
     ) {
       autoGenerateTriggered.current = true;
       regenerateStudyGuide();
     }
-  }, [chapter, isGenerating, guideError, activeTab, hasBlobUrls, regenerateStudyGuide]);
+  }, [chapter, isGenerating, guideError, activeTab, hasPdfChunks, regenerateStudyGuide]);
 
   if (loading) {
     return (
@@ -259,7 +259,7 @@ export default function ChapterDetailPage() {
   ];
 
   // ─── Empty State: Chapter stored but no content generated yet ───────
-  if (!hasContent && hasBlobUrls && !isGenerating) {
+  if (!hasContent && hasPdfChunks && !isGenerating) {
     return (
       <div className="space-y-6">
         <div>
@@ -314,7 +314,7 @@ export default function ChapterDetailPage() {
   }
 
   // ─── Empty State: No blob URLs at all ──────────────────────────────
-  if (!hasContent && !hasBlobUrls && !isGenerating) {
+  if (!hasContent && !hasPdfChunks && !isGenerating) {
     return (
       <div className="space-y-6">
         <div>
@@ -448,7 +448,7 @@ export default function ChapterDetailPage() {
             Flashcards ({chapter.flashcards.length})
           </Button>
         </Link>
-        {hasBlobUrls && (
+        {hasPdfChunks && (
           <Button
             size="sm"
             variant="ghost"
@@ -519,7 +519,7 @@ export default function ChapterDetailPage() {
                 <div className="text-center py-12 space-y-3">
                   <GraduationCap className="h-12 w-12 mx-auto text-muted-foreground/40" />
                   <p className="text-muted-foreground">
-                    {hasBlobUrls
+                    {hasPdfChunks
                       ? "Preparing study guide..."
                       : "Upload this book's PDF in Sources to generate a study guide."}
                   </p>

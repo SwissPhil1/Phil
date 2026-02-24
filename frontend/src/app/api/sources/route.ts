@@ -52,20 +52,30 @@ export async function GET() {
     const chaptersWithContent = await prisma.chapter.findMany({
       select: {
         bookSource: true,
+        number: true,
         id: true,
-        pdfBlobUrls: true,
         studyGuide: true,
         _count: { select: { questions: true } },
       },
     });
+
+    // Count PDF chunks per bookSource (grouped)
+    const pdfChunkCounts = await prisma.pdfChunk.groupBy({
+      by: ["bookSource", "chapterNum"],
+      _count: { id: true },
+    });
+
+    // Build a set of (bookSource, chapterNum) that have chunks stored
+    const chunkedChapters = new Set(
+      pdfChunkCounts.map((c) => `${c.bookSource}:${c.chapterNum}`)
+    );
 
     const chapterCountMap = new Map(chapters.map((c) => [c.bookSource, c._count.id]));
 
     const contentCountMap = new Map<string, { stored: number; generated: number }>();
     for (const ch of chaptersWithContent) {
       const entry = contentCountMap.get(ch.bookSource) || { stored: 0, generated: 0 };
-      const hasBlobs = ch.pdfBlobUrls && JSON.parse(ch.pdfBlobUrls).length > 0;
-      if (hasBlobs) entry.stored++;
+      if (chunkedChapters.has(`${ch.bookSource}:${ch.number}`)) entry.stored++;
       if (ch._count.questions > 0 || ch.studyGuide) entry.generated++;
       contentCountMap.set(ch.bookSource, entry);
     }

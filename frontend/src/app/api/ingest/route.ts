@@ -519,19 +519,36 @@ CRITICAL — Page numbering rules:
       );
 
   let responseText = (response.content[0] as { type: "text"; text: string }).text.trim();
+
+  // Strip markdown code fences if present
   if (responseText.startsWith("```")) {
     responseText = responseText.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
   }
 
+  // Try to extract JSON array from the response (Claude may add text around it)
+  let chapters;
   try {
-    const chapters = JSON.parse(responseText);
-    return NextResponse.json({ chapters });
+    chapters = JSON.parse(responseText);
   } catch {
-    return NextResponse.json(
-      { error: "Failed to parse chapter detection response", raw: responseText },
-      { status: 500 }
-    );
+    // Fallback: find the JSON array within the text
+    const arrayMatch = responseText.match(/\[[\s\S]*\]/);
+    if (arrayMatch) {
+      try {
+        chapters = JSON.parse(arrayMatch[0]);
+      } catch {
+        // Still failed
+      }
+    }
   }
+
+  if (chapters && Array.isArray(chapters)) {
+    return NextResponse.json({ chapters });
+  }
+
+  return NextResponse.json(
+    { error: `Failed to parse chapter detection response. Claude returned: ${responseText.slice(0, 300)}` },
+    { status: 500 }
+  );
 }
 
 /**

@@ -39,51 +39,57 @@ export default function IngestPage() {
     setPdfText("");
 
     try {
-      const formData = new FormData();
-      formData.append("file", file);
+      const CHUNK_SIZE = 3.5 * 1024 * 1024; // 3.5MB per chunk (under Vercel's 4.5MB body limit)
+      const uploadId = crypto.randomUUID();
+      const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
 
-      // Use XMLHttpRequest for upload progress tracking
-      const data = await new Promise<{
-        chapters: ExtractedChapter[];
-        totalPages: number;
-        totalChars: number;
-      }>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
+      setPdfText(
+        `Uploading ${(file.size / 1024 / 1024).toFixed(1)} MB in ${totalChunks} chunk${totalChunks > 1 ? "s" : ""}...`
+      );
 
-        xhr.upload.addEventListener("progress", (evt) => {
-          if (evt.lengthComputable) {
-            setUploadPercent(Math.round((evt.loaded / evt.total) * 100));
-          }
+      // Upload file in chunks
+      for (let i = 0; i < totalChunks; i++) {
+        const start = i * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, file.size);
+        const chunk = file.slice(start, end);
+
+        const formData = new FormData();
+        formData.append("chunk", chunk);
+        formData.append("uploadId", uploadId);
+        formData.append("chunkIndex", String(i));
+        formData.append("totalChunks", String(totalChunks));
+
+        const res = await fetch("/api/ingest/upload-chunk", {
+          method: "POST",
+          body: formData,
         });
 
-        xhr.upload.addEventListener("load", () => {
-          setUploadPhase("extracting");
-        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(
+            data.error || `Failed to upload chunk ${i + 1}/${totalChunks}`
+          );
+        }
 
-        xhr.addEventListener("load", () => {
-          try {
-            const json = JSON.parse(xhr.responseText);
-            if (xhr.status >= 200 && xhr.status < 300) {
-              resolve(json);
-            } else {
-              reject(new Error(json.error || `Server error (${xhr.status})`));
-            }
-          } catch {
-            reject(new Error(`Server error (${xhr.status})`));
-          }
-        });
+        setUploadPercent(Math.round(((i + 1) / totalChunks) * 100));
+      }
 
-        xhr.addEventListener("error", () =>
-          reject(new Error("Upload failed — check your connection"))
-        );
-        xhr.addEventListener("timeout", () =>
-          reject(new Error("Upload timed out"))
-        );
+      // All chunks uploaded — trigger server-side extraction
+      setUploadPhase("extracting");
+      setPdfText("Server is extracting text from PDF...");
 
-        xhr.open("POST", "/api/ingest/extract-pdf");
-        xhr.timeout = 120000;
-        xhr.send(formData);
+      const res = await fetch("/api/ingest/extract-pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uploadId, totalChunks }),
       });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to extract text from PDF");
+      }
+
+      const data = await res.json();
 
       if (data.chapters) {
         setPdfText(

@@ -119,7 +119,7 @@ export default function IngestPage() {
       const pages = await tocPdf.copyPages(pdfDocRef.current, indices);
       pages.forEach((p) => tocPdf.addPage(p));
       const tocBytes = await tocPdf.save();
-      const tocBlob = new Blob([tocBytes.buffer as ArrayBuffer], { type: "application/pdf" });
+      const tocBlob = new Blob([tocBytes.slice(0)], { type: "application/pdf" });
 
       setStatusMsg("Uploading TOC pages to server...");
 
@@ -201,7 +201,7 @@ export default function IngestPage() {
           const pages = await chunkPdf.copyPages(pdfDocRef.current, indices);
           pages.forEach((p) => chunkPdf.addPage(p));
           const chunkBytes = await chunkPdf.save();
-          const chunkBlob = new Blob([chunkBytes.buffer as ArrayBuffer], { type: "application/pdf" });
+          const chunkBlob = new Blob([chunkBytes.slice(0)], { type: "application/pdf" });
 
           // Upload small chunk to server → Files API
           const formData = new FormData();

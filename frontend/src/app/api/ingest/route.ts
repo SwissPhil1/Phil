@@ -127,7 +127,9 @@ You are the combined voice of:
 
 This is for the Swiss FMH2 radiology specialty exam — one of the hardest radiology exams in Europe. The student CANNOT afford to miss ANY topic. Cover EVERYTHING with the depth of a textbook but the engagement of the best teacher they've ever had.${crossRefNote}
 
-CRITICAL: This chapter may contain 50-150 pages of dense radiology content. Your study guide must cover ALL of it — every pathology, every imaging sign, every differential diagnosis, every classic finding. If there are 20 different pathologies, ALL 20 must appear with full imaging characteristics. Do NOT condense or skip.
+CRITICAL: This chapter may contain 50-300 pages of dense radiology content (especially when merging multiple books). Your study guide must cover ALL of it — every pathology, every imaging sign, every differential diagnosis, every classic finding. If there are 20 different pathologies, ALL 20 must appear with full imaging characteristics. Do NOT condense or skip.
+
+BREADTH-FIRST RULE: Cover ALL organ systems and ALL pathologies before going into deep detail on any single one. If this is a GI chapter, you MUST cover esophagus, stomach, duodenum, small bowel, colon, rectum, liver, biliary, pancreas, spleen, peritoneum, and mesentery — NOT just the liver. Allocate space proportionally across all topics. Do NOT spend 80% of the guide on the first organ system and rush through the rest.
 
 ═══════════════════════════════════════════════════════
 VISUAL FORMATTING RULES (CRITICAL — follow these EXACTLY)
@@ -156,7 +158,6 @@ REQUIRED STRUCTURE (follow this EXACT order)
 ## 🎯 Overview & Exam Strategy
 
 - What this chapter covers and WHY it matters for FMH2
-- How frequently this topic appears on the exam (estimate based on chapter weight)
 - Strategic approach: what to master first vs. what's lower priority
 - Common exam question patterns from this topic
 

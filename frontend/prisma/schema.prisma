@@ -17,9 +17,10 @@ model Source {
 
 model Chapter {
   id         Int      @id @default(autoincrement())
-  bookSource String   // "core_radiology" or "crack_the_core"
+  bookSource String   // "core_radiology", "crack_the_core", or "notebook_import"
   number     Int
   title      String
+  organ      String?  // e.g. "esophagus", "stomach", "chest" — used to group imported notes
   rawText    String?
   summary    String?
   keyPoints  String?  // JSON array of key points

@@ -170,6 +170,7 @@ export default function ChapterDetailPage() {
 
   const hasContent = chapter && (chapter.questions.length > 0 || chapter.studyGuide || chapter.summary);
   const hasPdfChunks = (chapter?.pdfChunkCount ?? 0) > 0;
+  const isImported = chapter?.bookSource === "notebook_import";
   const isGenerating = !!(generateStatus && generateStatus.phase !== "done" && generateStatus.phase !== "error");
 
   // Generate ALL content from stored blob URLs (one button press)
@@ -473,8 +474,8 @@ export default function ChapterDetailPage() {
     );
   }
 
-  // ─── Empty State: No blob URLs at all ──────────────────────────────
-  if (!hasContent && !hasPdfChunks && !isGenerating) {
+  // ─── Empty State: No blob URLs at all (skip for imported notes) ────
+  if (!hasContent && !hasPdfChunks && !isImported && !isGenerating) {
     return (
       <div className="space-y-6">
         <div>
@@ -586,8 +587,11 @@ export default function ChapterDetailPage() {
           Back to Chapters
         </Link>
         <div className="flex items-center gap-2 mb-1">
-          <Badge variant={chapter.bookSource === "core_radiology" ? "default" : "secondary"}>
-            {chapter.bookSource === "core_radiology" ? "Core Radiology" : "Crack the Core"}
+          <Badge
+            variant={chapter.bookSource === "core_radiology" ? "default" : chapter.bookSource === "notebook_import" ? "outline" : "secondary"}
+            className={chapter.bookSource === "notebook_import" ? "border-purple-400 text-purple-700 dark:text-purple-300" : ""}
+          >
+            {chapter.bookSource === "core_radiology" ? "Core Radiology" : chapter.bookSource === "notebook_import" ? "Imported Notes" : "Crack the Core"}
           </Badge>
           <span className="text-sm text-muted-foreground">Chapter {chapter.number}</span>
         </div>

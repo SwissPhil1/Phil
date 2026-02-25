@@ -14,6 +14,7 @@ import {
   MapPin,
   ArrowLeft,
   GraduationCap,
+  Merge,
   Loader2,
   RefreshCw,
   AlertCircle,
@@ -157,7 +158,7 @@ export default function ChapterDetailPage() {
 
   const hasContent = chapter && (chapter.questions.length > 0 || chapter.studyGuide || chapter.summary);
   const hasPdfChunks = (chapter?.pdfChunkCount ?? 0) > 0;
-  const isGenerating = generateStatus && generateStatus.phase !== "done" && generateStatus.phase !== "error";
+  const isGenerating = !!(generateStatus && generateStatus.phase !== "done" && generateStatus.phase !== "error");
 
   // Generate ALL content from stored blob URLs (one button press)
   const generateContent = useCallback(async () => {
@@ -281,6 +282,62 @@ export default function ChapterDetailPage() {
       setGenerateStatus(null);
     } catch (err) {
       setGuideError(err instanceof Error ? err.message : "Generation failed");
+      setGenerateStatus(null);
+    }
+  }, [chapter]);
+
+  // Merge study guide from both books
+  const mergeStudyGuide = useCallback(async () => {
+    if (!chapter) return;
+    setGenerateStatus({ phase: "generating-guide", message: "Merging study guide from both books..." });
+    setGuideError(null);
+
+    try {
+      const res = await fetch("/api/ingest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "merge-study-guide",
+          chapterId: chapter.id,
+        }),
+      });
+
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("No response stream");
+
+      const decoder = new TextDecoder();
+      let buf = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() || "";
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (data.error) {
+                setGuideError(data.error);
+                setGenerateStatus(null);
+                return;
+              }
+              if (data.status) {
+                setGenerateStatus({ phase: "generating-guide", message: data.message || "Merging..." });
+              }
+            } catch { /* partial */ }
+          }
+        }
+      }
+
+      // Refresh
+      const refreshRes = await fetch(`/api/chapters/${chapter.id}`);
+      const refreshed = await refreshRes.json();
+      setChapter(refreshed);
+      setGenerateStatus(null);
+    } catch (err) {
+      setGuideError(err instanceof Error ? err.message : "Merge failed");
       setGenerateStatus(null);
     }
   }, [chapter]);
@@ -565,12 +622,23 @@ export default function ChapterDetailPage() {
             <CardContent className="p-6 md:p-8">
               {chapter.studyGuide ? (
                 <>
-                  <div className="flex justify-end mb-4">
+                  <div className="flex justify-end gap-2 mb-4">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="gap-1.5"
+                      onClick={mergeStudyGuide}
+                      disabled={isGenerating}
+                    >
+                      <Merge className="h-3.5 w-3.5" />
+                      Merge Both Books
+                    </Button>
                     <Button
                       size="sm"
                       variant="ghost"
                       className="gap-1.5 text-muted-foreground hover:text-foreground"
                       onClick={regenerateStudyGuide}
+                      disabled={isGenerating}
                     >
                       <RefreshCw className="h-3.5 w-3.5" />
                       Regenerate

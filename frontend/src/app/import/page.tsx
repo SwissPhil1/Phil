@@ -54,6 +54,7 @@ export default function ImportNotesPage() {
   const [customOrgan, setCustomOrgan] = useState("");
   const [title, setTitle] = useState("");
   const [text, setText] = useState("");
+  const [language, setLanguage] = useState<"fr" | "en">("fr");
   const [status, setStatus] = useState<TransformStatus>(null);
   const [existingOrgans, setExistingOrgans] = useState<string[]>([]);
 
@@ -89,6 +90,7 @@ export default function ImportNotesPage() {
           organ: effectiveOrgan,
           title,
           text,
+          language,
         }),
       });
 
@@ -306,9 +308,41 @@ export default function ImportNotesPage() {
             )}
           </div>
 
-          {/* Step 2: Title */}
+          {/* Language Toggle */}
+          <div className="rounded-lg border bg-card p-6 space-y-3">
+            <h2 className="font-semibold">2. Output Language</h2>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setLanguage("fr")}
+                className={`px-4 py-2 rounded-lg border text-sm font-medium transition-colors ${
+                  language === "fr"
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "hover:bg-accent border-border"
+                }`}
+              >
+                Fran\u00e7ais (FMH2)
+              </button>
+              <button
+                onClick={() => setLanguage("en")}
+                className={`px-4 py-2 rounded-lg border text-sm font-medium transition-colors ${
+                  language === "en"
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "hover:bg-accent border-border"
+                }`}
+              >
+                English
+              </button>
+            </div>
+            {language === "fr" && (
+              <p className="text-xs text-muted-foreground">
+                Le guide sera en fran\u00e7ais avec la terminologie m\u00e9dicale en fran\u00e7ais/anglais.
+              </p>
+            )}
+          </div>
+
+          {/* Step 3: Title */}
           <div className="rounded-lg border bg-card p-6 space-y-4">
-            <h2 className="font-semibold">2. Chapter Title</h2>
+            <h2 className="font-semibold">3. Chapter Title</h2>
             <input
               type="text"
               value={title}
@@ -321,7 +355,7 @@ export default function ImportNotesPage() {
           {/* Step 3: Paste Summary */}
           <div className="rounded-lg border bg-card p-6 space-y-4">
             <div className="flex items-center justify-between">
-              <h2 className="font-semibold">3. Paste NotebookLM Summary</h2>
+              <h2 className="font-semibold">4. Paste NotebookLM Summary</h2>
               {text.length > 0 && (
                 <span className="text-xs text-muted-foreground">
                   {text.length.toLocaleString()} chars

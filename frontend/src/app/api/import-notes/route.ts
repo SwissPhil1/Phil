@@ -44,13 +44,30 @@ async function callClaudeWithRetry<T>(
 /**
  * Build the prompt to transform a NotebookLM summary into a retention-optimized Q/A guide.
  */
-function buildTransformPrompt(organ: string, originalText: string): string {
+function buildTransformPrompt(organ: string, originalText: string, language: string): string {
+  const langInstruction = language === "fr"
+    ? `
+═══════════════════════════════════════════════════════
+LANGUAGE: FRENCH (CRITICAL)
+═══════════════════════════════════════════════════════
+Write the ENTIRE study guide in FRENCH. This includes:
+- All questions and answers in French
+- All explanations, pearls, traps, mnemonics in French
+- All table headers and content in French
+- The rapid-fire section and cheat sheet in French
+- Keep standard medical/radiological terminology in BOTH languages where helpful:
+  e.g., "Bec d'oiseau (Bird's beak)", "Signe de la coquille d'oeuf (Eggshell sign)"
+- The FMH2 exam is in French — the student must learn the French terminology
+- Callout labels stay as-is: PEARL, TRAP, HIGH YIELD, MNEMONIC (universally recognized)
+`
+    : "";
+
   return `You are the combined voice of:
 1. A SENIOR RADIOLOGIST PROFESSOR with 30+ years of FMH2 exam question-writing experience
 2. A HARVARD MEMORY SCIENCE INSTRUCTOR who specializes in medical education retention and spaced repetition
 
 You are given a NotebookLM-generated summary about "${organ}" radiology. Your job is to transform it into a MAXIMUM RETENTION Q/A study guide.
-
+${langInstruction}
 ═══════════════════════════════════════════════════════
 RULES
 ═══════════════════════════════════════════════════════
@@ -87,8 +104,12 @@ Transform the above into the ultimate Q/A retention guide. Do NOT wrap output in
 /**
  * Build prompt to extract flashcards from the study guide.
  */
-function buildFlashcardPrompt(studyGuide: string): string {
-  return `Extract ALL Q/A pairs from this study guide and return them as a JSON array of flashcards.
+function buildFlashcardPrompt(studyGuide: string, language: string): string {
+  const langNote = language === "fr"
+    ? "IMPORTANT: The study guide is in French. Write ALL flashcard front/back text in FRENCH. Keep medical terms in both languages where helpful (e.g., \"Bec d'oiseau / Bird's beak\").\n\n"
+    : "";
+
+  return `${langNote}Extract ALL Q/A pairs from this study guide and return them as a JSON array of flashcards.
 
 Each flashcard should have:
 - "front": The question (concise, exam-style)
@@ -141,8 +162,8 @@ async function handleListOrgans() {
  * Transform a pasted NotebookLM summary into a Q/A study guide + flashcards.
  * Uses SSE streaming for progress updates.
  */
-async function handleTransform(body: { organ: string; title: string; text: string }) {
-  const { organ, title, text } = body;
+async function handleTransform(body: { organ: string; title: string; text: string; language?: string }) {
+  const { organ, title, text, language = "fr" } = body;
 
   if (!organ || !title || !text) {
     return NextResponse.json({ error: "Missing organ, title, or text" }, { status: 400 });
@@ -167,7 +188,7 @@ async function handleTransform(body: { organ: string; title: string; text: strin
           const response = await client.messages.create({
             model: "claude-sonnet-4-20250514",
             max_tokens: 16000,
-            messages: [{ role: "user", content: buildTransformPrompt(organ, text) }],
+            messages: [{ role: "user", content: buildTransformPrompt(organ, text, language) }],
           });
           return (response.content[0] as { type: "text"; text: string }).text;
         });
@@ -204,7 +225,7 @@ async function handleTransform(body: { organ: string; title: string; text: strin
             const response = await client.messages.create({
               model: "claude-sonnet-4-20250514",
               max_tokens: 16000,
-              messages: [{ role: "user", content: buildFlashcardPrompt(studyGuide) }],
+              messages: [{ role: "user", content: buildFlashcardPrompt(studyGuide, language) }],
             });
             return (response.content[0] as { type: "text"; text: string }).text;
           });

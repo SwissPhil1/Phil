@@ -81,7 +81,7 @@ async function callClaudeStreamingWithRetry(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   fn: () => Promise<any>,
   onTextDelta?: (text: string) => void,
-  maxRetries = 3
+  maxRetries = 5
 ): Promise<string> {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
@@ -98,13 +98,23 @@ async function callClaudeStreamingWithRetry(
       }
       return fullText;
     } catch (err: unknown) {
-      const apiErr = err as { status?: number };
+      const apiErr = err as { status?: number; headers?: Record<string, string> };
       const isRetryable =
         apiErr.status === 429 ||
         apiErr.status === 529 ||
         (apiErr.status && apiErr.status >= 500);
       if (!isRetryable || attempt === maxRetries) throw err;
-      const delay = Math.pow(2, attempt) * 5000;
+
+      // For rate limits (429), use longer delays to respect per-minute token budgets
+      let delay: number;
+      if (apiErr.status === 429) {
+        // Parse retry-after header if available, otherwise default to 60s
+        const retryAfter = apiErr.headers?.["retry-after"];
+        delay = retryAfter ? Math.max(parseInt(retryAfter, 10) * 1000, 30000) : 60000;
+      } else {
+        delay = Math.pow(2, attempt) * 5000;
+      }
+
       console.warn(
         `Claude streaming returned ${apiErr.status}, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})...`
       );
@@ -1411,7 +1421,7 @@ async function splitAndUploadPdf(
   client: Anthropic,
   sourcePdf: PDFDocument,
   fileNamePrefix: string,
-  maxPagesPerPart = 80,
+  maxPagesPerPart = 20,
 ): Promise<string[]> {
   const totalPages = sourcePdf.getPageCount();
   if (totalPages === 0) return [];
@@ -1624,6 +1634,15 @@ async function generateStudyGuideFromParts(
   const partExtracts: string[] = [];
 
   for (let i = 0; i < fileIds.length; i++) {
+    // Proactive delay between calls to avoid rate limit (30K tokens/min)
+    if (i > 0) {
+      sendEvent({
+        status: "generating-guide",
+        message: `Waiting for rate limit window before part ${i + 1} of ${fileIds.length}...`,
+      });
+      await new Promise((r) => setTimeout(r, 65000));
+    }
+
     sendEvent({
       status: "generating-guide",
       message: `Analyzing PDF part ${i + 1} of ${fileIds.length}...`,
@@ -1662,6 +1681,13 @@ Format as structured markdown with clear headings per organ/topic. Do not skip a
 
     partExtracts.push(extract.trim());
   }
+
+  // Delay before synthesis to respect rate limits
+  sendEvent({
+    status: "generating-guide",
+    message: `Waiting for rate limit window before synthesis...`,
+  });
+  await new Promise((r) => setTimeout(r, 65000));
 
   // Synthesize all extracts into one study guide
   sendEvent({

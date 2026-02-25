@@ -1109,23 +1109,23 @@ async function handleGenerateStudyGuide(body: {
     );
   }
 
-  // Merge all PDF chunks into a single file for complete coverage
-  let mergedFileId: string | null = null;
+  // Merge all PDF chunks into ≤100-page parts for complete coverage
+  let mergedFileIds: string[] = [];
   const hasProvidedFileIds = Array.isArray(fileIds) && fileIds.length > 0;
 
   if (!hasProvidedFileIds) {
-    // No fresh file IDs — merge stored chunks into one PDF and upload
+    // No fresh file IDs — merge stored chunks into PDFs and upload
     try {
-      mergedFileId = await mergeAndUploadChapterPdf(client, chapter.bookSource, chapter.number);
-      if (mergedFileId) {
-        console.log(`Merged PDF uploaded for chapter ${chapter.number}`);
+      mergedFileIds = await mergeAndUploadChapterPdf(client, chapter.bookSource, chapter.number);
+      if (mergedFileIds.length > 0) {
+        console.log(`Merged PDF uploaded for chapter ${chapter.number} (${mergedFileIds.length} part(s))`);
       }
     } catch (err) {
       console.warn("Failed to merge/upload chapter PDF:", err instanceof Error ? err.message : err);
     }
   }
 
-  const hasFileIds = hasProvidedFileIds || mergedFileId !== null;
+  const hasFileIds = hasProvidedFileIds || mergedFileIds.length > 0;
 
   // ── Find related chapters from other book sources ───────────────────────
   // Match by title similarity: extract key topic words and find chapters
@@ -1197,21 +1197,20 @@ ${mn.length > 0 ? mn.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(no
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let messages: any[];
 
-  // Determine which file ID to use: merged single PDF or provided file IDs
-  const pdfFileId = mergedFileId || (hasProvidedFileIds ? fileIds![0] : null);
+  // Collect all file IDs: merged parts + any provided file IDs
+  const allFileIds = mergedFileIds.length > 0
+    ? mergedFileIds
+    : (hasProvidedFileIds ? fileIds! : []);
 
-  if (pdfFileId) {
-    // Single merged PDF — Claude sees every page, image, diagram, table
+  if (allFileIds.length > 0) {
+    // PDF documents — Claude sees every page, image, diagram, table
     messages = [{
       role: "user",
       content: [
-        { type: "document", source: { type: "file", file_id: pdfFileId } },
-        ...(hasProvidedFileIds && fileIds!.length > 1
-          ? fileIds!.slice(1).map((fid: string) => ({
-              type: "document" as const,
-              source: { type: "file" as const, file_id: fid },
-            }))
-          : []),
+        ...allFileIds.map((fid: string) => ({
+          type: "document" as const,
+          source: { type: "file" as const, file_id: fid },
+        })),
         { type: "text", text: `You are an expert radiology educator. You can see EVERY page of this radiology textbook chapter above — all images, diagrams, tables, and text. Use ALL of it to create the most complete study guide possible. Do not skip any topic or imaging finding.\n\n${studyGuideInstructions}` },
       ],
     }];
@@ -1269,9 +1268,9 @@ ${mn.length > 0 ? mn.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(no
         }
 
         // Continue generating if the guide was truncated by the output token limit
-        if (pdfFileId) {
+        if (allFileIds.length > 0) {
           studyGuide = await continueStudyGuideIfTruncated(
-            client, pdfFileId, chapter.title, studyGuide, sendEvent
+            client, allFileIds, chapter.title, studyGuide, sendEvent
           );
         }
 
@@ -1397,19 +1396,20 @@ async function handleStoreChapter(body: {
 }
 
 /**
- * Merge all PDF chunks for a chapter into a single PDF and upload to Anthropic Files API.
- * Returns a single file ID that contains every page of the chapter.
+ * Merge all PDF chunks for a chapter into PDFs and upload to Anthropic Files API.
+ * Splits into ≤100-page parts (Anthropic's per-document limit) and returns
+ * an array of file IDs — one per part.
  */
 async function mergeAndUploadChapterPdf(
   client: Anthropic,
   bookSource: string,
   chapterNum: number,
-): Promise<string | null> {
+): Promise<string[]> {
   const chunks = await prisma.pdfChunk.findMany({
     where: { bookSource, chapterNum },
     orderBy: { chunkIndex: "asc" },
   });
-  if (chunks.length === 0) return null;
+  if (chunks.length === 0) return [];
 
   const mergedPdf = await PDFDocument.create();
   for (const chunk of chunks) {
@@ -1423,16 +1423,53 @@ async function mergeAndUploadChapterPdf(
   }
 
   const totalPages = mergedPdf.getPageCount();
-  if (totalPages === 0) return null;
+  if (totalPages === 0) return [];
 
-  const mergedBytes = await mergedPdf.save();
-  const file = new File(
-    [Buffer.from(mergedBytes)],
-    `ch${chapterNum}_complete_${totalPages}pages.pdf`,
-    { type: "application/pdf" }
-  );
-  const uploaded = await client.beta.files.upload({ file });
-  return uploaded.id;
+  return splitAndUploadPdf(client, mergedPdf, `ch${chapterNum}`);
+}
+
+/**
+ * Split a PDFDocument into ≤100-page parts and upload each to Anthropic Files API.
+ * Returns an array of file IDs.
+ */
+async function splitAndUploadPdf(
+  client: Anthropic,
+  sourcePdf: PDFDocument,
+  fileNamePrefix: string,
+  maxPagesPerPart = 100,
+): Promise<string[]> {
+  const totalPages = sourcePdf.getPageCount();
+  if (totalPages === 0) return [];
+
+  const numParts = Math.ceil(totalPages / maxPagesPerPart);
+  const fileIds: string[] = [];
+
+  for (let part = 0; part < numParts; part++) {
+    const startPage = part * maxPagesPerPart;
+    const endPage = Math.min(startPage + maxPagesPerPart, totalPages);
+    const pageCount = endPage - startPage;
+
+    const partPdf = await PDFDocument.create();
+    const pages = await partPdf.copyPages(
+      sourcePdf,
+      Array.from({ length: pageCount }, (_, i) => startPage + i),
+    );
+    pages.forEach((p) => partPdf.addPage(p));
+
+    const partBytes = await partPdf.save();
+    const suffix = numParts > 1
+      ? `_part${part + 1}of${numParts}_${pageCount}pages`
+      : `_complete_${pageCount}pages`;
+    const file = new File(
+      [Buffer.from(partBytes)],
+      `${fileNamePrefix}${suffix}.pdf`,
+      { type: "application/pdf" },
+    );
+    const uploaded = await client.beta.files.upload({ file });
+    fileIds.push(uploaded.id);
+  }
+
+  return fileIds;
 }
 
 /**
@@ -1506,7 +1543,7 @@ ${flashcardBlock}`;
  */
 async function continueStudyGuideIfTruncated(
   client: Anthropic,
-  fileId: string,
+  fileIds: string[],
   chapterTitle: string,
   partialGuide: string,
   sendEvent: (data: Record<string, unknown>) => void,
@@ -1516,6 +1553,12 @@ async function continueStudyGuideIfTruncated(
   // If it's missing, the guide was almost certainly truncated by the output limit.
   const COMPLETION_MARKER = "Active Recall";
   let fullGuide = partialGuide;
+
+  // Build document blocks for all file IDs
+  const docBlocks = fileIds.map((fid) => ({
+    type: "document" as const,
+    source: { type: "file" as const, file_id: fid },
+  }));
 
   for (let attempt = 1; attempt <= maxContinuations; attempt++) {
     if (fullGuide.includes(COMPLETION_MARKER)) break;
@@ -1538,10 +1581,10 @@ async function continueStudyGuideIfTruncated(
           {
             role: "user",
             content: [
-              { type: "document", source: { type: "file", file_id: fileId } },
+              ...docBlocks,
               {
                 type: "text",
-                text: `You are an expert radiology educator creating an exhaustive study guide for "${chapterTitle}" for the Swiss FMH2 radiology exam. Write the study guide covering ALL content in the PDF.`,
+                text: `You are an expert radiology educator creating an exhaustive study guide for "${chapterTitle}" for the Swiss FMH2 radiology exam. Write the study guide covering ALL content in the PDF${fileIds.length > 1 ? "s" : ""}.`,
               },
             ],
           },
@@ -1858,8 +1901,8 @@ Requirements:
         let studyGuide = "";
 
         try {
-          const mergedFileId = await mergeAndUploadChapterPdf(client, chapter.bookSource, chapter.number);
-          if (!mergedFileId) throw new Error("Failed to merge PDF chunks");
+          const mergedFileIds = await mergeAndUploadChapterPdf(client, chapter.bookSource, chapter.number);
+          if (mergedFileIds.length === 0) throw new Error("Failed to merge PDF chunks");
 
           sendEvent({ status: "generating-guide", message: "Claude is reading the complete chapter..." });
 
@@ -1872,7 +1915,10 @@ Requirements:
               messages: [{
                 role: "user",
                 content: [
-                  { type: "document", source: { type: "file", file_id: mergedFileId } },
+                  ...mergedFileIds.map((fid) => ({
+                    type: "document" as const,
+                    source: { type: "file" as const, file_id: fid },
+                  })),
                   { type: "text", text: `You are an expert radiology educator. You can see EVERY page of this radiology textbook chapter above — all images, diagrams, tables, and text. Use ALL of it to create the most complete study guide possible. Do not skip any topic or imaging finding.${crossRefBlock}\n\n${guidePrompt}` },
                 ],
               }],
@@ -1883,7 +1929,7 @@ Requirements:
 
           // Continue generating if the guide was truncated by the output token limit
           studyGuide = await continueStudyGuideIfTruncated(
-            client, mergedFileId!, chapter.title, studyGuide, sendEvent
+            client, mergedFileIds, chapter.title, studyGuide, sendEvent
           );
         } catch (guideErr) {
           // Merged PDF approach failed — use complete processed data from every chunk
@@ -2022,8 +2068,7 @@ async function handleMergeStudyGuide(body: { chapterId: number }) {
         });
 
         // Merge all PDFs from all chapters into one document
-        const { PDFDocument: PDFDoc } = await import("pdf-lib");
-        const mergedPdf = await PDFDoc.create();
+        const mergedPdf = await PDFDocument.create();
         const chapterPageRanges: Array<{ bookSource: string; title: string; startPage: number; endPage: number }> = [];
 
         for (const ch of allChapters) {
@@ -2035,7 +2080,7 @@ async function handleMergeStudyGuide(body: { chapterId: number }) {
 
           for (const chunk of chunks) {
             try {
-              const chunkPdf = await PDFDoc.load(Buffer.from(chunk.data), { ignoreEncryption: true });
+              const chunkPdf = await PDFDocument.load(Buffer.from(chunk.data), { ignoreEncryption: true });
               const pages = await mergedPdf.copyPages(chunkPdf, chunkPdf.getPageIndices());
               pages.forEach((p) => mergedPdf.addPage(p));
             } catch (err) {
@@ -2079,22 +2124,27 @@ async function handleMergeStudyGuide(body: { chapterId: number }) {
           })),
         });
 
-        sendEvent({ status: "uploading", message: `Uploading merged PDF (${totalPages} pages) to Claude...` });
+        // Split into ≤100-page parts (Anthropic's limit) and upload each
+        const numParts = Math.ceil(totalPages / 100);
+        sendEvent({ status: "uploading", message: `Uploading merged PDF (${totalPages} pages${numParts > 1 ? `, ${numParts} parts` : ""}) to Claude...` });
 
-        const mergedBytes = await mergedPdf.save();
-        const file = new File(
-          [Buffer.from(mergedBytes)],
-          `merged_${chapter.title.replace(/\s+/g, "_")}_${totalPages}pages.pdf`,
-          { type: "application/pdf" }
+        const mergedFileIds = await splitAndUploadPdf(
+          client,
+          mergedPdf,
+          `merged_${chapter.title.replace(/\s+/g, "_")}`,
         );
-        const uploaded = await client.beta.files.upload({ file });
+
+        if (mergedFileIds.length === 0) {
+          sendEvent({ error: "Failed to upload merged PDF parts." });
+          return;
+        }
 
         // Build page range context so Claude knows which pages are from which book
         const rangeContext = chapterPageRanges
           .map((r) => `- Pages ${r.startPage}–${r.endPage}: ${r.bookSource === "core_radiology" ? "Core Radiology" : "Crack the Core"} — "${r.title}"`)
           .join("\n");
 
-        const crossRefNote = `\n\nIMPORTANT: This PDF contains pages from MULTIPLE textbooks covering the same topic:
+        const crossRefNote = `\n\nIMPORTANT: These PDFs contain pages from MULTIPLE textbooks covering the same topic:
 ${rangeContext}
 
 Synthesize ALL sources into ONE unified study guide. Where the books complement each other, combine their content. Where they differ or one adds detail the other lacks, include both perspectives. Do NOT separate content by book — integrate it into a single cohesive narrative that draws from the best of both.`;
@@ -2112,8 +2162,11 @@ Synthesize ALL sources into ONE unified study guide. Where the books complement 
             messages: [{
               role: "user",
               content: [
-                { type: "document", source: { type: "file", file_id: uploaded.id } },
-                { type: "text", text: `You are an expert radiology educator. This PDF contains pages from MULTIPLE radiology textbooks covering the same topic. You can see EVERY page — all images, diagrams, tables, and text from ALL sources. Use ALL of it to create the most comprehensive, unified study guide possible.\n\n${guidePrompt}` },
+                ...mergedFileIds.map((fid) => ({
+                  type: "document" as const,
+                  source: { type: "file" as const, file_id: fid },
+                })),
+                { type: "text", text: `You are an expert radiology educator. These PDFs contain pages from MULTIPLE radiology textbooks covering the same topic. You can see EVERY page — all images, diagrams, tables, and text from ALL sources. Use ALL of it to create the most comprehensive, unified study guide possible.\n\n${guidePrompt}` },
               ],
             }],
           })
@@ -2126,7 +2179,7 @@ Synthesize ALL sources into ONE unified study guide. Where the books complement 
 
         // Continue generating if the guide was truncated by the output token limit
         studyGuide = await continueStudyGuideIfTruncated(
-          client, uploaded.id, chapter.title, studyGuide, sendEvent
+          client, mergedFileIds, chapter.title, studyGuide, sendEvent
         );
 
         // Save the merged guide to the primary chapter

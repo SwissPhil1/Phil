@@ -319,6 +319,8 @@ export default function ChapterDetailPage() {
 
       const decoder = new TextDecoder();
       let buf = "";
+      let receivedSuccess = false;
+      let lastMessage = "";
 
       while (true) {
         const { done, value } = await reader.read();
@@ -335,12 +337,22 @@ export default function ChapterDetailPage() {
                 setGenerateStatus(null);
                 return;
               }
+              if (data.success) {
+                receivedSuccess = true;
+              }
               if (data.status) {
-                setGenerateStatus({ phase: "generating-guide", message: data.message || "Merging..." });
+                lastMessage = data.message || "Merging...";
+                setGenerateStatus({ phase: "generating-guide", message: lastMessage });
               }
             } catch { /* partial */ }
           }
         }
+      }
+
+      if (!receivedSuccess) {
+        setGuideError(`Merge ended without completing. The server may have timed out or crashed. Last status: "${lastMessage}"`);
+        setGenerateStatus(null);
+        return;
       }
 
       // Refresh
@@ -656,6 +668,14 @@ export default function ChapterDetailPage() {
         {activeTab === "guide" && (
           <Card>
             <CardContent className="p-6 md:p-8">
+              {guideError && (
+                <div className="rounded-lg bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800 p-3 mb-4">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="h-4 w-4 text-red-500 mt-0.5 flex-shrink-0" />
+                    <p className="text-sm text-red-600 dark:text-red-400">{guideError}</p>
+                  </div>
+                </div>
+              )}
               {chapter.studyGuide ? (
                 <>
                   <div className="flex justify-end gap-2 mb-4">

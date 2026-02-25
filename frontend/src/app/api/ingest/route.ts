@@ -2060,6 +2060,25 @@ async function handleMergeStudyGuide(body: { chapterId: number }) {
           return;
         }
 
+        // Show detailed per-source page breakdown so the user can verify coverage
+        const pageBreakdown = chapterPageRanges
+          .map((r) => {
+            const bookName = r.bookSource === "core_radiology" ? "Core Radiology" : "Crack the Core";
+            const pageCount = r.endPage - r.startPage + 1;
+            return `${bookName}: ${pageCount} pages ("${r.title}")`;
+          })
+          .join(" + ");
+
+        sendEvent({
+          status: "merging",
+          message: `Merged ${totalPages} pages total: ${pageBreakdown}`,
+          pageRanges: chapterPageRanges.map((r) => ({
+            ...r,
+            bookName: r.bookSource === "core_radiology" ? "Core Radiology" : "Crack the Core",
+            pageCount: r.endPage - r.startPage + 1,
+          })),
+        });
+
         sendEvent({ status: "uploading", message: `Uploading merged PDF (${totalPages} pages) to Claude...` });
 
         const mergedBytes = await mergedPdf.save();

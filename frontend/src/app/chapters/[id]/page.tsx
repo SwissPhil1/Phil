@@ -20,10 +20,20 @@ import {
   AlertCircle,
   Sparkles,
   Library,
+  Info,
 } from "lucide-react";
 import React, { useEffect, useState, useCallback, useRef } from "react";
 import ReactMarkdown, { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+
+interface RelatedChapter {
+  id: number;
+  bookSource: string;
+  number: number;
+  title: string;
+  pdfChunkCount: number;
+  estimatedPages: number;
+}
 
 interface ChapterDetail {
   id: number;
@@ -37,6 +47,8 @@ interface ChapterDetail {
   memoryPalace: string | null;
   studyGuide: string | null;
   pdfChunkCount: number;
+  estimatedPages: number;
+  relatedChapters: RelatedChapter[];
   questions: Array<{
     id: number;
     questionText: string;
@@ -520,9 +532,9 @@ export default function ChapterDetailPage() {
             <div>
               <h2 className="text-xl font-semibold">Generating Content...</h2>
               <p className="text-muted-foreground mt-2">
-                {generateStatus.phase === "uploading" && "Uploading PDF pages to Claude..."}
+                {generateStatus.phase === "uploading" && (generateStatus.message || "Uploading PDF pages to Claude...")}
                 {generateStatus.phase === "processing" && `Processing chunk ${generateStatus.chunk}/${generateStatus.total}...`}
-                {generateStatus.phase === "generating-guide" && "Writing comprehensive study guide..."}
+                {generateStatus.phase === "generating-guide" && (generateStatus.message || "Writing comprehensive study guide...")}
               </p>
             </div>
 
@@ -569,6 +581,30 @@ export default function ChapterDetailPage() {
         </div>
         <h1 className="text-3xl font-bold">{chapter.title}</h1>
       </div>
+
+      {/* Page Stats */}
+      {hasPdfChunks && (
+        <div className="flex items-start gap-2 text-xs text-muted-foreground bg-muted/50 rounded-lg px-3 py-2">
+          <Info className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
+          <div>
+            <span>~{chapter.estimatedPages} pages stored</span>
+            {chapter.relatedChapters?.length > 0 && (
+              <span>
+                {" "}· Cross-ref:{" "}
+                {chapter.relatedChapters.map((rc, i) => (
+                  <span key={rc.id}>
+                    {i > 0 && ", "}
+                    <Link href={`/chapters/${rc.id}`} className="underline hover:text-foreground">
+                      {rc.bookSource === "core_radiology" ? "Core" : "CtC"} Ch.{rc.number}
+                    </Link>
+                    {" "}(~{rc.estimatedPages}p)
+                  </span>
+                ))}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Quick Actions */}
       <div className="flex gap-3 flex-wrap">

@@ -1194,33 +1194,10 @@ ${mn.length > 0 ? mn.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(no
   const fullChapterData = await buildFullChapterContext(chapter.id, chapter.bookSource, chapter.number, chapter.title);
   const fullContextBlock = `${fullChapterData}${crossRefBlock}`;
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let messages: any[];
-
   // Collect all file IDs: merged parts + any provided file IDs
   const allFileIds = mergedFileIds.length > 0
     ? mergedFileIds
     : (hasProvidedFileIds ? fileIds! : []);
-
-  if (allFileIds.length > 0) {
-    // PDF documents — Claude sees every page, image, diagram, table
-    messages = [{
-      role: "user",
-      content: [
-        ...allFileIds.map((fid: string) => ({
-          type: "document" as const,
-          source: { type: "file" as const, file_id: fid },
-        })),
-        { type: "text", text: `You are an expert radiology educator. You can see EVERY page of this radiology textbook chapter above — all images, diagrams, tables, and text. Use ALL of it to create the most complete study guide possible. Do not skip any topic or imaging finding.\n\n${studyGuideInstructions}` },
-      ],
-    }];
-  } else {
-    // No PDF available — use complete processed data from every page
-    messages = [{
-      role: "user",
-      content: `You are an expert radiology educator. Below is the COMPLETE processed data from every page of this chapter — including all questions, flashcards, key points, and high-yield facts. Use ALL of this data to create a comprehensive study guide. Do not skip any topic.\n\n${fullContextBlock}\n\n---\n\n${studyGuideInstructions}`,
-    }];
-  }
 
   // ── SSE streaming response ─────────────────────────────────────────────
   const encoder = new TextEncoder();
@@ -1240,38 +1217,36 @@ ${mn.length > 0 ? mn.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(no
       }, 8000);
 
       try {
-        // Use streaming to support long-running requests (>10 min for large PDFs)
-        let studyGuide = hasFileIds
-          ? await callClaudeStreamingWithRetry(() =>
-              client.beta.messages.create({
-                model: "claude-sonnet-4-20250514",
-                max_tokens: 32000,
-                stream: true,
-                betas: ["files-api-2025-04-14"],
-                messages,
-              })
-            )
-          : await callClaudeStreamingWithRetry(() =>
-              client.messages.create({
-                model: "claude-sonnet-4-20250514",
-                max_tokens: 32000,
-                stream: true,
-                messages,
-              })
-            );
+        let studyGuide: string;
 
-        studyGuide = studyGuide.trim();
-
-        // Strip code fences if Claude wraps the output anyway
-        if (studyGuide.startsWith("```")) {
-          studyGuide = studyGuide.replace(/^```(?:markdown|md)?\n?/, "").replace(/\n?```$/, "");
-        }
-
-        // Continue generating if the guide was truncated by the output token limit
         if (allFileIds.length > 0) {
-          studyGuide = await continueStudyGuideIfTruncated(
-            client, allFileIds, chapter.title, studyGuide, sendEvent
+          // PDF-based: use per-part generation + synthesis for large chapters
+          studyGuide = await generateStudyGuideFromParts(
+            client,
+            allFileIds,
+            chapter.title,
+            studyGuideInstructions,
+            `You are an expert radiology educator. You can see EVERY page of this radiology textbook chapter — all images, diagrams, tables, and text. Use ALL of it to create the most complete study guide possible. Do not skip any topic or imaging finding.`,
+            sendEvent,
           );
+        } else {
+          // No PDF available — use complete processed data from every page
+          studyGuide = await callClaudeStreamingWithRetry(() =>
+            client.messages.create({
+              model: "claude-sonnet-4-20250514",
+              max_tokens: 32000,
+              stream: true,
+              messages: [{
+                role: "user",
+                content: `You are an expert radiology educator. Below is the COMPLETE processed data from every page of this chapter — including all questions, flashcards, key points, and high-yield facts. Use ALL of this data to create a comprehensive study guide. Do not skip any topic.\n\n${fullContextBlock}\n\n---\n\n${studyGuideInstructions}`,
+              }],
+            })
+          );
+
+          studyGuide = studyGuide.trim();
+          if (studyGuide.startsWith("```")) {
+            studyGuide = studyGuide.replace(/^```(?:markdown|md)?\n?/, "").replace(/\n?```$/, "");
+          }
         }
 
         // Save directly to the chapter
@@ -1436,7 +1411,7 @@ async function splitAndUploadPdf(
   client: Anthropic,
   sourcePdf: PDFDocument,
   fileNamePrefix: string,
-  maxPagesPerPart = 100,
+  maxPagesPerPart = 80,
 ): Promise<string[]> {
   const totalPages = sourcePdf.getPageCount();
   if (totalPages === 0) return [];
@@ -1543,7 +1518,6 @@ ${flashcardBlock}`;
  */
 async function continueStudyGuideIfTruncated(
   client: Anthropic,
-  fileIds: string[],
   chapterTitle: string,
   partialGuide: string,
   sendEvent: (data: Record<string, unknown>) => void,
@@ -1554,11 +1528,12 @@ async function continueStudyGuideIfTruncated(
   const COMPLETION_MARKER = "Active Recall";
   let fullGuide = partialGuide;
 
-  // Build document blocks for all file IDs
-  const docBlocks = fileIds.map((fid) => ({
-    type: "document" as const,
-    source: { type: "file" as const, file_id: fid },
-  }));
+  const CONTINUE_PROMPT = `Your previous response was cut short by the output length limit. Continue EXACTLY where you stopped. Rules:
+- Do NOT repeat ANY content already written above
+- Pick up from the last incomplete section or sentence
+- Continue through ALL remaining sections of the study guide
+- Maintain the same formatting, depth, and callout style (💡 PEARL, 🔴 PITFALL, ⚡ HIGH YIELD, 🧠 MNEMONIC, 🎯 STOP & THINK, etc.)
+- Make sure to complete all remaining sections including: High-Yield Rapid-Fire, Differential Diagnosis Tables, Mnemonics & Memory Palace, Comparisons, Imaging Protocols, Pre-Exam Review Checklist, and Active Recall Self-Test`;
 
   for (let attempt = 1; attempt <= maxContinuations; attempt++) {
     if (fullGuide.includes(COMPLETION_MARKER)) break;
@@ -1571,22 +1546,16 @@ async function continueStudyGuideIfTruncated(
     // Keep the last portion of the guide to stay within context limits
     const prefill = fullGuide.length > 60000 ? fullGuide.slice(-60000) : fullGuide;
 
+    // Text-only continuation — no PDFs needed, just assistant prefill
     const continuation = await callClaudeStreamingWithRetry(() =>
-      client.beta.messages.create({
+      client.messages.create({
         model: "claude-sonnet-4-20250514",
         max_tokens: 32000,
         stream: true,
-        betas: ["files-api-2025-04-14"],
         messages: [
           {
             role: "user",
-            content: [
-              ...docBlocks,
-              {
-                type: "text",
-                text: `You are an expert radiology educator creating an exhaustive study guide for "${chapterTitle}" for the Swiss FMH2 radiology exam. Write the study guide covering ALL content in the PDF${fileIds.length > 1 ? "s" : ""}.`,
-              },
-            ],
+            content: `You are an expert radiology educator creating an exhaustive study guide for "${chapterTitle}" for the Swiss FMH2 radiology exam.`,
           },
           {
             role: "assistant",
@@ -1594,12 +1563,7 @@ async function continueStudyGuideIfTruncated(
           },
           {
             role: "user",
-            content: `Your previous response was cut short by the output length limit. Continue EXACTLY where you stopped. Rules:
-- Do NOT repeat ANY content already written above
-- Pick up from the last incomplete section or sentence
-- Continue through ALL remaining sections of the study guide
-- Maintain the same formatting, depth, and callout style (💡 PEARL, 🔴 PITFALL, ⚡ HIGH YIELD, 🧠 MNEMONIC, 🎯 STOP & THINK, etc.)
-- Make sure to complete all remaining sections including: High-Yield Rapid-Fire, Differential Diagnosis Tables, Mnemonics & Memory Palace, Comparisons, Imaging Protocols, Pre-Exam Review Checklist, and Active Recall Self-Test`,
+            content: CONTINUE_PROMPT,
           },
         ],
       })
@@ -1609,6 +1573,127 @@ async function continueStudyGuideIfTruncated(
   }
 
   return fullGuide;
+}
+
+/**
+ * Generate a study guide from potentially large PDFs by processing parts
+ * individually and synthesizing if they won't all fit in one context window.
+ *
+ * - 1 part: send directly as a single Claude call with the PDF
+ * - 2+ parts: extract detailed content from each part separately,
+ *   then synthesize into one unified guide (text-only final call)
+ */
+async function generateStudyGuideFromParts(
+  client: Anthropic,
+  fileIds: string[],
+  chapterTitle: string,
+  guidePrompt: string,
+  introText: string,
+  sendEvent: (data: Record<string, unknown>) => void,
+): Promise<string> {
+  // Single part — fits in one context window, generate directly with PDF
+  if (fileIds.length === 1) {
+    let guide = await callClaudeStreamingWithRetry(() =>
+      client.beta.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 32000,
+        stream: true,
+        betas: ["files-api-2025-04-14"],
+        messages: [{
+          role: "user",
+          content: [
+            { type: "document", source: { type: "file", file_id: fileIds[0] } },
+            { type: "text", text: `${introText}\n\n${guidePrompt}` },
+          ],
+        }],
+      })
+    );
+
+    guide = guide.trim();
+    if (guide.startsWith("```")) {
+      guide = guide.replace(/^```(?:markdown|md)?\n?/, "").replace(/\n?```$/, "");
+    }
+
+    guide = await continueStudyGuideIfTruncated(
+      client, chapterTitle, guide, sendEvent
+    );
+    return guide;
+  }
+
+  // Multiple parts — extract detailed content from each, then synthesize
+  const partExtracts: string[] = [];
+
+  for (let i = 0; i < fileIds.length; i++) {
+    sendEvent({
+      status: "generating-guide",
+      message: `Analyzing PDF part ${i + 1} of ${fileIds.length}...`,
+    });
+
+    const extract = await callClaudeStreamingWithRetry(() =>
+      client.beta.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 16000,
+        stream: true,
+        betas: ["files-api-2025-04-14"],
+        messages: [{
+          role: "user",
+          content: [
+            { type: "document", source: { type: "file", file_id: fileIds[i] } },
+            {
+              type: "text",
+              text: `You are an expert radiology educator. Extract ALL medical knowledge from these PDF pages for "${chapterTitle}". This is part ${i + 1} of ${fileIds.length}.
+
+Be EXHAUSTIVE — capture EVERYTHING from every page:
+- Every pathology, finding, and diagnosis mentioned
+- Every imaging sign with its description (what it looks like on CT, MRI, US, X-ray)
+- Every differential diagnosis list
+- Classic presentations and their imaging appearances
+- Anatomical landmarks and normal variants
+- Key measurements, grading systems, and classifications
+- Pearl/pitfall/high-yield facts
+- Any tables, algorithms, or decision frameworks
+
+Format as structured markdown with clear headings per organ/topic. Do not skip anything — I need every detail from every page.`,
+            },
+          ],
+        }],
+      })
+    );
+
+    partExtracts.push(extract.trim());
+  }
+
+  // Synthesize all extracts into one study guide
+  sendEvent({
+    status: "generating-guide",
+    message: `Synthesizing ${fileIds.length} parts into comprehensive study guide...`,
+  });
+
+  const combinedExtracts = partExtracts
+    .map((ext, i) => `## Extracted Content — Part ${i + 1} of ${fileIds.length}\n\n${ext}`)
+    .join("\n\n---\n\n");
+
+  let guide = await callClaudeStreamingWithRetry(() =>
+    client.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 32000,
+      stream: true,
+      messages: [{
+        role: "user",
+        content: `You are an expert radiology educator. Below are detailed extracts from ALL pages of "${chapterTitle}" (extracted from the actual textbook PDF across ${fileIds.length} parts). Use ALL of this content to create the most comprehensive study guide possible. Do not skip any topic, pathology, or imaging finding.\n\n${combinedExtracts}\n\n---\n\n${guidePrompt}`,
+      }],
+    })
+  );
+
+  guide = guide.trim();
+  if (guide.startsWith("```")) {
+    guide = guide.replace(/^```(?:markdown|md)?\n?/, "").replace(/\n?```$/, "");
+  }
+
+  guide = await continueStudyGuideIfTruncated(
+    client, chapterTitle, guide, sendEvent
+  );
+  return guide;
 }
 
 /**
@@ -1894,7 +1979,7 @@ Requirements:
 
         const guidePrompt = buildStudyGuidePrompt(chapter.title, crossRefNote);
 
-        // Merge all chunks into ONE PDF so Claude sees every page, image, table
+        // Merge all chunks into PDFs so Claude sees every page, image, table
         sendEvent({ status: "generating-guide", message: "Merging all PDF pages..." });
         const fullChapterData = await buildFullChapterContext(chapter.id, chapter.bookSource, chapter.number, chapter.title);
 
@@ -1906,30 +1991,14 @@ Requirements:
 
           sendEvent({ status: "generating-guide", message: "Claude is reading the complete chapter..." });
 
-          studyGuide = await callClaudeStreamingWithRetry(() =>
-            client.beta.messages.create({
-              model: "claude-sonnet-4-20250514",
-              max_tokens: 32000,
-              stream: true,
-              betas: ["files-api-2025-04-14"],
-              messages: [{
-                role: "user",
-                content: [
-                  ...mergedFileIds.map((fid) => ({
-                    type: "document" as const,
-                    source: { type: "file" as const, file_id: fid },
-                  })),
-                  { type: "text", text: `You are an expert radiology educator. You can see EVERY page of this radiology textbook chapter above — all images, diagrams, tables, and text. Use ALL of it to create the most complete study guide possible. Do not skip any topic or imaging finding.${crossRefBlock}\n\n${guidePrompt}` },
-                ],
-              }],
-            })
-          );
-
-          studyGuide = studyGuide.trim();
-
-          // Continue generating if the guide was truncated by the output token limit
-          studyGuide = await continueStudyGuideIfTruncated(
-            client, mergedFileIds, chapter.title, studyGuide, sendEvent
+          // Use per-part generation + synthesis for large chapters
+          studyGuide = await generateStudyGuideFromParts(
+            client,
+            mergedFileIds,
+            chapter.title,
+            guidePrompt,
+            `You are an expert radiology educator. You can see EVERY page of this radiology textbook chapter — all images, diagrams, tables, and text. Use ALL of it to create the most complete study guide possible. Do not skip any topic or imaging finding.${crossRefBlock}`,
+            sendEvent,
           );
         } catch (guideErr) {
           // Merged PDF approach failed — use complete processed data from every chunk
@@ -1949,10 +2018,9 @@ Requirements:
           );
 
           studyGuide = studyGuide.trim();
-        }
-
-        if (studyGuide.startsWith("```")) {
-          studyGuide = studyGuide.replace(/^```(?:markdown|md)?\n?/, "").replace(/\n?```$/, "");
+          if (studyGuide.startsWith("```")) {
+            studyGuide = studyGuide.replace(/^```(?:markdown|md)?\n?/, "").replace(/\n?```$/, "");
+          }
         }
 
         await prisma.chapter.update({
@@ -2124,9 +2192,8 @@ async function handleMergeStudyGuide(body: { chapterId: number }) {
           })),
         });
 
-        // Split into ≤100-page parts (Anthropic's limit) and upload each
-        const numParts = Math.ceil(totalPages / 100);
-        sendEvent({ status: "uploading", message: `Uploading merged PDF (${totalPages} pages${numParts > 1 ? `, ${numParts} parts` : ""}) to Claude...` });
+        // Split into ≤80-page parts and upload each
+        sendEvent({ status: "uploading", message: `Uploading merged PDF (${totalPages} pages) to Claude...` });
 
         const mergedFileIds = await splitAndUploadPdf(
           client,
@@ -2138,6 +2205,8 @@ async function handleMergeStudyGuide(body: { chapterId: number }) {
           sendEvent({ error: "Failed to upload merged PDF parts." });
           return;
         }
+
+        sendEvent({ status: "uploading", message: `Uploaded ${mergedFileIds.length} PDF part(s) to Claude.` });
 
         // Build page range context so Claude knows which pages are from which book
         const rangeContext = chapterPageRanges
@@ -2151,35 +2220,16 @@ Synthesize ALL sources into ONE unified study guide. Where the books complement 
 
         const guidePrompt = buildStudyGuidePrompt(chapter.title, crossRefNote);
 
-        sendEvent({ status: "generating-guide", message: `Claude is reading ${totalPages} pages from ${[...new Set(bookNames)].join(" + ")}...` });
+        sendEvent({ status: "generating-guide", message: `Claude is analyzing ${totalPages} pages from ${[...new Set(bookNames)].join(" + ")}...` });
 
-        let studyGuide = await callClaudeStreamingWithRetry(() =>
-          client.beta.messages.create({
-            model: "claude-sonnet-4-20250514",
-            max_tokens: 32000,
-            stream: true,
-            betas: ["files-api-2025-04-14"],
-            messages: [{
-              role: "user",
-              content: [
-                ...mergedFileIds.map((fid) => ({
-                  type: "document" as const,
-                  source: { type: "file" as const, file_id: fid },
-                })),
-                { type: "text", text: `You are an expert radiology educator. These PDFs contain pages from MULTIPLE radiology textbooks covering the same topic. You can see EVERY page — all images, diagrams, tables, and text from ALL sources. Use ALL of it to create the most comprehensive, unified study guide possible.\n\n${guidePrompt}` },
-              ],
-            }],
-          })
-        );
-
-        studyGuide = studyGuide.trim();
-        if (studyGuide.startsWith("```")) {
-          studyGuide = studyGuide.replace(/^```(?:markdown|md)?\n?/, "").replace(/\n?```$/, "");
-        }
-
-        // Continue generating if the guide was truncated by the output token limit
-        studyGuide = await continueStudyGuideIfTruncated(
-          client, mergedFileIds, chapter.title, studyGuide, sendEvent
+        // Use per-part generation + synthesis to stay within context window limits
+        const studyGuide = await generateStudyGuideFromParts(
+          client,
+          mergedFileIds,
+          chapter.title,
+          guidePrompt,
+          `You are an expert radiology educator. These PDF pages are from radiology textbooks covering the same topic. You can see EVERY page — all images, diagrams, tables, and text. Use ALL of it to create the most comprehensive, unified study guide possible.`,
+          sendEvent,
         );
 
         // Save the merged guide to the primary chapter

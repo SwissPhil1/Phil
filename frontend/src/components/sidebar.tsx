@@ -10,6 +10,7 @@ import {
   Menu,
   X,
   Library,
+  ClipboardPaste,
 } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
@@ -19,6 +20,7 @@ const navItems = [
   { href: "/chapters", label: "Chapters", icon: BookOpen },
   { href: "/quiz", label: "Quiz", icon: Brain },
   { href: "/flashcards", label: "Flashcards", icon: Layers },
+  { href: "/import", label: "Import Notes", icon: ClipboardPaste },
   { href: "/ingest", label: "Sources", icon: Library },
 ];
 

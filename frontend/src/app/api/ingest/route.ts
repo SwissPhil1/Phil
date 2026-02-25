@@ -1268,6 +1268,13 @@ ${mn.length > 0 ? mn.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(no
           studyGuide = studyGuide.replace(/^```(?:markdown|md)?\n?/, "").replace(/\n?```$/, "");
         }
 
+        // Continue generating if the guide was truncated by the output token limit
+        if (pdfFileId) {
+          studyGuide = await continueStudyGuideIfTruncated(
+            client, pdfFileId, chapter.title, studyGuide, sendEvent
+          );
+        }
+
         // Save directly to the chapter
         await prisma.chapter.update({
           where: { id: chapter.id },
@@ -1488,6 +1495,77 @@ ${questionBlock}
 
 ### All Flashcards (${ch.flashcards.length} — detailed knowledge from every page)
 ${flashcardBlock}`;
+}
+
+/**
+ * If a study guide was truncated (output hit the token limit before finishing),
+ * continue generating from where it stopped using assistant message prefill.
+ * Claude sees what it already wrote and seamlessly continues.
+ *
+ * Returns the complete study guide (original + any continuations).
+ */
+async function continueStudyGuideIfTruncated(
+  client: Anthropic,
+  fileId: string,
+  chapterTitle: string,
+  partialGuide: string,
+  sendEvent: (data: Record<string, unknown>) => void,
+  maxContinuations = 2,
+): Promise<string> {
+  // "Active Recall" is near the very end of the required study guide template.
+  // If it's missing, the guide was almost certainly truncated by the output limit.
+  const COMPLETION_MARKER = "Active Recall";
+  let fullGuide = partialGuide;
+
+  for (let attempt = 1; attempt <= maxContinuations; attempt++) {
+    if (fullGuide.includes(COMPLETION_MARKER)) break;
+
+    sendEvent({
+      status: "generating-guide",
+      message: `Study guide was truncated — continuing generation (${attempt}/${maxContinuations})...`,
+    });
+
+    // Keep the last portion of the guide to stay within context limits
+    const prefill = fullGuide.length > 60000 ? fullGuide.slice(-60000) : fullGuide;
+
+    const continuation = await callClaudeStreamingWithRetry(() =>
+      client.beta.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 32000,
+        stream: true,
+        betas: ["files-api-2025-04-14"],
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "document", source: { type: "file", file_id: fileId } },
+              {
+                type: "text",
+                text: `You are an expert radiology educator creating an exhaustive study guide for "${chapterTitle}" for the Swiss FMH2 radiology exam. Write the study guide covering ALL content in the PDF.`,
+              },
+            ],
+          },
+          {
+            role: "assistant",
+            content: prefill,
+          },
+          {
+            role: "user",
+            content: `Your previous response was cut short by the output length limit. Continue EXACTLY where you stopped. Rules:
+- Do NOT repeat ANY content already written above
+- Pick up from the last incomplete section or sentence
+- Continue through ALL remaining sections of the study guide
+- Maintain the same formatting, depth, and callout style (💡 PEARL, 🔴 PITFALL, ⚡ HIGH YIELD, 🧠 MNEMONIC, 🎯 STOP & THINK, etc.)
+- Make sure to complete all remaining sections including: High-Yield Rapid-Fire, Differential Diagnosis Tables, Mnemonics & Memory Palace, Comparisons, Imaging Protocols, Pre-Exam Review Checklist, and Active Recall Self-Test`,
+          },
+        ],
+      })
+    );
+
+    fullGuide += "\n\n" + continuation.trim();
+  }
+
+  return fullGuide;
 }
 
 /**
@@ -1802,6 +1880,11 @@ Requirements:
           );
 
           studyGuide = studyGuide.trim();
+
+          // Continue generating if the guide was truncated by the output token limit
+          studyGuide = await continueStudyGuideIfTruncated(
+            client, mergedFileId!, chapter.title, studyGuide, sendEvent
+          );
         } catch (guideErr) {
           // Merged PDF approach failed — use complete processed data from every chunk
           console.error("Merged PDF study guide failed, using full processed data:", guideErr);
@@ -2021,6 +2104,11 @@ Synthesize ALL sources into ONE unified study guide. Where the books complement 
         if (studyGuide.startsWith("```")) {
           studyGuide = studyGuide.replace(/^```(?:markdown|md)?\n?/, "").replace(/\n?```$/, "");
         }
+
+        // Continue generating if the guide was truncated by the output token limit
+        studyGuide = await continueStudyGuideIfTruncated(
+          client, uploaded.id, chapter.title, studyGuide, sendEvent
+        );
 
         // Save the merged guide to the primary chapter
         await prisma.chapter.update({

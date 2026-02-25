@@ -423,6 +423,8 @@ export async function POST(request: Request) {
       });
     } else if (action === "generate-content") {
       return handleGenerateContent(body);
+    } else if (action === "merge-study-guide") {
+      return handleMergeStudyGuide(body);
     } else if (action === "seed") {
       return handleSeed();
     } else {
@@ -1856,6 +1858,208 @@ Requirements:
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
     },
+  });
+}
+
+/**
+ * Generate a unified study guide by merging PDFs from matching chapters
+ * across different books (e.g., Core Radiology + Crack the Core for "GI Imaging").
+ * Merges both books' PDF pages into one document so Claude can reference
+ * all images/tables from both sources.
+ */
+async function handleMergeStudyGuide(body: { chapterId: number }) {
+  const { chapterId } = body;
+
+  const chapter = await prisma.chapter.findUnique({ where: { id: chapterId } });
+  if (!chapter) {
+    return NextResponse.json({ error: "Chapter not found" }, { status: 404 });
+  }
+
+  // Find matching chapter(s) from other book(s) using title similarity
+  const titleStopWords = [
+    "chapter", "section", "part", "the", "and", "for", "with", "from",
+    "imaging", "radiology", "radiologic", "radiological", "diagnostic",
+    "introduction", "overview", "principles", "approach", "review",
+  ];
+  const titleWords = chapter.title
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, "")
+    .split(/\s+/)
+    .filter((w) => w.length > 3 && !titleStopWords.includes(w));
+
+  const relatedChapters = titleWords.length > 0
+    ? await prisma.chapter.findMany({
+        where: {
+          bookSource: { not: chapter.bookSource },
+          AND: titleWords.map((word) => ({
+            title: { contains: word, mode: "insensitive" as const },
+          })),
+        },
+      })
+    : [];
+
+  if (relatedChapters.length === 0) {
+    return NextResponse.json({
+      error: `No matching chapter found in other books for "${chapter.title}". Make sure both books are uploaded and have chapters stored.`,
+    }, { status: 400 });
+  }
+
+  let client: Anthropic;
+  try {
+    client = getClient();
+  } catch {
+    return NextResponse.json({ error: "ANTHROPIC_API_KEY is not configured." }, { status: 500 });
+  }
+
+  const encoder = new TextEncoder();
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      const sendEvent = (data: Record<string, unknown>) => {
+        try {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+        } catch { /* closed */ }
+      };
+
+      const heartbeat = setInterval(() => {
+        try { controller.enqueue(encoder.encode(`: heartbeat\n\n`)); } catch { /* ignore */ }
+      }, 8000);
+
+      try {
+        // Collect all chapters to merge (primary + related)
+        const allChapters = [chapter, ...relatedChapters];
+        const bookNames = allChapters.map((c) =>
+          c.bookSource === "core_radiology" ? "Core Radiology" : "Crack the Core"
+        );
+
+        sendEvent({
+          status: "merging",
+          message: `Merging PDFs from ${[...new Set(bookNames)].join(" + ")} (${allChapters.length} chapters)...`,
+        });
+
+        // Merge all PDFs from all chapters into one document
+        const { PDFDocument: PDFDoc } = await import("pdf-lib");
+        const mergedPdf = await PDFDoc.create();
+        const chapterPageRanges: Array<{ bookSource: string; title: string; startPage: number; endPage: number }> = [];
+
+        for (const ch of allChapters) {
+          const startPage = mergedPdf.getPageCount();
+          const chunks = await prisma.pdfChunk.findMany({
+            where: { bookSource: ch.bookSource, chapterNum: ch.number },
+            orderBy: { chunkIndex: "asc" },
+          });
+
+          for (const chunk of chunks) {
+            try {
+              const chunkPdf = await PDFDoc.load(Buffer.from(chunk.data), { ignoreEncryption: true });
+              const pages = await mergedPdf.copyPages(chunkPdf, chunkPdf.getPageIndices());
+              pages.forEach((p) => mergedPdf.addPage(p));
+            } catch (err) {
+              console.warn(`Failed to merge chunk:`, err instanceof Error ? err.message : err);
+            }
+          }
+
+          const endPage = mergedPdf.getPageCount() - 1;
+          if (endPage >= startPage) {
+            chapterPageRanges.push({
+              bookSource: ch.bookSource,
+              title: ch.title,
+              startPage: startPage + 1,
+              endPage: endPage + 1,
+            });
+          }
+        }
+
+        const totalPages = mergedPdf.getPageCount();
+        if (totalPages === 0) {
+          sendEvent({ error: "No PDF pages found in any of the matched chapters." });
+          return;
+        }
+
+        sendEvent({ status: "uploading", message: `Uploading merged PDF (${totalPages} pages) to Claude...` });
+
+        const mergedBytes = await mergedPdf.save();
+        const file = new File(
+          [Buffer.from(mergedBytes)],
+          `merged_${chapter.title.replace(/\s+/g, "_")}_${totalPages}pages.pdf`,
+          { type: "application/pdf" }
+        );
+        const uploaded = await client.beta.files.upload({ file });
+
+        // Build page range context so Claude knows which pages are from which book
+        const rangeContext = chapterPageRanges
+          .map((r) => `- Pages ${r.startPage}–${r.endPage}: ${r.bookSource === "core_radiology" ? "Core Radiology" : "Crack the Core"} — "${r.title}"`)
+          .join("\n");
+
+        const crossRefNote = `\n\nIMPORTANT: This PDF contains pages from MULTIPLE textbooks covering the same topic:
+${rangeContext}
+
+Synthesize ALL sources into ONE unified study guide. Where the books complement each other, combine their content. Where they differ or one adds detail the other lacks, include both perspectives. Do NOT separate content by book — integrate it into a single cohesive narrative that draws from the best of both.`;
+
+        const guidePrompt = buildStudyGuidePrompt(chapter.title, crossRefNote);
+
+        sendEvent({ status: "generating-guide", message: `Claude is reading ${totalPages} pages from ${[...new Set(bookNames)].join(" + ")}...` });
+
+        let studyGuide = await callClaudeStreamingWithRetry(() =>
+          client.beta.messages.create({
+            model: "claude-sonnet-4-20250514",
+            max_tokens: 32000,
+            stream: true,
+            betas: ["files-api-2025-04-14"],
+            messages: [{
+              role: "user",
+              content: [
+                { type: "document", source: { type: "file", file_id: uploaded.id } },
+                { type: "text", text: `You are an expert radiology educator. This PDF contains pages from MULTIPLE radiology textbooks covering the same topic. You can see EVERY page — all images, diagrams, tables, and text from ALL sources. Use ALL of it to create the most comprehensive, unified study guide possible.\n\n${guidePrompt}` },
+              ],
+            }],
+          })
+        );
+
+        studyGuide = studyGuide.trim();
+        if (studyGuide.startsWith("```")) {
+          studyGuide = studyGuide.replace(/^```(?:markdown|md)?\n?/, "").replace(/\n?```$/, "");
+        }
+
+        // Save the merged guide to the primary chapter
+        await prisma.chapter.update({
+          where: { id: chapter.id },
+          data: { studyGuide },
+        });
+
+        // Also save to the related chapters so they all share the merged guide
+        for (const rc of relatedChapters) {
+          await prisma.chapter.update({
+            where: { id: rc.id },
+            data: { studyGuide },
+          });
+        }
+
+        sendEvent({
+          success: true,
+          chapterId: chapter.id,
+          studyGuideLength: studyGuide.length,
+          sources: [...new Set(bookNames)],
+          mergedPages: totalPages,
+          matchedChapters: allChapters.map((c) => ({
+            id: c.id,
+            bookSource: c.bookSource,
+            title: c.title,
+          })),
+        });
+      } catch (err: unknown) {
+        console.error("Merge study guide error:", err);
+        const errMsg = getAnthropicErrorMessage(err) || "Merge study guide generation failed";
+        sendEvent({ error: errMsg });
+      } finally {
+        clearInterval(heartbeat);
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
   });
 }
 

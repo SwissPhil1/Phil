@@ -12,6 +12,7 @@ interface Flashcard {
   front: string;
   back: string;
   category: string | null;
+  imageUrl: string | null;
   chapter: {
     title: string;
     bookSource: string;
@@ -185,6 +186,14 @@ function FlashcardsContent() {
                   </Badge>
                 )}
               </div>
+              {card.imageUrl && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={card.imageUrl}
+                  alt="Radiological image"
+                  className="rounded-lg border shadow-sm max-h-40 object-contain mb-4"
+                />
+              )}
               <p className="text-lg text-center leading-relaxed">
                 {card.front}
               </p>
@@ -197,6 +206,14 @@ function FlashcardsContent() {
           {/* Back */}
           <Card className="flip-card-back absolute inset-0">
             <CardContent className="p-8 flex flex-col items-center justify-center min-h-[300px]">
+              {card.imageUrl && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={card.imageUrl}
+                  alt="Radiological image"
+                  className="rounded-lg border shadow-sm max-h-32 object-contain mb-4 opacity-60"
+                />
+              )}
               <p className="text-lg text-center leading-relaxed">
                 {card.back}
               </p>

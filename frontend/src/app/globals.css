@@ -126,3 +126,73 @@
 .flip-card-back {
   transform: rotateY(180deg);
 }
+
+/* Print styles */
+@media print {
+  /* Hide sidebar, nav, buttons, non-content */
+  aside,
+  nav,
+  button,
+  .no-print,
+  [data-print-hide] {
+    display: none !important;
+  }
+
+  /* Reset layout - remove sidebar margin */
+  body {
+    background: white !important;
+    color: black !important;
+  }
+  main {
+    margin: 0 !important;
+    padding: 0 !important;
+    max-width: 100% !important;
+  }
+
+  /* Make cards borderless */
+  .rounded-lg,
+  .rounded-xl {
+    border: none !important;
+    box-shadow: none !important;
+  }
+
+  /* Ensure colored callouts print with background */
+  blockquote {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    border-left: 3px solid #888 !important;
+    padding: 8px 12px !important;
+    margin: 8px 0 !important;
+    page-break-inside: avoid;
+  }
+
+  /* Tables print nicely */
+  table {
+    page-break-inside: auto;
+    border-collapse: collapse;
+  }
+  tr {
+    page-break-inside: avoid;
+    page-break-after: auto;
+  }
+  th, td {
+    border: 1px solid #ccc !important;
+    padding: 4px 8px !important;
+  }
+
+  /* Images */
+  img {
+    max-width: 100% !important;
+    page-break-inside: avoid;
+  }
+
+  /* Headings */
+  h1, h2, h3 {
+    page-break-after: avoid;
+  }
+
+  /* Allow content to flow naturally */
+  .prose {
+    max-width: none !important;
+  }
+}

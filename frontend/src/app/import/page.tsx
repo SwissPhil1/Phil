@@ -100,6 +100,8 @@ export default function ImportNotesPage() {
       const decoder = new TextDecoder();
       let buffer = "";
 
+      let streamCompleted = false;
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -121,6 +123,7 @@ export default function ImportNotesPage() {
             }
 
             if (data.success) {
+              streamCompleted = true;
               setStatus({
                 phase: "done",
                 chapterId: data.chapterId,
@@ -130,11 +133,20 @@ export default function ImportNotesPage() {
               setStatus({ phase: "transforming", message: data.message || "Transforming..." });
             } else if (data.status === "saving") {
               setStatus({ phase: "saving", message: data.message || "Saving..." });
-            } else if (data.status === "flashcards") {
+            } else if (data.status === "flashcards" || data.status === "warning") {
               setStatus({ phase: "flashcards", message: data.message || "Generating flashcards..." });
             }
           } catch { /* partial JSON */ }
         }
+      }
+
+      // If the stream ended without a success or error event (e.g. Vercel timeout),
+      // show an error so the user isn't stuck forever.
+      if (!streamCompleted) {
+        setStatus({
+          phase: "error",
+          message: "Connection lost — the server may have timed out. Your study guide was likely saved. Check your chapters and try again if needed.",
+        });
       }
     } catch (err) {
       setStatus({ phase: "error", message: err instanceof Error ? err.message : "Failed" });

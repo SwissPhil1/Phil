@@ -42,6 +42,48 @@ async function callClaudeWithRetry<T>(
 }
 
 /**
+ * Stream a Claude response with retry logic.
+ * Uses the streaming API so data flows continuously, preventing Vercel/browser timeouts.
+ * Calls onProgress periodically with the accumulated character count.
+ */
+async function callClaudeStreamWithRetry(
+  client: Anthropic,
+  params: { model: string; max_tokens: number; messages: Anthropic.Messages.MessageParam[] },
+  onProgress?: (charCount: number) => void,
+  maxRetries = 3,
+): Promise<string> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const stream = client.messages.stream(params);
+      let text = "";
+      let lastReport = 0;
+
+      stream.on("text", (chunk) => {
+        text += chunk;
+        // Report progress roughly every 500 chars
+        if (onProgress && text.length - lastReport > 500) {
+          lastReport = text.length;
+          onProgress(text.length);
+        }
+      });
+
+      await stream.finalMessage();
+      // Final progress report
+      if (onProgress) onProgress(text.length);
+      return text;
+    } catch (err: unknown) {
+      const apiErr = err as { status?: number; message?: string };
+      const isRetryable = apiErr.status === 429 || apiErr.status === 529 || (apiErr.status && apiErr.status >= 500);
+      if (!isRetryable || attempt === maxRetries) throw err;
+      const delay = apiErr.status === 429 ? 60000 : Math.pow(2, attempt) * 5000;
+      console.warn(`Claude stream error, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})...`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw new Error("unreachable");
+}
+
+/**
  * Build the prompt to transform a NotebookLM summary into a retention-optimized Q/A guide.
  */
 function buildTransformPrompt(organ: string, originalText: string, language: string): string {
@@ -185,14 +227,18 @@ async function handleTransform(body: { organ: string; title: string; text: strin
         send({ status: "transforming", message: "Claude is transforming your summary into Q/A format..." });
 
         const client = getClient();
-        const studyGuide = await callClaudeWithRetry(async () => {
-          const response = await client.messages.create({
+        const studyGuide = await callClaudeStreamWithRetry(
+          client,
+          {
             model: "claude-sonnet-4-20250514",
-            max_tokens: 16000,
+            max_tokens: 32000,
             messages: [{ role: "user", content: buildTransformPrompt(organ, text, language) }],
-          });
-          return (response.content[0] as { type: "text"; text: string }).text;
-        });
+          },
+          (charCount) => {
+            const words = Math.round(charCount / 5);
+            send({ status: "transforming", message: `Generating study guide... (~${words.toLocaleString()} words so far)` });
+          },
+        );
 
         send({ status: "saving", message: "Saving study guide..." });
 
@@ -222,14 +268,17 @@ async function handleTransform(body: { organ: string; title: string; text: strin
 
         let flashcardsCreated = 0;
         try {
-          const flashcardJson = await callClaudeWithRetry(async () => {
-            const response = await client.messages.create({
+          const flashcardJson = await callClaudeStreamWithRetry(
+            client,
+            {
               model: "claude-sonnet-4-20250514",
               max_tokens: 16000,
               messages: [{ role: "user", content: buildFlashcardPrompt(studyGuide, language) }],
-            });
-            return (response.content[0] as { type: "text"; text: string }).text;
-          });
+            },
+            (charCount) => {
+              send({ status: "flashcards", message: `Extracting flashcards... (${Math.round(charCount / 1000)}KB generated)` });
+            },
+          );
 
           // Parse flashcards — handle potential markdown wrapping
           let cleaned = flashcardJson.trim();

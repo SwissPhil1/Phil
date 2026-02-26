@@ -35,6 +35,7 @@ model Chapter {
 
   questions  Question[]
   flashcards Flashcard[]
+  notes      ChapterNote[]
 
   @@unique([bookSource, number])
 }
@@ -62,6 +63,7 @@ model Flashcard {
   front      String
   back       String
   category   String?
+  imageUrl   String?  // URL to radiological image (for image-based flashcards)
   createdAt  DateTime @default(now())
 
   reviews FlashcardReview[]
@@ -98,6 +100,17 @@ model PdfChunk {
   createdAt  DateTime @default(now())
 
   @@unique([bookSource, chapterNum, chunkIndex])
+}
+
+model ChapterNote {
+  id        Int      @id @default(autoincrement())
+  chapterId Int
+  chapter   Chapter  @relation(fields: [chapterId], references: [id])
+  content   String   // markdown text
+  imageUrl  String?  // optional attached image
+  color     String   @default("yellow") // yellow, blue, green, pink
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model StudySession {

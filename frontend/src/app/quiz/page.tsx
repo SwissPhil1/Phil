@@ -22,6 +22,7 @@ interface Question {
   explanation: string;
   difficulty: string;
   category: string | null;
+  imageUrl: string | null;
   chapter: {
     title: string;
     bookSource: string;
@@ -224,6 +225,15 @@ function QuizContent() {
               {question.difficulty}
             </Badge>
           </div>
+
+          {question.imageUrl && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={question.imageUrl}
+              alt="Radiological image"
+              className="rounded-lg border shadow-sm max-h-64 object-contain mb-4 mx-auto"
+            />
+          )}
 
           <h2 className="text-lg font-medium mb-6">{question.questionText}</h2>
 

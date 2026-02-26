@@ -78,7 +78,8 @@ RULES
 4. Create a RAPID-FIRE drill section at the end (30+ items)
 5. Create an EXAM-DAY CHEAT SHEET in a code block at the very end
 6. Verify medical accuracy — correct any errors you find
-7. Use these callout styles throughout:
+7. For EACH major pathology, add a Radiopaedia link: [Radiopaedia: PathologyName](https://radiopaedia.org/articles/pathology-name) — use the standard Radiopaedia URL format with hyphens for spaces. This gives students direct access to radiological images and cases.
+8. Use these callout styles throughout:
 
 > 💡 **PEARL:** [clinical insight]
 > 🔴 **TRAP:** [common exam mistake]

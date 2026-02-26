@@ -139,7 +139,7 @@ export default function ImportNotesPage() {
     } catch (err) {
       setStatus({ phase: "error", message: err instanceof Error ? err.message : "Failed" });
     }
-  }, [canSubmit, effectiveOrgan, title, text]);
+  }, [canSubmit, effectiveOrgan, title, text, language]);
 
   const handleReset = () => {
     setStatus(null);

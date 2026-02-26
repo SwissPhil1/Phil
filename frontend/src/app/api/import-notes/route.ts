@@ -280,10 +280,15 @@ async function handleTransform(body: { organ: string; title: string; text: strin
             },
           );
 
-          // Parse flashcards — handle potential markdown wrapping
+          // Parse flashcards — handle potential markdown wrapping or extra text
           let cleaned = flashcardJson.trim();
           if (cleaned.startsWith("```")) {
             cleaned = cleaned.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
+          }
+          // Extract JSON array even if Claude wrapped it in extra text
+          const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
+          if (arrayMatch) {
+            cleaned = arrayMatch[0];
           }
 
           const flashcards: { front: string; back: string; category: string }[] = JSON.parse(cleaned);

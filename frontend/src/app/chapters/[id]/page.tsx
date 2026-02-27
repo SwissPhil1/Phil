@@ -411,8 +411,12 @@ export default function ChapterDetailPage() {
     if (pendingScrollY.current !== null) {
       const target = pendingScrollY.current;
       pendingScrollY.current = null;
-      // Double rAF ensures the browser has painted the new layout before scrolling
       requestAnimationFrame(() => {
+        // Auto-size the textarea so the page is tall enough to scroll to the saved position
+        if (editing && textareaRef.current) {
+          textareaRef.current.style.height = "auto";
+          textareaRef.current.style.height = textareaRef.current.scrollHeight + "px";
+        }
         requestAnimationFrame(() => {
           window.scrollTo(0, target);
         });
@@ -965,8 +969,13 @@ export default function ChapterDetailPage() {
                           <textarea
                             ref={textareaRef}
                             value={editContent}
-                            onChange={(e) => setEditContent(e.target.value)}
-                            className="w-full p-4 border rounded-lg text-sm font-mono bg-background resize-y min-h-[600px]"
+                            onChange={(e) => {
+                              setEditContent(e.target.value);
+                              // Auto-resize to fit content
+                              e.target.style.height = "auto";
+                              e.target.style.height = e.target.scrollHeight + "px";
+                            }}
+                            className="w-full p-4 border rounded-lg text-sm font-mono bg-background min-h-[600px] overflow-hidden"
                             spellCheck={false}
                           />
                         </div>

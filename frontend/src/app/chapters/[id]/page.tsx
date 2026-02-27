@@ -35,6 +35,7 @@ import {
 import React, { useEffect, useState, useCallback, useRef } from "react";
 import ReactMarkdown, { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkBreaks from "remark-breaks";
 
 interface RelatedChapter {
   id: number;
@@ -981,7 +982,7 @@ export default function ChapterDetailPage() {
                         </div>
                       ) : (
                         <article className="prose prose-sm sm:prose-base max-w-none dark:prose-invert prose-headings:text-foreground prose-p:text-foreground/90 prose-strong:text-foreground prose-li:text-foreground/90 prose-th:text-foreground prose-td:text-foreground/80 prose-table:text-sm prose-blockquote:not-italic prose-blockquote:font-normal [&_ul.contains-task-list]:list-none [&_ul.contains-task-list]:pl-0">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]} components={studyGuideComponents}>
+                          <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} components={studyGuideComponents}>
                             {chapter.studyGuide}
                           </ReactMarkdown>
                         </article>

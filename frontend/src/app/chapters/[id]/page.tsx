@@ -386,6 +386,7 @@ export default function ChapterDetailPage() {
   const [uploadingImage, setUploadingImage] = useState(false);
   const editorFileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const pendingScrollY = useRef<number | null>(null);
 
   // Append section state
   const [showAppendPanel, setShowAppendPanel] = useState(false);
@@ -393,6 +394,20 @@ export default function ChapterDetailPage() {
   const [appendPosition, setAppendPosition] = useState<"end" | "start">("end");
   const [appending, setAppending] = useState(false);
   const [appendMessage, setAppendMessage] = useState("");
+
+  // Restore scroll position after edit mode toggle re-renders the DOM
+  useEffect(() => {
+    if (pendingScrollY.current !== null) {
+      const target = pendingScrollY.current;
+      pendingScrollY.current = null;
+      // Double rAF ensures the browser has painted the new layout before scrolling
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          window.scrollTo(0, target);
+        });
+      });
+    }
+  }, [editing]);
 
   useEffect(() => {
     if (params.id) {
@@ -584,15 +599,14 @@ export default function ChapterDetailPage() {
 
   // ── Editor functions ──────────────────────────────────────────────
   const startEditing = () => {
-    const scrollY = window.scrollY;
+    pendingScrollY.current = window.scrollY;
     setEditContent(chapter?.studyGuide || "");
     setEditing(true);
-    requestAnimationFrame(() => window.scrollTo(0, scrollY));
   };
 
   const saveEdit = async () => {
     if (!chapter) return;
-    const scrollY = window.scrollY;
+    pendingScrollY.current = window.scrollY;
     setSaving(true);
     try {
       await fetch(`/api/chapters/${chapter.id}/save`, {
@@ -602,7 +616,6 @@ export default function ChapterDetailPage() {
       });
       setChapter({ ...chapter, studyGuide: editContent });
       setEditing(false);
-      requestAnimationFrame(() => window.scrollTo(0, scrollY));
     } catch (e) { console.error(e); }
     setSaving(false);
   };
@@ -818,7 +831,7 @@ export default function ChapterDetailPage() {
                             <Button size="sm" onClick={saveEdit} disabled={saving} className="gap-1.5">
                               {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}Save
                             </Button>
-                            <Button size="sm" variant="ghost" onClick={() => { const y = window.scrollY; setEditing(false); requestAnimationFrame(() => window.scrollTo(0, y)); }} className="gap-1.5">
+                            <Button size="sm" variant="ghost" onClick={() => { pendingScrollY.current = window.scrollY; setEditing(false); }} className="gap-1.5">
                               <X className="h-3.5 w-3.5" />Cancel
                             </Button>
                           </>

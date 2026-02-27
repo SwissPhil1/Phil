@@ -391,17 +391,32 @@ export default function ChapterDetailPage() {
   // Append section state
   const [showAppendPanel, setShowAppendPanel] = useState(false);
   const [appendContent, setAppendContent] = useState("");
-  const [appendPosition, setAppendPosition] = useState<"end" | "start">("end");
+  const [appendPosition, setAppendPosition] = useState<string>("end");
   const [appending, setAppending] = useState(false);
   const [appendMessage, setAppendMessage] = useState("");
+
+  // Parse study guide sections for the position selector
+  const guideSections = React.useMemo(() => {
+    if (!chapter?.studyGuide) return [];
+    const parts = chapter.studyGuide.split(/\n---\n/);
+    return parts.map((part, idx) => {
+      const headingMatch = part.match(/^#{1,3}\s+(.+)$/m);
+      const label = headingMatch ? headingMatch[1].trim() : `Section ${idx + 1}`;
+      return { index: idx, label: label.length > 55 ? label.slice(0, 52) + "..." : label };
+    });
+  }, [chapter?.studyGuide]);
 
   // Restore scroll position after edit mode toggle re-renders the DOM
   useEffect(() => {
     if (pendingScrollY.current !== null) {
       const target = pendingScrollY.current;
       pendingScrollY.current = null;
-      // Double rAF ensures the browser has painted the new layout before scrolling
       requestAnimationFrame(() => {
+        // Auto-size the textarea so the page is tall enough to scroll to the saved position
+        if (editing && textareaRef.current) {
+          textareaRef.current.style.height = "auto";
+          textareaRef.current.style.height = textareaRef.current.scrollHeight + "px";
+        }
         requestAnimationFrame(() => {
           window.scrollTo(0, target);
         });
@@ -552,7 +567,12 @@ export default function ChapterDetailPage() {
       const res = await fetch(`/api/chapters/${chapter.id}/append`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: appendContent, position: appendPosition }),
+        body: JSON.stringify({
+          content: appendContent,
+          position: appendPosition === "start" || appendPosition === "end"
+            ? appendPosition
+            : parseInt(appendPosition, 10),
+        }),
       });
       const reader = res.body?.getReader();
       if (!reader) throw new Error("No response stream");
@@ -883,26 +903,22 @@ export default function ChapterDetailPage() {
                         disabled={appending}
                       />
                       <div className="flex items-center justify-between gap-4">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs text-muted-foreground">Position:</span>
-                          <Button
-                            size="sm"
-                            variant={appendPosition === "end" ? "default" : "outline"}
-                            onClick={() => setAppendPosition("end")}
-                            className="text-xs h-7"
+                        <div className="flex items-center gap-2 flex-1 min-w-0">
+                          <span className="text-xs text-muted-foreground shrink-0">Insert:</span>
+                          <select
+                            value={appendPosition}
+                            onChange={(e) => setAppendPosition(e.target.value)}
                             disabled={appending}
+                            className="text-xs h-8 px-2 border rounded-md bg-background text-foreground flex-1 min-w-0 max-w-xs"
                           >
-                            End
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant={appendPosition === "start" ? "default" : "outline"}
-                            onClick={() => setAppendPosition("start")}
-                            className="text-xs h-7"
-                            disabled={appending}
-                          >
-                            Beginning
-                          </Button>
+                            <option value="start">At the beginning</option>
+                            {guideSections.map((sec) => (
+                              <option key={sec.index} value={String(sec.index)}>
+                                After: {sec.label}
+                              </option>
+                            ))}
+                            <option value="end">At the end</option>
+                          </select>
                         </div>
                         <Button
                           size="sm"
@@ -953,8 +969,13 @@ export default function ChapterDetailPage() {
                           <textarea
                             ref={textareaRef}
                             value={editContent}
-                            onChange={(e) => setEditContent(e.target.value)}
-                            className="w-full p-4 border rounded-lg text-sm font-mono bg-background resize-y min-h-[600px]"
+                            onChange={(e) => {
+                              setEditContent(e.target.value);
+                              // Auto-resize to fit content
+                              e.target.style.height = "auto";
+                              e.target.style.height = e.target.scrollHeight + "px";
+                            }}
+                            className="w-full p-4 border rounded-lg text-sm font-mono bg-background min-h-[600px] overflow-hidden"
                             spellCheck={false}
                           />
                         </div>

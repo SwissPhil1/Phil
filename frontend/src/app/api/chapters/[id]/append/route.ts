@@ -121,13 +121,24 @@ Output ONLY the formatted section — no preamble, no wrapping code fences. Retu
 
         await clientStream.finalMessage();
 
-        send({ status: "saving", message: "Appending to study guide..." });
+        send({ status: "saving", message: "Inserting into study guide..." });
 
-        // Append (or prepend) the formatted content to the existing guide
+        // Insert the formatted content at the chosen position
         const separator = "\n\n---\n\n";
-        const updatedGuide = position === "start"
-          ? formattedContent + separator + chapter.studyGuide
-          : chapter.studyGuide + separator + formattedContent;
+        let updatedGuide: string;
+
+        if (position === "start") {
+          updatedGuide = formattedContent + separator + chapter.studyGuide;
+        } else if (typeof position === "number") {
+          // Insert after the section at the given index
+          const sections = chapter.studyGuide!.split(/\n---\n/);
+          const insertIdx = Math.min(position + 1, sections.length);
+          sections.splice(insertIdx, 0, "\n" + formattedContent + "\n");
+          updatedGuide = sections.join("\n---\n");
+        } else {
+          // "end" or any other value → append at the end
+          updatedGuide = chapter.studyGuide + separator + formattedContent;
+        }
 
         await prisma.chapter.update({
           where: { id: chapterId },

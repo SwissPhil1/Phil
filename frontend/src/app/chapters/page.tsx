@@ -5,8 +5,8 @@ import { useSearchParams } from "next/navigation";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { BookOpen, Brain, Layers } from "lucide-react";
-import { useEffect, useState, Suspense } from "react";
+import { BookOpen, Brain, Layers, Pencil, Trash2, Check, X, MoreVertical } from "lucide-react";
+import { useEffect, useState, useCallback, Suspense } from "react";
 
 interface Chapter {
   id: number;
@@ -54,11 +54,16 @@ function getBookLabel(bookSource: string): string {
 function ChaptersContent() {
   const searchParams = useSearchParams();
   const organParam = searchParams.get("organ");
-
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>(organParam ? "notebook_import" : "all");
   const [organFilter, setOrganFilter] = useState<string>(organParam || "all");
+
+  // Chapter management state
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [menuOpenId, setMenuOpenId] = useState<number | null>(null);
 
   // Collect unique organs from imported chapters
   const importedOrgans = [...new Set(
@@ -67,7 +72,7 @@ function ChaptersContent() {
       .map((ch) => ch.organ!)
   )].sort();
 
-  useEffect(() => {
+  const loadChapters = useCallback(() => {
     const url = filter === "all" ? "/api/chapters" : `/api/chapters?book=${filter}`;
     setLoading(true);
     fetch(url)
@@ -76,6 +81,33 @@ function ChaptersContent() {
       .catch(console.error)
       .finally(() => setLoading(false));
   }, [filter]);
+
+  useEffect(() => { loadChapters(); }, [loadChapters]);
+
+  const renameChapter = async (id: number) => {
+    if (!editTitle.trim()) return;
+    try {
+      const res = await fetch(`/api/chapters/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: editTitle }),
+      });
+      if (res.ok) {
+        setChapters((prev) => prev.map((ch) => ch.id === id ? { ...ch, title: editTitle.trim() } : ch));
+        setEditingId(null);
+      }
+    } catch (e) { console.error(e); }
+  };
+
+  const deleteChapter = async (id: number) => {
+    try {
+      const res = await fetch(`/api/chapters/${id}`, { method: "DELETE" });
+      if (res.ok) {
+        setChapters((prev) => prev.filter((ch) => ch.id !== id));
+        setDeletingId(null);
+      }
+    } catch (e) { console.error(e); }
+  };
 
   // If organParam is set, auto-select notebook_import filter
   useEffect(() => {
@@ -177,11 +209,26 @@ function ChaptersContent() {
       ) : (
         <div className="space-y-3">
           {filteredChapters.map((ch) => (
-            <Link key={ch.id} href={`/chapters/${ch.id}`}>
-              <Card className="hover:border-primary/50 transition-colors cursor-pointer">
-                <CardContent className="p-5">
+            <Card key={ch.id} className="hover:border-primary/50 transition-colors">
+              <CardContent className="p-5">
+                {/* Delete confirmation */}
+                {deletingId === ch.id ? (
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm text-destructive font-medium">
+                      Delete &quot;{ch.title}&quot; and all its questions, flashcards, and notes?
+                    </p>
+                    <div className="flex gap-2 ml-4">
+                      <Button size="sm" variant="destructive" onClick={() => deleteChapter(ch.id)} className="text-xs gap-1">
+                        <Trash2 className="h-3.5 w-3.5" />Delete
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => setDeletingId(null)} className="text-xs">
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
                   <div className="flex items-start justify-between">
-                    <div className="flex-1">
+                    <Link href={`/chapters/${ch.id}`} className="flex-1 cursor-pointer">
                       <div className="flex items-center gap-2 mb-1">
                         <Badge
                           variant={
@@ -208,14 +255,36 @@ function ChaptersContent() {
                           Chapter {ch.number}
                         </span>
                       </div>
-                      <h3 className="text-lg font-semibold">{ch.title}</h3>
-                      {ch.summary && (
+                      {editingId === ch.id ? (
+                        <div className="flex items-center gap-2 mt-1" onClick={(e) => e.preventDefault()}>
+                          <input
+                            type="text"
+                            value={editTitle}
+                            onChange={(e) => setEditTitle(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") renameChapter(ch.id);
+                              if (e.key === "Escape") setEditingId(null);
+                            }}
+                            className="flex-1 px-2 py-1 border rounded text-lg font-semibold bg-background"
+                            autoFocus
+                          />
+                          <Button size="sm" variant="ghost" onClick={() => renameChapter(ch.id)} className="h-8 w-8 p-0">
+                            <Check className="h-4 w-4 text-green-600" />
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={() => setEditingId(null)} className="h-8 w-8 p-0">
+                            <X className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      ) : (
+                        <h3 className="text-lg font-semibold">{ch.title}</h3>
+                      )}
+                      {ch.summary && editingId !== ch.id && (
                         <p className="text-sm text-muted-foreground mt-1 line-clamp-2">
                           {ch.summary.substring(0, 150)}...
                         </p>
                       )}
-                    </div>
-                    <div className="flex items-center gap-4 text-sm text-muted-foreground ml-4">
+                    </Link>
+                    <div className="flex items-center gap-3 text-sm text-muted-foreground ml-4">
                       <span className="flex items-center gap-1">
                         <Brain className="h-4 w-4" />
                         {ch._count.questions}
@@ -224,11 +293,50 @@ function ChaptersContent() {
                         <Layers className="h-4 w-4" />
                         {ch._count.flashcards}
                       </span>
+                      {/* Chapter actions menu */}
+                      <div className="relative">
+                        <button
+                          onClick={(e) => { e.preventDefault(); setMenuOpenId(menuOpenId === ch.id ? null : ch.id); }}
+                          className="p-1.5 rounded-md hover:bg-muted transition-colors"
+                        >
+                          <MoreVertical className="h-4 w-4" />
+                        </button>
+                        {menuOpenId === ch.id && (
+                          <>
+                            <div className="fixed inset-0 z-10" onClick={() => setMenuOpenId(null)} />
+                            <div className="absolute right-0 top-8 z-20 bg-popover border rounded-lg shadow-lg py-1 min-w-[140px]">
+                              <button
+                                className="w-full px-3 py-2 text-sm text-left hover:bg-accent flex items-center gap-2"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  setEditTitle(ch.title);
+                                  setEditingId(ch.id);
+                                  setMenuOpenId(null);
+                                }}
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                                Rename
+                              </button>
+                              <button
+                                className="w-full px-3 py-2 text-sm text-left hover:bg-accent flex items-center gap-2 text-destructive"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  setDeletingId(ch.id);
+                                  setMenuOpenId(null);
+                                }}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                                Delete
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </CardContent>
-              </Card>
-            </Link>
+                )}
+              </CardContent>
+            </Card>
           ))}
         </div>
       )}

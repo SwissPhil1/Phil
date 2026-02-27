@@ -30,6 +30,7 @@ import {
   X,
   ExternalLink,
   Printer,
+  FilePlus,
 } from "lucide-react";
 import React, { useEffect, useState, useCallback, useRef } from "react";
 import ReactMarkdown, { Components } from "react-markdown";
@@ -386,6 +387,13 @@ export default function ChapterDetailPage() {
   const editorFileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  // Append section state
+  const [showAppendPanel, setShowAppendPanel] = useState(false);
+  const [appendContent, setAppendContent] = useState("");
+  const [appendPosition, setAppendPosition] = useState<"end" | "start">("end");
+  const [appending, setAppending] = useState(false);
+  const [appendMessage, setAppendMessage] = useState("");
+
   useEffect(() => {
     if (params.id) {
       fetch(`/api/chapters/${params.id}`)
@@ -519,6 +527,52 @@ export default function ChapterDetailPage() {
       setGenerateStatus(null);
     } catch (err) { setGuideError(err instanceof Error ? err.message : "Merge failed"); setGenerateStatus(null); }
   }, [chapter]);
+
+  // Append new content to existing study guide
+  const appendSection = useCallback(async () => {
+    if (!chapter || !appendContent.trim()) return;
+    setAppending(true);
+    setAppendMessage("Starting...");
+    try {
+      const res = await fetch(`/api/chapters/${chapter.id}/append`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: appendContent, position: appendPosition }),
+      });
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("No response stream");
+      const decoder = new TextDecoder();
+      let buf = "";
+      let receivedSuccess = false;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() || "";
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (data.error) { setAppendMessage(`Error: ${data.error}`); setAppending(false); return; }
+              if (data.success) { receivedSuccess = true; }
+              if (data.message) { setAppendMessage(data.message); }
+            } catch { /* partial JSON */ }
+          }
+        }
+      }
+      if (receivedSuccess) {
+        const refreshed = await (await fetch(`/api/chapters/${chapter.id}`)).json();
+        setChapter(refreshed);
+        setAppendContent("");
+        setShowAppendPanel(false);
+        setAppendMessage("");
+      }
+    } catch (err) {
+      setAppendMessage(err instanceof Error ? err.message : "Append failed");
+    }
+    setAppending(false);
+  }, [chapter, appendContent, appendPosition]);
 
   // Auto-generate study guide
   useEffect(() => {
@@ -764,6 +818,9 @@ export default function ChapterDetailPage() {
                           </Button>
                         </>
                       )}
+                      <Button size="sm" variant={showAppendPanel ? "default" : "outline"} onClick={() => setShowAppendPanel(!showAppendPanel)} className="gap-1.5" disabled={editing}>
+                        <FilePlus className="h-3.5 w-3.5" />Add Section
+                      </Button>
                       <Button size="sm" variant={showNotes ? "default" : "outline"} onClick={() => setShowNotes(!showNotes)} className="gap-1.5">
                         <StickyNote className="h-3.5 w-3.5" />Notes
                       </Button>
@@ -782,6 +839,70 @@ export default function ChapterDetailPage() {
                       </Button>
                     </div>
                   </div>
+
+                  {/* Append Section Panel */}
+                  {showAppendPanel && (
+                    <div className="rounded-lg border-2 border-dashed border-primary/30 bg-primary/5 p-5 mb-6 space-y-4">
+                      <div className="flex items-center justify-between">
+                        <h3 className="font-semibold flex items-center gap-2 text-sm">
+                          <FilePlus className="h-4 w-4 text-primary" />
+                          Add New Section
+                        </h3>
+                        <Button size="sm" variant="ghost" onClick={() => { setShowAppendPanel(false); setAppendMessage(""); }} className="h-7 w-7 p-0">
+                          <X className="h-4 w-4" />
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Paste content from NotebookLM or any source. It will be automatically formatted to match this study guide&apos;s style (callouts, tables, mnemonics, etc.) and appended.
+                      </p>
+                      <textarea
+                        value={appendContent}
+                        onChange={(e) => setAppendContent(e.target.value)}
+                        placeholder="Paste your NotebookLM summary, notes, or any content here..."
+                        rows={8}
+                        className="w-full p-3 border rounded-lg text-sm bg-background resize-y"
+                        disabled={appending}
+                      />
+                      <div className="flex items-center justify-between gap-4">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-muted-foreground">Position:</span>
+                          <Button
+                            size="sm"
+                            variant={appendPosition === "end" ? "default" : "outline"}
+                            onClick={() => setAppendPosition("end")}
+                            className="text-xs h-7"
+                            disabled={appending}
+                          >
+                            End
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant={appendPosition === "start" ? "default" : "outline"}
+                            onClick={() => setAppendPosition("start")}
+                            className="text-xs h-7"
+                            disabled={appending}
+                          >
+                            Beginning
+                          </Button>
+                        </div>
+                        <Button
+                          size="sm"
+                          onClick={appendSection}
+                          disabled={!appendContent.trim() || appending}
+                          className="gap-1.5"
+                        >
+                          {appending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FilePlus className="h-3.5 w-3.5" />}
+                          {appending ? "Adding..." : "Add to Guide"}
+                        </Button>
+                      </div>
+                      {appendMessage && (
+                        <div className={`text-xs px-3 py-2 rounded ${appendMessage.startsWith("Error") ? "bg-red-50 text-red-600 dark:bg-red-950/20 dark:text-red-400" : "bg-blue-50 text-blue-600 dark:bg-blue-950/20 dark:text-blue-400"}`}>
+                          {appending && <Loader2 className="h-3 w-3 animate-spin inline mr-1.5" />}
+                          {appendMessage}
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* Editor / Preview Layout */}
                   <div className={`${showNotes ? "grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6" : ""}`}>

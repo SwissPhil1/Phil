@@ -218,6 +218,9 @@ Include 💡 PEARL callouts for clinical correlations throughout.
 Include 🔴 PITFALL callouts for look-alikes and exam traps.
 Include ⚡ HIGH YIELD callouts for the most testable facts.
 
+**Radiopaedia Link** — for each major pathology, include a direct link:
+[Radiopaedia: PathologyName](https://radiopaedia.org/articles/pathology-name) — use hyphens for spaces in the URL. This gives students instant access to radiological images and cases.
+
 **Differential Diagnosis** — what else could look like this?
 **Key Distinguishing Features** — use ⚖️ VS callouts for confusing pairs
 
@@ -342,6 +345,7 @@ STYLE RULES
 - Use \`- [ ]\` checklists for rapid-review and high-yield sections
 - Use horizontal rules (---) between major pathology sections
 - Be EXHAUSTIVELY detailed — cover every pathology, finding, and concept from the source material
+- For EVERY major pathology, include a Radiopaedia link: [Radiopaedia: PathologyName](https://radiopaedia.org/articles/pathology-name) — use the standard Radiopaedia URL format with hyphens for spaces (e.g., hepatocellular-carcinoma, focal-nodular-hyperplasia). Place the link right after the pathology heading or in the Quick-Facts table
 - NO filler text, NO generic introductions — every sentence must teach something specific
 - Target length: 10000-20000 words — this is a comprehensive reference, not a summary
 - Do NOT wrap the output in code fences — return raw markdown only

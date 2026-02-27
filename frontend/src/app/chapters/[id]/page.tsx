@@ -584,12 +584,15 @@ export default function ChapterDetailPage() {
 
   // ── Editor functions ──────────────────────────────────────────────
   const startEditing = () => {
+    const scrollY = window.scrollY;
     setEditContent(chapter?.studyGuide || "");
     setEditing(true);
+    requestAnimationFrame(() => window.scrollTo(0, scrollY));
   };
 
   const saveEdit = async () => {
     if (!chapter) return;
+    const scrollY = window.scrollY;
     setSaving(true);
     try {
       await fetch(`/api/chapters/${chapter.id}/save`, {
@@ -599,6 +602,7 @@ export default function ChapterDetailPage() {
       });
       setChapter({ ...chapter, studyGuide: editContent });
       setEditing(false);
+      requestAnimationFrame(() => window.scrollTo(0, scrollY));
     } catch (e) { console.error(e); }
     setSaving(false);
   };
@@ -801,42 +805,44 @@ export default function ChapterDetailPage() {
               )}
               {chapter.studyGuide ? (
                 <>
-                  {/* Toolbar */}
-                  <div className="flex justify-between items-center gap-2 mb-4 flex-wrap">
-                    <div className="flex gap-2">
-                      {!editing ? (
-                        <Button size="sm" variant="outline" onClick={startEditing} className="gap-1.5">
-                          <Pencil className="h-3.5 w-3.5" />Edit
-                        </Button>
-                      ) : (
-                        <>
-                          <Button size="sm" onClick={saveEdit} disabled={saving} className="gap-1.5">
-                            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}Save
+                  {/* Toolbar - sticky so it follows user while scrolling */}
+                  <div className="sticky top-0 z-20 -mx-6 md:-mx-8 px-6 md:px-8 py-3 bg-card/95 backdrop-blur-sm border-b mb-4">
+                    <div className="flex justify-between items-center gap-2 flex-wrap">
+                      <div className="flex gap-2">
+                        {!editing ? (
+                          <Button size="sm" variant="outline" onClick={startEditing} className="gap-1.5">
+                            <Pencil className="h-3.5 w-3.5" />Edit
                           </Button>
-                          <Button size="sm" variant="ghost" onClick={() => setEditing(false)} className="gap-1.5">
-                            <X className="h-3.5 w-3.5" />Cancel
-                          </Button>
-                        </>
-                      )}
-                      <Button size="sm" variant={showAppendPanel ? "default" : "outline"} onClick={() => setShowAppendPanel(!showAppendPanel)} className="gap-1.5" disabled={editing}>
-                        <FilePlus className="h-3.5 w-3.5" />Add Section
-                      </Button>
-                      <Button size="sm" variant={showNotes ? "default" : "outline"} onClick={() => setShowNotes(!showNotes)} className="gap-1.5">
-                        <StickyNote className="h-3.5 w-3.5" />Notes
-                      </Button>
-                      <Button size="sm" variant="outline" onClick={() => window.print()} className="gap-1.5">
-                        <Printer className="h-3.5 w-3.5" />Print
-                      </Button>
-                    </div>
-                    <div className="flex gap-2">
-                      {!isImported && (
-                        <Button size="sm" variant="outline" className="gap-1.5" onClick={mergeStudyGuide} disabled={isGenerating}>
-                          <Merge className="h-3.5 w-3.5" />Merge
+                        ) : (
+                          <>
+                            <Button size="sm" onClick={saveEdit} disabled={saving} className="gap-1.5">
+                              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}Save
+                            </Button>
+                            <Button size="sm" variant="ghost" onClick={() => { const y = window.scrollY; setEditing(false); requestAnimationFrame(() => window.scrollTo(0, y)); }} className="gap-1.5">
+                              <X className="h-3.5 w-3.5" />Cancel
+                            </Button>
+                          </>
+                        )}
+                        <Button size="sm" variant={showAppendPanel ? "default" : "outline"} onClick={() => setShowAppendPanel(!showAppendPanel)} className="gap-1.5" disabled={editing}>
+                          <FilePlus className="h-3.5 w-3.5" />Add Section
                         </Button>
-                      )}
-                      <Button size="sm" variant="ghost" className="gap-1.5 text-muted-foreground" onClick={regenerateStudyGuide} disabled={isGenerating}>
-                        <RefreshCw className="h-3.5 w-3.5" />Regenerate
-                      </Button>
+                        <Button size="sm" variant={showNotes ? "default" : "outline"} onClick={() => setShowNotes(!showNotes)} className="gap-1.5">
+                          <StickyNote className="h-3.5 w-3.5" />Notes
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={() => window.print()} className="gap-1.5">
+                          <Printer className="h-3.5 w-3.5" />Print
+                        </Button>
+                      </div>
+                      <div className="flex gap-2">
+                        {!isImported && (
+                          <Button size="sm" variant="outline" className="gap-1.5" onClick={mergeStudyGuide} disabled={isGenerating}>
+                            <Merge className="h-3.5 w-3.5" />Merge
+                          </Button>
+                        )}
+                        <Button size="sm" variant="ghost" className="gap-1.5 text-muted-foreground" onClick={regenerateStudyGuide} disabled={isGenerating}>
+                          <RefreshCw className="h-3.5 w-3.5" />Regenerate
+                        </Button>
+                      </div>
                     </div>
                   </div>
 

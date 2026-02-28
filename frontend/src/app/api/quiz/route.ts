@@ -11,10 +11,8 @@ export async function GET(request: Request) {
   if (chapterId) where.chapterId = parseInt(chapterId, 10);
   if (difficulty) where.difficulty = difficulty;
 
-  const questions = await prisma.question.findMany({
+  const allQuestions = await prisma.question.findMany({
     where,
-    take: limit,
-    orderBy: { createdAt: "desc" },
     include: {
       chapter: {
         select: { title: true, bookSource: true, number: true },
@@ -22,8 +20,11 @@ export async function GET(request: Request) {
     },
   });
 
-  // Shuffle questions
-  const shuffled = questions.sort(() => Math.random() - 0.5);
+  // Fisher-Yates shuffle for unbiased randomization
+  for (let i = allQuestions.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [allQuestions[i], allQuestions[j]] = [allQuestions[j], allQuestions[i]];
+  }
 
-  return NextResponse.json(shuffled);
+  return NextResponse.json(allQuestions.slice(0, limit));
 }

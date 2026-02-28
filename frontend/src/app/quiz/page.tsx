@@ -43,6 +43,8 @@ function QuizContent() {
   const [finished, setFinished] = useState(false);
   const [difficulty, setDifficulty] = useState<string>("all");
 
+  const [error, setError] = useState<string | null>(null);
+
   const loadQuestions = useCallback(() => {
     setLoading(true);
     setCurrentIndex(0);
@@ -50,21 +52,49 @@ function QuizContent() {
     setShowResult(false);
     setScore(0);
     setFinished(false);
+    setError(null);
 
     let url = "/api/quiz?limit=10";
     if (chapterId) url += `&chapterId=${chapterId}`;
     if (difficulty !== "all") url += `&difficulty=${difficulty}`;
 
     fetch(url)
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(`Failed to load questions (${r.status})`);
+        return r.json();
+      })
       .then(setQuestions)
-      .catch(console.error)
+      .catch((err) => setError(err instanceof Error ? err.message : "Failed to load questions"))
       .finally(() => setLoading(false));
   }, [chapterId, difficulty]);
 
   useEffect(() => {
     loadQuestions();
   }, [loadQuestions]);
+
+  // Keyboard shortcuts: A-D to select answer, Enter/Space for next question
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (loading || error || questions.length === 0 || finished) return;
+      const question = questions[currentIndex];
+      const options: string[] = JSON.parse(question.options);
+
+      if (!showResult) {
+        // A-D keys select answer (also supports 1-4)
+        const letterMap: Record<string, number> = { a: 0, b: 1, c: 2, d: 3, "1": 0, "2": 1, "3": 2, "4": 3 };
+        const idx = letterMap[e.key.toLowerCase()];
+        if (idx !== undefined && idx < options.length) {
+          e.preventDefault();
+          handleAnswer(idx);
+        }
+      } else if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        nextQuestion();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  });
 
   const handleAnswer = async (answerIndex: number) => {
     if (showResult) return;
@@ -103,6 +133,24 @@ function QuizContent() {
         <Card>
           <CardContent className="p-8">
             <div className="h-48 animate-pulse bg-muted rounded" />
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <h1 className="text-3xl font-bold">Quiz</h1>
+        <Card>
+          <CardContent className="p-8 text-center">
+            <Brain className="h-12 w-12 mx-auto text-destructive/60 mb-4" />
+            <p className="text-destructive font-medium">{error}</p>
+            <Button onClick={loadQuestions} variant="outline" className="mt-4 gap-2">
+              <RotateCcw className="h-4 w-4" />
+              Retry
+            </Button>
           </CardContent>
         </Card>
       </div>

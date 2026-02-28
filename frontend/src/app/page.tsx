@@ -40,12 +40,16 @@ interface ProgressData {
 export default function Dashboard() {
   const [data, setData] = useState<ProgressData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/progress")
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(`Failed to load progress (${r.status})`);
+        return r.json();
+      })
       .then(setData)
-      .catch(console.error)
+      .catch((err) => setError(err instanceof Error ? err.message : "Failed to load dashboard"))
       .finally(() => setLoading(false));
   }, []);
 
@@ -62,6 +66,22 @@ export default function Dashboard() {
             </Card>
           ))}
         </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <h1 className="text-3xl font-bold">Dashboard</h1>
+        <Card>
+          <CardContent className="p-8 text-center">
+            <p className="text-destructive font-medium">{error}</p>
+            <button onClick={() => window.location.reload()} className="mt-3 text-sm text-muted-foreground underline hover:text-foreground">
+              Retry
+            </button>
+          </CardContent>
+        </Card>
       </div>
     );
   }

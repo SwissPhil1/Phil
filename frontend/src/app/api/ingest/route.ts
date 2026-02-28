@@ -405,8 +405,17 @@ function getAnthropicErrorMessage(err: unknown): string | null {
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
+    let body;
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    }
     const { action } = body;
+
+    if (!action || typeof action !== "string") {
+      return NextResponse.json({ error: "Missing or invalid 'action' field" }, { status: 400 });
+    }
 
     if (action === "test-key") {
       return handleTestKey();
@@ -508,16 +517,10 @@ export async function POST(request: Request) {
 
 /**
  * Quick diagnostic: test that the API key works by sending a trivial message.
+ * Does NOT expose the key or environment variable names in the response.
  */
 async function handleTestKey() {
-  const keyPreview = process.env.ANTHROPIC_API_KEY
-    ? `${process.env.ANTHROPIC_API_KEY.slice(0, 10)}...${process.env.ANTHROPIC_API_KEY.slice(-4)} (${process.env.ANTHROPIC_API_KEY.length} chars)`
-    : "NOT SET";
-
-  // Show which env vars Vercel is injecting (names only, no values)
-  const allEnvKeys = Object.keys(process.env).sort();
-  const anthropicKeys = allEnvKeys.filter((k) => k.toUpperCase().includes("ANTHRO") || k.toUpperCase().includes("API_KEY") || k.toUpperCase().includes("CLAUDE"));
-  const vercelKeys = allEnvKeys.filter((k) => k.startsWith("VERCEL") || k.startsWith("NEXT_"));
+  const isKeySet = !!process.env.ANTHROPIC_API_KEY;
 
   try {
     const client = getClient();
@@ -529,7 +532,7 @@ async function handleTestKey() {
     const text = (response.content[0] as { type: "text"; text: string }).text;
     return NextResponse.json({
       success: true,
-      keyPreview,
+      keyConfigured: isKeySet,
       model: response.model,
       reply: text,
     });
@@ -537,19 +540,10 @@ async function handleTestKey() {
     const apiErr = error as { status?: number; error?: { type?: string; message?: string }; message?: string };
     return NextResponse.json({
       success: false,
-      keyPreview,
-      matchingEnvVars: anthropicKeys,
-      vercelEnvVars: vercelKeys,
-      totalEnvVars: allEnvKeys.length,
-      projectName: process.env.VERCEL_PROJECT_NAME,
-      deploymentUrl: process.env.VERCEL_URL,
-      gitRef: process.env.VERCEL_GIT_COMMIT_REF,
-      gitSha: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 8),
-      targetEnv: process.env.VERCEL_TARGET_ENV,
-      allEnvVarNames: allEnvKeys,
+      keyConfigured: isKeySet,
       errorStatus: apiErr.status,
       errorType: apiErr.error?.type,
-      errorMessage: apiErr.error?.message || apiErr.message || String(error),
+      errorMessage: apiErr.error?.message || apiErr.message || "Connection test failed",
     });
   }
 }

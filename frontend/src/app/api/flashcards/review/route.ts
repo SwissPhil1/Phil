@@ -3,12 +3,25 @@ import { calculateSM2 } from "@/lib/sm2";
 import { NextResponse } from "next/server";
 
 export async function POST(request: Request) {
-  const body = await request.json();
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
   const { flashcardId, quality } = body;
 
   if (flashcardId === undefined || quality === undefined) {
     return NextResponse.json(
       { error: "flashcardId and quality are required" },
+      { status: 400 }
+    );
+  }
+
+  if (typeof flashcardId !== "number" || typeof quality !== "number") {
+    return NextResponse.json(
+      { error: "flashcardId and quality must be numbers" },
       { status: 400 }
     );
   }

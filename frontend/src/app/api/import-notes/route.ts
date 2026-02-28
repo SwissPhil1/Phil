@@ -87,6 +87,12 @@ async function callClaudeStreamWithRetry(
  * Build the prompt to transform a NotebookLM summary into a retention-optimized Q/A guide.
  */
 function buildTransformPrompt(organ: string, originalText: string, language: string): string {
+  // Estimate input word count to scale the output target dynamically
+  const inputWordCount = originalText.split(/\s+/).length;
+  // Output should be at least as long as the input, with a floor of 8000 and no hard ceiling
+  const minWords = Math.max(8000, Math.round(inputWordCount * 1.2));
+  const maxWords = Math.max(15000, Math.round(inputWordCount * 1.8));
+
   const langInstruction = language === "fr"
     ? `
 ═══════════════════════════════════════════════════════
@@ -111,13 +117,28 @@ Write the ENTIRE study guide in FRENCH. This includes:
 You are given a NotebookLM-generated summary about "${organ}" radiology. Your job is to transform it into a MAXIMUM RETENTION Q/A study guide.
 ${langInstruction}
 ═══════════════════════════════════════════════════════
+CRITICAL: SMART FUSION — NO FACT LEFT BEHIND
+═══════════════════════════════════════════════════════
+
+The input below may contain MULTIPLE overlapping study guides covering the same organ from different angles (e.g., anatomy, benign masses, malignant masses, diffuse disease, vascular, trauma). These overlap heavily but each contains UNIQUE details the others miss.
+
+**Your mission: SMART DEDUPLICATION**
+- Do NOT repeat the same fact multiple times — merge overlapping content into ONE rich Q/A per topic
+- BUT: when merging, keep the RICHEST version. If section A says "caudate drains into IVC" and section B adds "this explains Budd-Chiari sparing and compensatory hypertrophy with C/RL ratio >0.75 = 99% specific", the merged Q/A must include ALL of those details
+- Organize the merged content into a logical learning flow: Anatomy → Modalities → Benign → Malignant → Diffuse/Metabolic → Vascular → Cystic → Trauma → Management → Signs & Aunt Minnies
+- Cross-reference between topics to build connections (e.g., "We saw in the cirrhosis section that... this explains why HCC shows washout")
+- Add COMPARISON TABLES wherever multiple entities share features (e.g., FNH vs Adenoma vs HCC table)
+
+**The output must preserve every UNIQUE fact** from the input — no number, sign name, differential, pearl, or management point should be lost. Redundant repetitions should be merged, not deleted.
+
+═══════════════════════════════════════════════════════
 RULES
 ═══════════════════════════════════════════════════════
 
 1. EVERY SINGLE FACT must become a Q/A pair: "### Q: [question]\\n**A:** [answer]"
 2. Add HIGH YIELD markers, TRAPS, PEARLS, and MNEMONICS generously
 3. Add any MISSING FMH2-testable topics you notice are absent from the summary
-4. Create a RAPID-FIRE drill section at the end (30+ items)
+4. Create a RAPID-FIRE drill section at the end (50+ items for large inputs, 30+ for small ones)
 5. Create an EXAM-DAY CHEAT SHEET in a code block at the very end
 6. Verify medical accuracy — correct any errors you find
 7. For EACH major pathology, add a Radiopaedia link: [Radiopaedia: PathologyName](https://radiopaedia.org/articles/pathology-name) — use the standard Radiopaedia URL format with hyphens for spaces. This gives students direct access to radiological images and cases.
@@ -129,25 +150,28 @@ RULES
 > 🧠 **MNEMONIC:** [memory aid]
 > 🎯 **STOP & THINK:** [active recall question]
 
-8. Use markdown tables for comparisons
-9. Bold all classic signs and diagnosis names
-10. Target: comprehensive, 8000-15000 words
+9. Use markdown tables for comparisons
+10. Bold all classic signs and diagnosis names
+11. Target: EXHAUSTIVE, ${minWords.toLocaleString()}-${maxWords.toLocaleString()} words (the input is ~${inputWordCount.toLocaleString()} words — your output must be significantly longer)
 
 ═══════════════════════════════════════════════════════
-ORIGINAL NOTEBOOKLM SUMMARY
+ORIGINAL NOTEBOOKLM SUMMARY (~${inputWordCount.toLocaleString()} words)
 ═══════════════════════════════════════════════════════
 
 ${originalText}
 
 ═══════════════════════════════════════════════════════
 
-Transform the above into the ultimate Q/A retention guide. Do NOT wrap output in code fences — return raw markdown only.`;
+Transform the above into the ultimate Q/A retention guide. Preserve EVERY fact. Do NOT wrap output in code fences — return raw markdown only.`;
 }
 
 /**
  * Build prompt to extract flashcards from the study guide.
  */
 function buildFlashcardPrompt(studyGuide: string, language: string): string {
+  const guideWords = studyGuide.split(/\s+/).length;
+  const minFlashcards = guideWords > 8000 ? 150 : guideWords > 4000 ? 100 : 50;
+
   const langNote = language === "fr"
     ? "IMPORTANT: The study guide is in French. Write ALL flashcard front/back text in FRENCH. Keep medical terms in both languages where helpful (e.g., \"Bec d'oiseau / Bird's beak\").\n\n"
     : "";
@@ -159,7 +183,7 @@ Each flashcard should have:
 - "back": The answer (concise but complete)
 - "category": One of "anatomy", "pathology", "imaging", "differential", "mnemonic", "clinical"
 
-Extract EVERY Q/A pair from the guide. Also extract key facts from tables, rapid-fire sections, and high-yield boxes as additional flashcards. Aim for 50-100+ flashcards.
+Extract EVERY Q/A pair from the guide. Also extract key facts from tables, rapid-fire sections, and high-yield boxes as additional flashcards. Aim for ${minFlashcards}+ flashcards — this is a large study guide so do NOT skip any facts.
 
 Return ONLY a valid JSON array, no other text. Example:
 [{"front":"What is the classic sign of achalasia?","back":"Bird's beak — smooth distal tapering of the esophagus","category":"pathology"}]
@@ -227,11 +251,15 @@ async function handleTransform(body: { organ: string; title: string; text: strin
         send({ status: "transforming", message: "Claude is transforming your summary into Q/A format..." });
 
         const client = getClient();
+        // Scale max_tokens based on input size — large combined summaries need more room
+        const inputWords = text.split(/\s+/).length;
+        const dynamicMaxTokens = inputWords > 5000 ? 64000 : 32000;
+
         const studyGuide = await callClaudeStreamWithRetry(
           client,
           {
             model: "claude-sonnet-4-20250514",
-            max_tokens: 32000,
+            max_tokens: dynamicMaxTokens,
             messages: [{ role: "user", content: buildTransformPrompt(organ, text, language) }],
           },
           (charCount) => {
@@ -268,11 +296,15 @@ async function handleTransform(body: { organ: string; title: string; text: strin
 
         let flashcardsCreated = 0;
         try {
+          // Scale flashcard tokens based on study guide size
+          const guideWords = studyGuide.split(/\s+/).length;
+          const fcMaxTokens = guideWords > 8000 ? 32000 : 16000;
+
           const flashcardJson = await callClaudeStreamWithRetry(
             client,
             {
               model: "claude-sonnet-4-20250514",
-              max_tokens: 16000,
+              max_tokens: fcMaxTokens,
               messages: [{ role: "user", content: buildFlashcardPrompt(studyGuide, language) }],
             },
             (charCount) => {

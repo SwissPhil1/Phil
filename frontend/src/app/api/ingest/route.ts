@@ -14,7 +14,7 @@ interface StudyContent {
   keyPoints: string[];
   highYield: string[];
   mnemonics: { name: string; content: string }[];
-  memoryPalace: string;
+  memoryPalace?: string;
   questions: {
     questionText: string;
     options: string[];
@@ -141,11 +141,19 @@ CRITICAL: This chapter may contain 50-300 pages of dense radiology content (espe
 
 BREADTH-FIRST RULE: Cover ALL organ systems and ALL pathologies before going into deep detail on any single one. If this is a GI chapter, you MUST cover esophagus, stomach, duodenum, small bowel, colon, rectum, liver, biliary, pancreas, spleen, peritoneum, and mesentery — NOT just the liver. Allocate space proportionally across all topics. Do NOT spend 80% of the guide on the first organ system and rush through the rest.
 
+RETENTION-FIRST APPROACH: The goal is MAXIMUM RETENTION. For each major section/topic:
+1. Start with a BRIEF INTRO (3-5 sentences) that gives the big picture — what the topic is, why it matters, and the essential concepts to anchor everything else
+2. Then immediately follow with the essential facts, key points, and mnemonics INLINE (right where they are relevant)
+3. Then add Q&A / active recall questions to reinforce what was just taught
+4. This pattern repeats for each major topic: Brief intro → Essential info → Q&A → next topic
+
+This "teach then test" pattern maximises retention. Do NOT dump all Q&A at the end — sprinkle it throughout.
+
 ═══════════════════════════════════════════════════════
 VISUAL FORMATTING RULES (CRITICAL — follow these EXACTLY)
 ═══════════════════════════════════════════════════════
 
-Use these emoji-prefixed blockquotes to create visually distinct callout boxes throughout the guide. Use them GENEROUSLY — aim for at least 40+ callouts across the entire guide:
+Use these emoji-prefixed blockquotes to create visually distinct callout boxes throughout the guide. Use them GENEROUSLY — aim for at least 40+ callouts across the entire guide. Place them INLINE where they are relevant (not just in a separate section):
 
 > 💡 **PEARL:** [clinical insight or teaching point that experienced radiologists know]
 
@@ -161,19 +169,27 @@ Use these emoji-prefixed blockquotes to create visually distinct callout boxes t
 
 > ⚖️ **VS:** [side-by-side comparison of commonly confused entities]
 
+IMPORTANT: Place mnemonics (🧠), key points (✅), and high-yield facts (⚡) INLINE right after the content they relate to — NOT only in a separate section. This way the student sees the memory aid exactly when they need it. The dedicated sections later serve as a gathered reference of all callouts.
+
 ═══════════════════════════════════════════════════════
 REQUIRED STRUCTURE (follow this EXACT order)
 ═══════════════════════════════════════════════════════
 
 ## 🎯 Overview & Exam Strategy
 
+A brief, punchy introduction (5-8 sentences) covering:
 - What this chapter covers and WHY it matters for FMH2
+- The 3-5 most important things to know from this entire chapter (the "if you only remember 5 things" list)
 - Strategic approach: what to master first vs. what's lower priority
 - Common exam question patterns from this topic
+
+> ✅ **KEY POINT:** [The single most important takeaway from this entire chapter]
 
 ---
 
 ## 🔬 Anatomy & Normal Findings
+
+Start with a brief intro (2-3 sentences): what anatomy is relevant and why understanding normal is crucial for spotting pathology.
 
 - Relevant anatomy with spatial relationships and landmarks
 - Normal appearances on EACH modality (X-ray, CT, MRI, US) — be specific
@@ -186,13 +202,21 @@ REQUIRED STRUCTURE (follow this EXACT order)
 - Normal variants that mimic pathology — each gets a 🔴 PITFALL callout
 - Developmental anatomy when relevant
 
+> 🎯 **STOP & THINK:** [Quick active recall question about normal anatomy]
+
+**Answer:** [Answer]
+
 ---
 
 ## 📚 Core Pathologies — Systematic Deep Dive
 
-Walk through EVERY pathology/topic in the chapter. Use ### subheadings for each pathology. For EACH pathology, include ALL of:
+Walk through EVERY pathology/topic in the chapter. Use ### subheadings for each pathology.
 
-**Quick-Facts Header Table:**
+FOR EACH PATHOLOGY, follow this retention-optimised pattern:
+
+**1. Brief intro** (2-3 sentences): What is this pathology? Why does it matter? What's the one thing to remember?
+
+**2. Quick-Facts Header Table:**
 | Feature | Detail |
 |---------|--------|
 | Incidence | ... |
@@ -201,9 +225,9 @@ Walk through EVERY pathology/topic in the chapter. Use ### subheadings for each 
 | Modality of Choice | ... |
 | Classic Sign | **...** |
 
-**Pathophysiology** — 2-3 sentences explaining the mechanism
+**3. Pathophysiology** — 2-3 sentences explaining the mechanism
 
-**Imaging Appearances Table:**
+**4. Imaging Appearances Table:**
 | Modality | Appearance | Key Finding |
 |----------|------------|-------------|
 | X-ray | ... | ... |
@@ -214,15 +238,24 @@ Walk through EVERY pathology/topic in the chapter. Use ### subheadings for each 
 | MRI (DWI/ADC) | ... | ... |
 | US | ... | ... |
 
-Include 💡 PEARL callouts for clinical correlations throughout.
-Include 🔴 PITFALL callouts for look-alikes and exam traps.
-Include ⚡ HIGH YIELD callouts for the most testable facts.
+**5. INLINE callouts** — place these RIGHT HERE with the pathology they relate to:
+- 💡 PEARL callouts for clinical correlations
+- 🔴 PITFALL callouts for look-alikes and exam traps
+- ⚡ HIGH YIELD callouts for the most testable facts
+- 🧠 MNEMONIC if there's a useful memory aid for this specific pathology
+- ✅ KEY POINT to summarise the essential takeaway
 
-**Radiopaedia Link** — for each major pathology, include a direct link:
-[Radiopaedia: PathologyName](https://radiopaedia.org/articles/pathology-name) — use hyphens for spaces in the URL. This gives students instant access to radiological images and cases.
+**6. Active recall** — 1-2 quick STOP & THINK questions right after the pathology:
 
-**Differential Diagnosis** — what else could look like this?
-**Key Distinguishing Features** — use ⚖️ VS callouts for confusing pairs
+> 🎯 **STOP & THINK:** [Question about this specific pathology]
+
+**Answer:** [Answer]
+
+**7. Radiopaedia Link** — for each major pathology:
+[Radiopaedia: PathologyName](https://radiopaedia.org/articles/pathology-name)
+
+**8. Differential Diagnosis** — what else could look like this?
+**9. Key Distinguishing Features** — use ⚖️ VS callouts for confusing pairs
 
 Separate major pathology groups with horizontal rules (---).
 
@@ -230,7 +263,7 @@ Separate major pathology groups with horizontal rules (---).
 
 ## ⚡ High-Yield Rapid-Fire Section
 
-The 30-50 most testable facts from this chapter. Format as a checklist so students can self-assess:
+The 30-50 most testable facts from this chapter, gathered in one place. Format as a checklist so students can self-assess:
 
 - [ ] ⚡ First high-yield fact
 - [ ] ⚡ Second high-yield fact
@@ -254,20 +287,15 @@ Include at least 3-5 separate differential tables covering different clinical sc
 
 ---
 
-## 🧠 Mnemonics & Memory Palace
+## 🧠 Mnemonics — All in One Place
 
-Create **8-15 mnemonics** covering the major topics. For EACH mnemonic:
+Gather ALL mnemonics from the guide here as a quick reference. Create **8-15 mnemonics** covering the major topics. For EACH mnemonic:
 
 > 🧠 **MNEMONIC: [THE MNEMONIC]**
 > - **[Letter/Part 1]** = [what it stands for]
 > - **[Letter/Part 2]** = [what it stands for]
 > - ...
 > *Mental image: [vivid, memorable, even humorous imagery to cement it]*
-
-Then create a **MEMORY PALACE** walkthrough for the most complex topic cluster:
-
-**🏛️ Memory Palace: [Topic]**
-> Imagine entering a [vivid location]... As you walk through the entrance, you see [first concept as a vivid object]... Moving to the [next room/area], you encounter [next concept as a vivid scene]... Continue room by room until all major concepts are placed.
 
 Make the imagery vivid, unusual, and emotionally engaging — that's what makes it stick.
 
@@ -298,6 +326,14 @@ If the chapter discusses protocols, contrast phases, or technique, include:
 - Common artifacts and how to avoid them
 
 Skip this section entirely if the chapter doesn't cover protocols.
+
+---
+
+## ✅ Key Points — All in One Place
+
+Gather ALL key points from the guide here for quick review:
+
+> ✅ **KEY POINT:** [Each essential takeaway, one per callout]
 
 ---
 
@@ -342,6 +378,7 @@ STYLE RULES
 - *Italics* for modality-specific descriptions and subtle findings
 - Use markdown tables LIBERALLY — aim for at least 15+ tables throughout
 - Use blockquote callouts (💡🔴⚡🧠🎯✅⚖️) GENEROUSLY — at least 40+ total
+- Place callouts INLINE where relevant AND gather them in dedicated sections (Mnemonics, Key Points, High-Yield)
 - Use \`- [ ]\` checklists for rapid-review and high-yield sections
 - Use horizontal rules (---) between major pathology sections
 - Be EXHAUSTIVELY detailed — cover every pathology, finding, and concept from the source material
@@ -680,7 +717,6 @@ Generate comprehensive study materials as a JSON object with exactly these field
   "keyPoints": ["8-12 key points — include imaging-specific points like 'On CT, finding X appears as...'"],
   "highYield": ["5-8 high-yield facts for the exam, including classic imaging signs"],
   "mnemonics": [{"name": "Mnemonic name", "content": "Explanation"}],
-  "memoryPalace": "A vivid memory palace description linking concepts to imaging findings.",
   "questions": [
     {
       "questionText": "MCQ question — include image-based questions like 'A CT shows X finding. What is the most likely diagnosis?'",
@@ -723,7 +759,6 @@ Generate study materials as a JSON object with exactly these fields:
   "keyPoints": ["3-5 key points from these specific pages"],
   "highYield": ["2-4 high-yield facts from these pages"],
   "mnemonics": [],
-  "memoryPalace": "",
   "questions": [
     {
       "questionText": "MCQ question based on content from these pages",
@@ -884,7 +919,6 @@ Generate a JSON object with exactly these fields:
   "keyPoints": ["List of 8-12 key points"],
   "highYield": ["List of 5-8 high-yield facts"],
   "mnemonics": [{"name": "Mnemonic name", "content": "Explanation"}],
-  "memoryPalace": "A vivid memory palace description.",
   "questions": [{"questionText": "MCQ question", "options": ["A", "B", "C", "D"], "correctAnswer": 0, "explanation": "Why", "difficulty": "medium", "category": "topic"}],
   "flashcards": [{"front": "Question", "back": "Answer", "category": "topic"}]
 }
@@ -1513,9 +1547,6 @@ ${hy.length > 0 ? hy.map((h) => `- ${h}`).join("\n") : "(none)"}
 ### Mnemonics
 ${mn.length > 0 ? mn.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(none)"}
 
-### Memory Palace
-${ch.memoryPalace || "(none)"}
-
 ### All Questions (${ch.questions.length} — covering every topic in the chapter)
 ${questionBlock}
 
@@ -1848,7 +1879,6 @@ Generate study materials as a JSON object with exactly these fields:
   "keyPoints": ["3-5 key points from these specific pages"],
   "highYield": ["2-4 high-yield facts from these pages"],
   "mnemonics": [],
-  "memoryPalace": "",
   "questions": [
     {
       "questionText": "MCQ question based on content from these pages",
@@ -1887,7 +1917,6 @@ Generate comprehensive study materials as a JSON object with exactly these field
   "keyPoints": ["8-12 key points — include imaging-specific points like 'On CT, finding X appears as...'"],
   "highYield": ["5-8 high-yield facts for the exam, including classic imaging signs"],
   "mnemonics": [{"name": "Mnemonic name", "content": "Explanation"}],
-  "memoryPalace": "A vivid memory palace description linking concepts to imaging findings.",
   "questions": [
     {
       "questionText": "MCQ question — include image-based questions like 'A CT shows X finding. What is the most likely diagnosis?'",

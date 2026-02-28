@@ -11,7 +11,6 @@ import {
   Layers,
   Star,
   Lightbulb,
-  MapPin,
   ArrowLeft,
   GraduationCap,
   Merge,
@@ -63,7 +62,6 @@ interface ChapterDetail {
   keyPoints: string | null;
   highYield: string | null;
   mnemonics: string | null;
-  memoryPalace: string | null;
   studyGuide: string | null;
   pdfChunkCount: number;
   estimatedPages: number;
@@ -121,8 +119,6 @@ const studyGuideComponents: Components = {
       classes += "border-emerald-400 bg-emerald-50/80 dark:bg-emerald-950/30 [&>p]:text-emerald-900 dark:[&>p]:text-emerald-200";
     } else if (text.includes("⚖️") || text.includes("VS:")) {
       classes += "border-indigo-400 bg-indigo-50/80 dark:bg-indigo-950/30 [&>p]:text-indigo-900 dark:[&>p]:text-indigo-200";
-    } else if (text.includes("🏛️") || text.includes("Memory Palace")) {
-      classes += "border-violet-400 bg-violet-50/80 dark:bg-violet-950/30 [&>p]:text-violet-900 dark:[&>p]:text-violet-200";
     } else {
       classes += "border-primary/40 bg-primary/5 [&>p]:text-primary/80";
     }
@@ -693,18 +689,72 @@ export default function ChapterDetailPage() {
     );
   }
 
-  const keyPoints: string[] = chapter.keyPoints ? JSON.parse(chapter.keyPoints) : [];
-  const highYield: string[] = chapter.highYield ? JSON.parse(chapter.highYield) : [];
-  const mnemonics: Array<{ name: string; content: string }> = chapter.mnemonics ? JSON.parse(chapter.mnemonics) : [];
+  // Extract Key Points, High Yield, and Mnemonics from the study guide markdown
+  // These callouts are embedded inline in the study guide — we gather them here for the dedicated tabs
+  const extractCallouts = (guide: string | null, prefix: string): string[] => {
+    if (!guide) return [];
+    const results: string[] = [];
+    // Match blockquote lines starting with the prefix pattern
+    const regex = new RegExp(`^>\\s*(?:${prefix})\\s*(.+)$`, "gm");
+    let match;
+    while ((match = regex.exec(guide)) !== null) {
+      // Clean up the extracted text
+      const text = match[1].replace(/\*\*/g, "").trim();
+      if (text) results.push(text);
+    }
+    return results;
+  };
+
+  const extractMnemonics = (guide: string | null): Array<{ name: string; content: string }> => {
+    if (!guide) return [];
+    const results: Array<{ name: string; content: string }> = [];
+    // Split into lines and find mnemonic blocks
+    const lines = guide.split("\n");
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      if (/^>\s*🧠\s*\*?\*?MNEMONIC/i.test(line)) {
+        // Extract the mnemonic name from the first line
+        const nameMatch = line.match(/MNEMONIC:?\s*\*?\*?\s*(?:\[([^\]]+)\]|(.+?))\s*\*?\*?\s*$/i);
+        const name = (nameMatch?.[1] || nameMatch?.[2] || "Mnemonic").replace(/\*\*/g, "").trim();
+        // Collect all continuation lines of this blockquote
+        const contentLines: string[] = [];
+        i++;
+        while (i < lines.length && /^>\s/.test(lines[i])) {
+          const cleaned = lines[i].replace(/^>\s*/, "").trim();
+          if (cleaned) contentLines.push(cleaned);
+          i++;
+        }
+        results.push({ name, content: contentLines.join("\n") || name });
+      } else {
+        i++;
+      }
+    }
+    return results;
+  };
+
+  let keyPoints = extractCallouts(chapter.studyGuide, "✅\\s*\\*?\\*?KEY POINT:?\\*?\\*?");
+  let highYield = extractCallouts(chapter.studyGuide, "⚡\\s*\\*?\\*?HIGH YIELD:?\\*?\\*?");
+  let mnemonics = extractMnemonics(chapter.studyGuide);
+
+  // Also fall back to the separate JSON columns if study guide doesn't have enough
+  if (keyPoints.length === 0 && chapter.keyPoints) {
+    try { keyPoints = JSON.parse(chapter.keyPoints); } catch {}
+  }
+  if (highYield.length === 0 && chapter.highYield) {
+    try { highYield = JSON.parse(chapter.highYield); } catch {}
+  }
+  if (mnemonics.length === 0 && chapter.mnemonics) {
+    try { mnemonics = JSON.parse(chapter.mnemonics); } catch {}
+  }
 
   const tabs = [
     { key: "guide", label: "Study Guide", icon: GraduationCap },
     { key: "notes", label: "Notes", icon: StickyNote },
     { key: "summary", label: "Summary", icon: BookOpen },
-    { key: "keypoints", label: "Key Points", icon: Star },
-    { key: "highyield", label: "High Yield", icon: Lightbulb },
-    { key: "mnemonics", label: "Mnemonics", icon: Brain },
-    { key: "memory", label: "Memory Palace", icon: MapPin },
+    { key: "keypoints", label: `Key Points (${keyPoints.length})`, icon: Star },
+    { key: "highyield", label: `High Yield (${highYield.length})`, icon: Lightbulb },
+    { key: "mnemonics", label: `Mnemonics (${mnemonics.length})`, icon: Brain },
   ];
 
   // ─── Empty States ─────────────────────────────────────────────────
@@ -1052,9 +1102,6 @@ export default function ChapterDetailPage() {
           </div>
         )}
 
-        {activeTab === "memory" && (
-          <Card><CardContent className="p-6">{chapter.memoryPalace ? <div className="whitespace-pre-wrap text-sm leading-relaxed">{chapter.memoryPalace}</div> : <p className="text-muted-foreground italic">Memory palace not yet generated.</p>}</CardContent></Card>
-        )}
       </div>
     </div>
   );

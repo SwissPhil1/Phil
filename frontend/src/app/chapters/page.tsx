@@ -72,13 +72,19 @@ function ChaptersContent() {
       .map((ch) => ch.organ!)
   )].sort();
 
+  const [error, setError] = useState<string | null>(null);
+
   const loadChapters = useCallback(() => {
     const url = filter === "all" ? "/api/chapters" : `/api/chapters?book=${filter}`;
     setLoading(true);
+    setError(null);
     fetch(url)
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(`Failed to load chapters (${r.status})`);
+        return r.json();
+      })
       .then(setChapters)
-      .catch(console.error)
+      .catch((err) => setError(err instanceof Error ? err.message : "Failed to load chapters"))
       .finally(() => setLoading(false));
   }, [filter]);
 
@@ -183,8 +189,20 @@ function ChaptersContent() {
         </div>
       )}
 
+      {/* Error State */}
+      {error && (
+        <Card>
+          <CardContent className="p-8 text-center">
+            <p className="text-destructive font-medium">{error}</p>
+            <button onClick={loadChapters} className="mt-3 text-sm text-muted-foreground underline hover:text-foreground">
+              Retry
+            </button>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Chapter List */}
-      {loading ? (
+      {!error && loading ? (
         <div className="space-y-3">
           {[...Array(6)].map((_, i) => (
             <Card key={i}>

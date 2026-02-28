@@ -36,20 +36,26 @@ function FlashcardsContent() {
   const [reviewed, setReviewed] = useState(0);
   const [finished, setFinished] = useState(false);
 
+  const [error, setError] = useState<string | null>(null);
+
   const loadCards = useCallback(() => {
     setLoading(true);
     setCurrentIndex(0);
     setFlipped(false);
     setReviewed(0);
     setFinished(false);
+    setError(null);
 
     let url = "/api/flashcards?mode=due&limit=20";
     if (chapterId) url += `&chapterId=${chapterId}`;
 
     fetch(url)
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(`Failed to load flashcards (${r.status})`);
+        return r.json();
+      })
       .then(setCards)
-      .catch(console.error)
+      .catch((err) => setError(err instanceof Error ? err.message : "Failed to load flashcards"))
       .finally(() => setLoading(false));
   }, [chapterId]);
 
@@ -57,17 +63,24 @@ function FlashcardsContent() {
     loadCards();
   }, [loadCards]);
 
-  const handleRate = async (quality: number) => {
+  const handleRate = useCallback(async (quality: number) => {
     const card = cards[currentIndex];
 
-    await fetch("/api/flashcards/review", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        flashcardId: card.id,
-        quality,
-      }),
-    }).catch(console.error);
+    try {
+      const res = await fetch("/api/flashcards/review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          flashcardId: card.id,
+          quality,
+        }),
+      });
+      if (!res.ok) {
+        console.error("Failed to save review:", res.status);
+      }
+    } catch (err) {
+      console.error("Failed to save review:", err);
+    }
 
     setReviewed((r) => r + 1);
 
@@ -77,7 +90,27 @@ function FlashcardsContent() {
       setCurrentIndex((i) => i + 1);
       setFlipped(false);
     }
-  };
+  }, [cards, currentIndex]);
+
+  // Keyboard shortcuts: Space to flip, 1-4 for rating when flipped
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (finished || loading || error || cards.length === 0) return;
+      if (e.key === " " && !flipped) {
+        e.preventDefault();
+        setFlipped(true);
+      }
+      if (flipped) {
+        const keyMap: Record<string, number> = { "1": 0, "2": 3, "3": 4, "4": 5 };
+        if (keyMap[e.key] !== undefined) {
+          e.preventDefault();
+          handleRate(keyMap[e.key]);
+        }
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [flipped, finished, loading, error, cards.length, handleRate]);
 
   if (loading) {
     return (
@@ -86,6 +119,24 @@ function FlashcardsContent() {
         <Card>
           <CardContent className="p-8">
             <div className="h-64 animate-pulse bg-muted rounded" />
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <h1 className="text-3xl font-bold">Flashcards</h1>
+        <Card>
+          <CardContent className="p-8 text-center">
+            <Layers className="h-12 w-12 mx-auto text-destructive/60 mb-4" />
+            <p className="text-destructive font-medium">{error}</p>
+            <Button onClick={loadCards} variant="outline" className="mt-4 gap-2">
+              <RotateCcw className="h-4 w-4" />
+              Retry
+            </Button>
           </CardContent>
         </Card>
       </div>
@@ -168,10 +219,14 @@ function FlashcardsContent() {
       {/* Flashcard */}
       <div className="perspective">
         <div
+          role="button"
+          tabIndex={0}
+          aria-label={flipped ? "Flashcard answer shown. Press Enter or Space to flip back." : "Flashcard question. Press Enter or Space to reveal answer."}
           className={`flip-card-inner relative min-h-[300px] cursor-pointer ${
             flipped ? "flipped" : ""
           }`}
           onClick={() => setFlipped(!flipped)}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setFlipped(!flipped); } }}
         >
           {/* Front */}
           <Card className="flip-card-front absolute inset-0">
@@ -224,17 +279,24 @@ function FlashcardsContent() {
 
       {/* Rating Buttons - only show when flipped */}
       {flipped && (
-        <div className="flex justify-center gap-3">
-          {ratingButtons.map((btn) => (
-            <Button
-              key={btn.quality}
-              variant="outline"
-              onClick={() => handleRate(btn.quality)}
-              className={`min-w-[80px] ${btn.color}`}
-            >
-              {btn.label}
-            </Button>
-          ))}
+        <div className="space-y-2">
+          <div className="flex justify-center gap-3">
+            {ratingButtons.map((btn, i) => (
+              <Button
+                key={btn.quality}
+                variant="outline"
+                onClick={() => handleRate(btn.quality)}
+                className={`min-w-[80px] ${btn.color}`}
+                aria-label={`Rate as ${btn.label} (press ${i + 1})`}
+              >
+                {btn.label}
+                <span className="ml-1 text-xs opacity-50">{i + 1}</span>
+              </Button>
+            ))}
+          </div>
+          <p className="text-center text-xs text-muted-foreground">
+            Keyboard: 1=Again, 2=Hard, 3=Good, 4=Easy
+          </p>
         </div>
       )}
 

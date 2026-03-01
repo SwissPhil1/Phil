@@ -62,13 +62,12 @@ RULES
 ═══════════════════════════════════════════════════════
 
 1. EVERY SINGLE FACT must become a Q/A pair: "### Q: [question]\\n**A:** [answer]"
-2. Add HIGH YIELD markers, TRAPS, PEARLS, and MNEMONICS generously
+2. Add HIGH YIELD markers, TRAPS, PEARLS, and MNEMONICS generously — but keep each PEARL/PITFALL concise (1-2 sentences max)
 3. Add any MISSING FMH2-testable topics you notice are absent from the summary
-4. Create a RAPID-FIRE drill section at the end (50+ items for large inputs, 30+ for small ones)
-5. Create an EXAM-DAY CHEAT SHEET in a code block at the very end
-6. Verify medical accuracy — correct any errors you find
-7. For EACH major pathology, add a Radiopaedia link: [Radiopaedia: PathologyName](https://radiopaedia.org/articles/pathology-name) — use the standard Radiopaedia URL format with hyphens for spaces. This gives students direct access to radiological images and cases.
-8. Use these callout styles throughout:
+4. Create an EXAM-DAY CHEAT SHEET in a code block at the very end
+5. Verify medical accuracy — correct any errors you find
+6. For EACH major pathology, add a Radiopaedia link: [Radiopaedia: PathologyName](https://radiopaedia.org/articles/pathology-name) — use the standard Radiopaedia URL format with hyphens for spaces. This gives students direct access to radiological images and cases.
+7. Use these callout styles throughout:
 
 > 💡 **PEARL:** [clinical insight]
 > 🔴 **TRAP:** [common exam mistake]
@@ -76,9 +75,41 @@ RULES
 > 🧠 **MNEMONIC:** [memory aid]
 > 🎯 **STOP & THINK:** [active recall question]
 
-9. Use markdown tables for comparisons
-10. Bold all classic signs and diagnosis names
-11. Target: EXHAUSTIVE, ${minWords.toLocaleString()}-${maxWords.toLocaleString()} words (the input is ~${inputWordCount.toLocaleString()} words — your output must be significantly longer)
+8. Use markdown tables for comparisons
+9. Bold all classic signs and diagnosis names
+10. Target: EXHAUSTIVE, ${minWords.toLocaleString()}-${maxWords.toLocaleString()} words (the input is ~${inputWordCount.toLocaleString()} words — your output must be significantly longer)
+
+═══════════════════════════════════════════════════════
+REQUIRED SECTION ORDER
+═══════════════════════════════════════════════════════
+
+Follow this skeleton for MAXIMUM understanding, learning, and retention.
+Order follows: Learn → Apply → Recognize Patterns → Discriminate → Encode → Test → Review → Reference.
+
+## 🎯 Overview & Exam Strategy
+---
+## 🔬 Anatomy & Normal Findings
+---
+## 📚 Core Pathologies — Systematic Deep Dive
+(### subheading per pathology, each with Quick-Facts table, Imaging table, inline callouts, STOP & THINK, Radiopaedia link)
+---
+## 🔧 Imaging Protocols & Technique (if applicable)
+---
+## 📊 Differential Diagnosis Master Tables
+(Consolidate ALL differentials into organized tables: "causes of X", lesion comparisons, imaging sign comparisons)
+---
+## ⚖️ "How to Tell Them Apart" — Comparison Section
+---
+## 🧠 Mnemonics — All in One Place
+---
+## ⚡ High-Yield Rapid-Fire + Active Recall Self-Test
+(MERGED: quick-fire drills + deeper active recall. 50+ items for large inputs, 30+ for small ones)
+---
+## 📋 Pre-Exam Rapid Review Checklist
+---
+## EXAM-DAY CHEAT SHEET (in code block)
+
+If content doesn't fit these sections, create ### subsections within "Core Pathologies" or add a dedicated ## section. NEVER silently drop content.
 
 ═══════════════════════════════════════════════════════
 ORIGINAL NOTEBOOKLM SUMMARY (~${inputWordCount.toLocaleString()} words)
@@ -88,7 +119,7 @@ ${originalText}
 
 ═══════════════════════════════════════════════════════
 
-Transform the above into the ultimate Q/A retention guide. Preserve EVERY fact. Do NOT wrap output in code fences — return raw markdown only.`;
+Transform the above into the ultimate Q/A retention guide following the section order above. Preserve EVERY fact. Do NOT wrap output in code fences — return raw markdown only.`;
 }
 
 export async function POST(request: Request) {

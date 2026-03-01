@@ -2,7 +2,6 @@ import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import {
   CLAUDE_MODEL,
-  CLAUDE_MODEL_FAST,
   getClaudeClient,
   callClaudeStreamWithRetry,
 } from "@/lib/claude";
@@ -17,36 +16,83 @@ function buildExtractFactsPrompt(studyGuide: string, language: string): string {
     ? "\nThe study guide is in French. Extract facts in the same language they appear (French with English medical terms where present).\n"
     : "";
 
-  return `You are a meticulous medical knowledge extractor. Your ONLY job is to extract EVERY discrete fact, concept, value, and relationship from the study guide below into a flat checklist.
+  return `You are a meticulous medical knowledge extractor. Your ONLY job is to extract EVERY discrete fact, concept, value, and relationship from the study guide below into a CATEGORIZED checklist.
 ${langNote}
 RULES:
 - Extract ONE fact per line in "- [ ]" format
 - Each fact must be self-contained and ATOMIC (one concept per line)
-- Include ALL of the following categories — miss NOTHING:
-  • Named pathologies, syndromes, signs, and entities
-  • Numeric values, thresholds, measurements, percentages, scoring systems
-  • Associations and causal relationships (e.g., "Caroli associated with medullary sponge kidney")
-  • Imaging characteristics and signs (e.g., "HCC = arterial enhancement + portal washout")
-  • Differential diagnosis items
-  • Mnemonics and memory aids (verbatim text)
-  • Clinical pearls and pitfalls (the specific teaching point)
-  • Classifications, grading, and staging systems (with their criteria)
-  • Treatment/management details
-  • Anatomical facts, normal variants, normal measurements
-  • Radiopaedia links (preserve the URL)
-  • Comparisons between entities (e.g., "FNH vs adenoma: central scar in FNH")
-  • Exam strategy tips and high-yield pointers
+- CATEGORIZE facts under the headings below — this enables precise verification later
 - Do NOT summarize or paraphrase — preserve the SPECIFIC detail and values
-- Do NOT group or categorize — output a FLAT list
 - Do NOT skip "obvious" or "basic" facts — extract EVERYTHING
 - If a Q/A pair contains multiple facts, extract EACH as a separate line
 - If a table contains N data rows, extract the key fact from EACH row
 
-OUTPUT FORMAT (nothing else):
-- [ ] fact 1
-- [ ] fact 2
-- [ ] fact 3
-...
+OUTPUT FORMAT — use EXACTLY these category headings:
+
+## ANATOMY & NORMAL VALUES
+(Normal anatomy, normal variants, normal measurements, embryology)
+- [ ] fact
+- [ ] fact
+
+## NUMERIC VALUES & THRESHOLDS
+(Measurements, percentages, scoring systems, size cutoffs, pressure values)
+- [ ] fact
+- [ ] fact
+
+## NAMED SIGNS & IMAGING APPEARANCES
+(Classic signs, imaging characteristics by modality, appearance descriptors)
+- [ ] fact
+- [ ] fact
+
+## PATHOLOGIES & SYNDROMES
+(Named diseases, syndromes, entities — what they are, their pathophysiology)
+- [ ] fact
+- [ ] fact
+
+## ASSOCIATIONS & CAUSAL RELATIONSHIPS
+(X causes Y, X is associated with Y, X increases risk of Y)
+- [ ] fact
+- [ ] fact
+
+## DIFFERENTIAL DIAGNOSIS
+(DDx lists, "causes of X", distinguishing features between entities)
+- [ ] fact
+- [ ] fact
+
+## CLASSIFICATIONS, GRADING & STAGING
+(Staging systems, grading criteria, classification schemes with their criteria)
+- [ ] fact
+- [ ] fact
+
+## MANAGEMENT & TREATMENT
+(Surgical indications, treatment options, drainage vs surgery, follow-up)
+- [ ] fact
+- [ ] fact
+
+## MNEMONICS & MEMORY AIDS
+(Verbatim mnemonic text, acronyms, memory hooks — preserve exact wording)
+- [ ] fact
+- [ ] fact
+
+## CLINICAL PEARLS & PITFALLS
+(Teaching points, exam traps, common mistakes, clinical reasoning tips)
+- [ ] fact
+- [ ] fact
+
+## RADIOPAEDIA LINKS
+(Preserve each URL exactly)
+- [ ] fact
+- [ ] fact
+
+## COMPARISONS & "HOW TO TELL APART"
+(Side-by-side comparisons, distinguishing features, VS tables)
+- [ ] fact
+- [ ] fact
+
+## EXAM STRATEGY & HIGH-YIELD POINTERS
+(Exam tips, high-yield markers, "always think of X when you see Y")
+- [ ] fact
+- [ ] fact
 
 ═══════════════════════════════════════════════════════
 STUDY GUIDE TO EXTRACT FROM:
@@ -55,7 +101,7 @@ STUDY GUIDE TO EXTRACT FROM:
 ${studyGuide}
 
 ═══════════════════════════════════════════════════════
-Extract every discrete fact now. Output ONLY the checklist — no preamble, no commentary, no categories.`;
+Extract every discrete fact now. Output ONLY the categorized checklist — no preamble, no commentary outside the category headings.`;
 }
 
 // ── Step 2: Restructure prompt (existing logic, unchanged) ──────────────────
@@ -151,7 +197,7 @@ TASK: RESTRUCTURE & IMPROVE
 3. **IMPROVE** (additive only — never remove to "improve"):
    - Add important missing facts for the FMH2 exam
    - Complete incomplete mnemonics
-   - Enrich PEARLs and PITFALLs with clinical nuances
+   - Enrich PEARLs and PITFALLs with clinical nuances — but keep each PEARL/PITFALL concise (1-2 sentences max, do NOT expand into paragraphs)
    - Add STOP & THINK questions where key concepts lack them
    - Complete comparison tables if entities are missing — add rows, never remove existing ones
    - Re-organize sections if the flow is disrupted
@@ -190,31 +236,38 @@ The input may contain the same topic covered multiple times (e.g., two Q/As abou
 REQUIRED SECTION ORDER (restructure to match this)
 ═══════════════════════════════════════════════════════
 
+This skeleton is designed for MAXIMUM understanding, learning, and retention.
+The order follows a learning-science progression: Learn → Apply → Recognize Patterns → Discriminate → Encode → Test → Review → Reference.
+
 ## 🎯 Overview & Exam Strategy
+(Schema activation: what this chapter covers, exam weight, approach)
 ---
 ## 🔬 Anatomy & Normal Findings
+(Foundation: build the baseline before pathology)
 ---
 ## 📚 Core Pathologies — Systematic Deep Dive
 (### subheading per pathology, each with Quick-Facts table, Imaging table, inline callouts, STOP & THINK, Radiopaedia link)
 ---
-## ⚡ High-Yield Rapid-Fire Section
+## 🔧 Imaging Protocols & Technique (if applicable)
+(Practical application: what to order and how — applies knowledge from core pathologies)
 ---
 ## 📊 Differential Diagnosis Master Tables
-(MUST be comprehensive. Consolidate ALL differentials from the chapter into organized tables: "causes of X", lesion comparisons, imaging sign comparisons. Generate these even if not explicitly organized this way in the input. This section should be usable as a standalone differential review)
----
-## 🧠 Mnemonics — All in One Place
+(Pattern recognition: consolidate ALL differentials from the chapter into organized tables — "causes of X", lesion comparisons, imaging sign comparisons. Generate these even if not explicitly organized this way in the input. This section should be usable as a standalone differential review)
 ---
 ## ⚖️ "How to Tell Them Apart" — Comparison Section
+(Discrimination learning: side-by-side entities that get confused on exam)
 ---
-## 🔧 Imaging Protocols & Technique (if applicable)
+## 🧠 Mnemonics — All in One Place
+(Memory encoding: comes AFTER comparisons so it encodes what was just compared)
 ---
-## ✅ Key Points — All in One Place
+## ⚡ High-Yield Rapid-Fire + Active Recall Self-Test
+(MERGED testing section: quick-fire pattern → answer drills + deeper active recall questions together. If the input has separate rapid-fire and self-test sections, MERGE them here. The output must have AT LEAST as many items as the input had across both sections combined)
 ---
 ## 📋 Pre-Exam Rapid Review Checklist
----
-## 🎯 Active Recall Self-Test
+(Systematic "have I seen everything?" checklist format)
 ---
 ## EXAM-DAY CHEAT SHEET (in code block)
+(Final reference: fits on one screen, the distilled essence)
 
 **IMPORTANT:** If the input contains content that does not fit into any of the above sections (e.g., management/treatment details, pediatric pathologies, trauma, complications, special techniques), create an appropriate ### subsection within "Core Pathologies" or add a dedicated ## section. NEVER silently drop content because it doesn't match a predefined section.
 
@@ -339,12 +392,95 @@ function parseMissingFacts(verifyResult: string): { hasMissing: boolean; missing
   return { hasMissing: missingCount > 0, missingText, missingCount };
 }
 
+// ── Pass 2 restructure prompt: polish pass for natural integration ───────────
+
+function buildPass2RestructurePrompt(studyGuide: string, language: string): string {
+  const inputWordCount = studyGuide.split(/\s+/).length;
+
+  const langInstruction = language === "fr"
+    ? `
+═══════════════════════════════════════════════════════
+LANGUAGE: FRENCH (CRITICAL)
+═══════════════════════════════════════════════════════
+The study guide is in FRENCH. Keep it ENTIRELY in French.
+- Keep standard medical/radiological terminology in BOTH languages where helpful
+- Callout labels stay as-is: PEARL, TRAP/PITFALL, HIGH YIELD, MNEMONIC
+`
+    : "";
+
+  return `You are the combined voice of:
+1. A SENIOR RADIOLOGIST PROFESSOR with 30+ years of FMH2 exam question-writing experience
+2. A HARVARD MEMORY SCIENCE INSTRUCTOR who specializes in medical education retention
+${langInstruction}
+═══════════════════════════════════════════════════════
+TASK: POLISH PASS (Pass 2 of 2)
+═══════════════════════════════════════════════════════
+
+This study guide has ALREADY been restructured and had missing facts patched back in. However, the patched facts may feel "bolted on" rather than naturally integrated. Your job is to do a POLISH PASS:
+
+1. **INTEGRATE** patched facts naturally into the flow — move them to the right location, merge them into existing Q/As where appropriate
+2. **SMOOTH** transitions between sections — ensure logical flow within each section
+3. **FIX** any formatting inconsistencies (broken tables, mismatched callout styles, orphaned content)
+4. **DEDUPLICATE** — if the same fact now appears twice (once from original restructure, once from patching), merge into one comprehensive entry
+5. **VERIFY** the section order matches the required skeleton below
+
+**ABSOLUTE RULES:**
+- ❌ NEVER remove ANY fact, Q/A, table, callout, link, or numeric value
+- ❌ NEVER change the medical content of any fact
+- ✅ DO move content to better locations within the guide
+- ✅ DO merge duplicate entries into single comprehensive ones
+- ✅ DO fix formatting and improve flow
+- ✅ DO keep PEARLs and PITFALLs concise (1-2 sentences max)
+
+**OUTPUT LENGTH:** The output should be ~${inputWordCount.toLocaleString()} words (same as input, ±10%). This is a polish, not a condensation or expansion.
+
+═══════════════════════════════════════════════════════
+REQUIRED SECTION ORDER
+═══════════════════════════════════════════════════════
+
+## 🎯 Overview & Exam Strategy
+---
+## 🔬 Anatomy & Normal Findings
+---
+## 📚 Core Pathologies — Systematic Deep Dive
+---
+## 🔧 Imaging Protocols & Technique (if applicable)
+---
+## 📊 Differential Diagnosis Master Tables
+---
+## ⚖️ "How to Tell Them Apart" — Comparison Section
+---
+## 🧠 Mnemonics — All in One Place
+---
+## ⚡ High-Yield Rapid-Fire + Active Recall Self-Test
+---
+## 📋 Pre-Exam Rapid Review Checklist
+---
+## EXAM-DAY CHEAT SHEET (in code block)
+
+═══════════════════════════════════════════════════════
+STUDY GUIDE TO POLISH (~${inputWordCount.toLocaleString()} words)
+═══════════════════════════════════════════════════════
+
+${studyGuide}
+
+═══════════════════════════════════════════════════════
+Polish the guide above. Output ONLY the polished guide — no preamble, no code fences. Raw markdown only.`;
+}
+
 /**
- * Restructure a study guide using a 4-step extraction-first pipeline:
- *   1. Extract all discrete facts into a flat checklist
+ * Restructure a study guide using a two-pass extraction-first pipeline:
+ *
+ * PASS 1:
+ *   1. Extract all discrete facts into a categorized checklist
  *   2. Restructure the study guide into the target format
  *   3. Verify completeness: compare fact checklist against restructured output
  *   4. Patch any missing facts back into the restructured guide
+ *
+ * PASS 2:
+ *   5. Polish restructure: integrate patched facts naturally, fix flow
+ *   6. Verify completeness again against same fact list
+ *   7. Patch any remaining missing facts (if any)
  *
  * Steps 1 & 2 run in parallel for speed.
  * Creates a NEW chapter with the final result so the user can compare.
@@ -410,25 +546,28 @@ export async function POST(
         const studyGuide = chapter.studyGuide!;
         const inputWords = studyGuide.split(/\s+/).length;
 
-        // ══════════════════════════════════════════════════════
-        // STEPS 1 & 2 (parallel): Extract facts + Restructure
-        // ══════════════════════════════════════════════════════
-        send({
-          status: "extracting",
-          message: "Steps 1-2/4: Extracting facts & restructuring in parallel...",
-        });
-
-        const extractTokens = Math.min(64000, Math.max(8000, Math.round(inputWords * 0.75)));
-        const restructureTokens = Math.min(128000, Math.max(16000, Math.round(inputWords * 0.85 * 0.75)));
-
         // Large study guides can take 6-10 min per call to stream fully.
         // Default 5 min overall timeout is too short — increase to 11 min.
         // The 750s guard timeout protects against exceeding Vercel's maxDuration.
         const heavyCallOverallTimeout = 660_000; // 11 min per API call
         const heavyCallMaxRetries = 1; // limit retries to conserve time budget
 
+        // Words-to-tokens ratio for medical text with markdown formatting ≈ 1.3 tokens/word
+        const extractTokens = Math.min(64000, Math.max(8000, Math.round(inputWords * 1.3)));
+        const restructureTokens = Math.min(128000, Math.max(16000, Math.round(inputWords * 0.85 * 1.3)));
+        const verifyTokens = (factCount: number) => Math.min(32000, Math.max(4000, Math.round(factCount * 30)));
+        const patchTokens = Math.min(128000, Math.max(16000, Math.round(inputWords * 0.95 * 1.3)));
+
+        // ══════════════════════════════════════════════════════
+        // PASS 1 — Steps 1 & 2 (parallel): Extract facts + Restructure
+        // ══════════════════════════════════════════════════════
+        send({
+          status: "extracting",
+          message: "Pass 1 — Steps 1-2/7: Extracting facts & restructuring in parallel...",
+        });
+
         const [factList, restructuredGuide] = await Promise.all([
-          // Step 1: Extract facts
+          // Step 1: Extract facts (categorized)
           callClaudeStreamWithRetry(
             client,
             {
@@ -437,10 +576,10 @@ export async function POST(
               messages: [{ role: "user", content: buildExtractFactsPrompt(studyGuide, language) }],
             },
             (charCount) => {
-              const lines = Math.round(charCount / 40); // rough estimate: ~40 chars per fact line
+              const lines = Math.round(charCount / 40);
               send({
                 status: "extracting",
-                message: `Step 1/4: Extracting facts... (~${lines} facts so far)`,
+                message: `Pass 1 — Step 1/7: Extracting facts... (~${lines} facts so far)`,
               });
             },
             heavyCallMaxRetries,
@@ -459,7 +598,7 @@ export async function POST(
               const words = Math.round(charCount / 5);
               send({
                 status: "restructuring",
-                message: `Step 2/4: Restructuring... (~${words.toLocaleString()} words generated)`,
+                message: `Pass 1 — Step 2/7: Restructuring... (~${words.toLocaleString()} words generated)`,
               });
             },
             heavyCallMaxRetries,
@@ -471,65 +610,57 @@ export async function POST(
         const factCount = countFactLines(factList);
         send({
           status: "restructuring",
-          message: `Steps 1-2/4 complete: ${factCount} facts extracted, guide restructured.`,
+          message: `Pass 1 — Steps 1-2 complete: ${factCount} facts extracted, guide restructured.`,
         });
 
         // ══════════════════════════════════════════════════════
-        // STEP 3: Verify completeness
+        // PASS 1 — Step 3: Verify completeness
         // ══════════════════════════════════════════════════════
         send({
           status: "verifying",
-          message: `Step 3/4: Verifying all ${factCount} facts are present in restructured guide...`,
+          message: `Pass 1 — Step 3/7: Verifying all ${factCount} facts are present...`,
         });
 
-        const verifyTokens = Math.min(32000, Math.max(4000, Math.round(factCount * 30)));
-        const verifyResult = await callClaudeStreamWithRetry(
+        const verifyResult1 = await callClaudeStreamWithRetry(
           client,
           {
-            model: CLAUDE_MODEL_FAST,
-            max_tokens: verifyTokens,
+            model: CLAUDE_MODEL,
+            max_tokens: verifyTokens(factCount),
             messages: [{ role: "user", content: buildVerifyPrompt(factList, restructuredGuide, language) }],
           },
           undefined,
-          1, // fewer retries for verification to save time
+          1,
         );
 
-        const { hasMissing, missingText, missingCount } = parseMissingFacts(verifyResult);
+        const pass1Verify = parseMissingFacts(verifyResult1);
+        let pass1Result = restructuredGuide;
 
-        let finalGuide = restructuredGuide;
-
-        if (!hasMissing) {
+        if (!pass1Verify.hasMissing) {
           send({
             status: "verifying",
-            message: `Step 3/4 complete: All ${factCount} facts preserved! No patching needed.`,
+            message: `Pass 1 — Step 3 complete: All ${factCount} facts preserved! No patching needed.`,
           });
         } else {
           send({
-            status: "verifying",
-            message: `Step 3/4 complete: ${missingCount} missing fact(s) detected. Patching...`,
-          });
-
-          // ══════════════════════════════════════════════════════
-          // STEP 4: Patch missing facts
-          // ══════════════════════════════════════════════════════
-          send({
             status: "patching",
-            message: `Step 4/4: Inserting ${missingCount} missing fact(s) into the restructured guide...`,
+            message: `Pass 1 — Step 4/7: Patching ${pass1Verify.missingCount} missing fact(s)...`,
           });
 
-          const patchTokens = Math.min(128000, Math.max(16000, Math.round(inputWords * 0.90 * 0.75)));
-          finalGuide = await callClaudeStreamWithRetry(
+          // ══════════════════════════════════════════════════════
+          // PASS 1 — Step 4: Patch missing facts
+          // ══════════════════════════════════════════════════════
+          pass1Result = await callClaudeStreamWithRetry(
             client,
             {
               model: CLAUDE_MODEL,
               max_tokens: patchTokens,
-              messages: [{ role: "user", content: buildPatchPrompt(restructuredGuide, missingText, language) }],
+              messages: [{ role: "user", content: buildPatchPrompt(restructuredGuide, pass1Verify.missingText, language) }],
             },
             (charCount) => {
               const words = Math.round(charCount / 5);
               send({
                 status: "patching",
-                message: `Step 4/4: Patching... (~${words.toLocaleString()} words generated)`,
+                message: `Pass 1 — Step 4/7: Patching... (~${words.toLocaleString()} words generated)`,
               });
             },
             heavyCallMaxRetries,
@@ -539,7 +670,103 @@ export async function POST(
 
           send({
             status: "patching",
-            message: `Step 4/4 complete: ${missingCount} missing fact(s) inserted.`,
+            message: `Pass 1 complete: ${pass1Verify.missingCount} missing fact(s) recovered.`,
+          });
+        }
+
+        // ══════════════════════════════════════════════════════
+        // PASS 2 — Step 5: Polish restructure (integrate patched facts)
+        // ══════════════════════════════════════════════════════
+        send({
+          status: "restructuring",
+          message: "Pass 2 — Step 5/7: Polish pass — integrating and smoothing flow...",
+        });
+
+        const pass2Words = pass1Result.split(/\s+/).length;
+        const pass2RestructureTokens = Math.min(128000, Math.max(16000, Math.round(pass2Words * 1.1 * 1.3)));
+
+        const pass2Restructured = await callClaudeStreamWithRetry(
+          client,
+          {
+            model: CLAUDE_MODEL,
+            max_tokens: pass2RestructureTokens,
+            messages: [{ role: "user", content: buildPass2RestructurePrompt(pass1Result, language) }],
+          },
+          (charCount) => {
+            const words = Math.round(charCount / 5);
+            send({
+              status: "restructuring",
+              message: `Pass 2 — Step 5/7: Polishing... (~${words.toLocaleString()} words generated)`,
+            });
+          },
+          heavyCallMaxRetries,
+          90_000,
+          heavyCallOverallTimeout,
+        );
+
+        send({
+          status: "restructuring",
+          message: "Pass 2 — Step 5 complete: Guide polished.",
+        });
+
+        // ══════════════════════════════════════════════════════
+        // PASS 2 — Step 6: Verify completeness again
+        // ══════════════════════════════════════════════════════
+        send({
+          status: "verifying",
+          message: `Pass 2 — Step 6/7: Final verification of all ${factCount} facts...`,
+        });
+
+        const verifyResult2 = await callClaudeStreamWithRetry(
+          client,
+          {
+            model: CLAUDE_MODEL,
+            max_tokens: verifyTokens(factCount),
+            messages: [{ role: "user", content: buildVerifyPrompt(factList, pass2Restructured, language) }],
+          },
+          undefined,
+          1,
+        );
+
+        const pass2Verify = parseMissingFacts(verifyResult2);
+        let finalGuide = pass2Restructured;
+
+        if (!pass2Verify.hasMissing) {
+          send({
+            status: "verifying",
+            message: `Pass 2 — Step 6 complete: All ${factCount} facts preserved! No patching needed.`,
+          });
+        } else {
+          // ══════════════════════════════════════════════════════
+          // PASS 2 — Step 7: Final patch (if any facts still missing)
+          // ══════════════════════════════════════════════════════
+          send({
+            status: "patching",
+            message: `Pass 2 — Step 7/7: Final patch — ${pass2Verify.missingCount} remaining fact(s)...`,
+          });
+
+          finalGuide = await callClaudeStreamWithRetry(
+            client,
+            {
+              model: CLAUDE_MODEL,
+              max_tokens: patchTokens,
+              messages: [{ role: "user", content: buildPatchPrompt(pass2Restructured, pass2Verify.missingText, language) }],
+            },
+            (charCount) => {
+              const words = Math.round(charCount / 5);
+              send({
+                status: "patching",
+                message: `Pass 2 — Step 7/7: Final patching... (~${words.toLocaleString()} words generated)`,
+              });
+            },
+            heavyCallMaxRetries,
+            90_000,
+            heavyCallOverallTimeout,
+          );
+
+          send({
+            status: "patching",
+            message: `Pass 2 complete: ${pass2Verify.missingCount} remaining fact(s) recovered.`,
           });
         }
 
@@ -566,7 +793,10 @@ export async function POST(
           },
         });
 
-        const patchNote = hasMissing ? ` (${missingCount} missing facts recovered)` : " (zero-loss)";
+        const totalMissing = (pass1Verify.missingCount || 0) + (pass2Verify.missingCount || 0);
+        const patchNote = totalMissing > 0
+          ? ` (${totalMissing} missing facts recovered across 2 passes)`
+          : " (zero-loss, 2-pass verified)";
         send({
           success: true,
           newChapterId: newChapter.id,
@@ -577,7 +807,6 @@ export async function POST(
         console.error("Restructure error:", err);
         if (!guardFired) {
           const raw = err instanceof Error ? err.message : "Restructure failed";
-          // Make Claude stream timeout errors user-friendly
           const isTimeout = raw.includes("timed out") || raw.includes("stalled");
           const msg = isTimeout
             ? "Restructure timed out — the study guide may be too large. Try splitting it into smaller chapters or try again."

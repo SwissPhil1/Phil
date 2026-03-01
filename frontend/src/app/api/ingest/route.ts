@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { CLAUDE_MODEL } from "@/lib/claude";
 import Anthropic from "@anthropic-ai/sdk";
 import { NextResponse } from "next/server";
 import { PDFDocument } from "pdf-lib";
@@ -472,6 +473,9 @@ export async function POST(request: Request) {
         }
         await prisma.question.deleteMany({ where: { chapterId: { in: chapterIds } } });
         await prisma.flashcard.deleteMany({ where: { chapterId: { in: chapterIds } } });
+        // Delete chapter notes and study sessions linked to these chapters
+        await prisma.chapterNote.deleteMany({ where: { chapterId: { in: chapterIds } } });
+        await prisma.studySession.deleteMany({ where: { chapterId: { in: chapterIds } } });
       }
 
       const deletedChapters = await prisma.chapter.deleteMany({ where: { bookSource: bs } });
@@ -525,7 +529,7 @@ async function handleTestKey() {
   try {
     const client = getClient();
     const response = await client.messages.create({
-      model: "claude-sonnet-4-20250514",
+      model: CLAUDE_MODEL,
       max_tokens: 20,
       messages: [{ role: "user", content: "Reply with just the word: OK" }],
     });
@@ -596,7 +600,7 @@ CRITICAL — Page numbering rules:
   const response = fileId
     ? await callClaudeWithRetry(() =>
         client.beta.messages.create({
-          model: "claude-sonnet-4-20250514",
+          model: CLAUDE_MODEL,
           max_tokens: 4000,
           betas: ["files-api-2025-04-14"],
           messages: [{
@@ -610,7 +614,7 @@ CRITICAL — Page numbering rules:
       )
     : await callClaudeWithRetry(() =>
         client.messages.create({
-          model: "claude-sonnet-4-20250514",
+          model: CLAUDE_MODEL,
           max_tokens: 4000,
           messages: [{
             role: "user",
@@ -804,7 +808,7 @@ Requirements:
         const response = fileId
           ? await callClaudeWithRetry(() =>
               client.beta.messages.create({
-                model: "claude-sonnet-4-20250514",
+                model: CLAUDE_MODEL,
                 max_tokens: 8000,
                 betas: ["files-api-2025-04-14"],
                 messages: [{
@@ -818,7 +822,7 @@ Requirements:
             )
           : await callClaudeWithRetry(() =>
               client.messages.create({
-                model: "claude-sonnet-4-20250514",
+                model: CLAUDE_MODEL,
                 max_tokens: 8000,
                 messages: [{
                   role: "user",
@@ -927,7 +931,7 @@ Important:
 
   const response = await callClaudeWithRetry(() =>
     client.messages.create({
-      model: "claude-sonnet-4-20250514",
+      model: CLAUDE_MODEL,
       max_tokens: 8000,
       messages: [{ role: "user", content: prompt }],
     })
@@ -1275,7 +1279,7 @@ ${mn.length > 0 ? mn.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(no
           // No PDF available — use complete processed data from every page
           studyGuide = await callClaudeStreamingWithRetry(() =>
             client.messages.create({
-              model: "claude-sonnet-4-20250514",
+              model: CLAUDE_MODEL,
               max_tokens: 32000,
               stream: true,
               messages: [{
@@ -1320,7 +1324,7 @@ ${mn.length > 0 ? mn.map((m) => `**${m.name}:** ${m.content}`).join("\n") : "(no
           try {
             let studyGuide = await callClaudeStreamingWithRetry(() =>
               client.messages.create({
-                model: "claude-sonnet-4-20250514",
+                model: CLAUDE_MODEL,
                 max_tokens: 32000,
                 stream: true,
                 messages: [{
@@ -1588,7 +1592,7 @@ async function continueStudyGuideIfTruncated(
     // Text-only continuation — no PDFs needed, just assistant prefill
     const continuation = await callClaudeStreamingWithRetry(() =>
       client.messages.create({
-        model: "claude-sonnet-4-20250514",
+        model: CLAUDE_MODEL,
         max_tokens: 32000,
         stream: true,
         messages: [
@@ -1634,7 +1638,7 @@ async function generateStudyGuideFromParts(
   if (fileIds.length === 1) {
     let guide = await callClaudeStreamingWithRetry(() =>
       client.beta.messages.create({
-        model: "claude-sonnet-4-20250514",
+        model: CLAUDE_MODEL,
         max_tokens: 32000,
         stream: true,
         betas: ["files-api-2025-04-14"],
@@ -1679,7 +1683,7 @@ async function generateStudyGuideFromParts(
 
     const extract = await callClaudeStreamingWithRetry(() =>
       client.beta.messages.create({
-        model: "claude-sonnet-4-20250514",
+        model: CLAUDE_MODEL,
         max_tokens: 16000,
         stream: true,
         betas: ["files-api-2025-04-14"],
@@ -1730,7 +1734,7 @@ Format as structured markdown with clear headings per organ/topic. Do not skip a
 
   let guide = await callClaudeStreamingWithRetry(() =>
     client.messages.create({
-      model: "claude-sonnet-4-20250514",
+      model: CLAUDE_MODEL,
       max_tokens: 32000,
       stream: true,
       messages: [{
@@ -1944,7 +1948,7 @@ Requirements:
           try {
             const response = await callClaudeWithRetry(() =>
               client.beta.messages.create({
-                model: "claude-sonnet-4-20250514",
+                model: CLAUDE_MODEL,
                 max_tokens: 16000,
                 betas: ["files-api-2025-04-14"],
                 messages: [{ role: "user", content: contentParts }],
@@ -2060,7 +2064,7 @@ Requirements:
 
           studyGuide = await callClaudeStreamingWithRetry(() =>
             client.messages.create({
-              model: "claude-sonnet-4-20250514",
+              model: CLAUDE_MODEL,
               max_tokens: 32000,
               stream: true,
               messages: [{

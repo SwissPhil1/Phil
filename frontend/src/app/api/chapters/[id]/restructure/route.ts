@@ -1,51 +1,13 @@
 import { prisma } from "@/lib/prisma";
-import Anthropic from "@anthropic-ai/sdk";
 import { NextResponse } from "next/server";
+import {
+  CLAUDE_MODEL,
+  getClaudeClient,
+  callClaudeStreamWithRetry,
+} from "@/lib/claude";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
-
-function getClient(): Anthropic {
-  return new Anthropic();
-}
-
-/**
- * Stream a Claude response with retry logic.
- */
-async function callClaudeStreamWithRetry(
-  client: Anthropic,
-  params: { model: string; max_tokens: number; messages: Anthropic.Messages.MessageParam[] },
-  onProgress?: (charCount: number) => void,
-  maxRetries = 3,
-): Promise<string> {
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      const stream = client.messages.stream(params);
-      let text = "";
-      let lastReport = 0;
-
-      stream.on("text", (chunk) => {
-        text += chunk;
-        if (onProgress && text.length - lastReport > 500) {
-          lastReport = text.length;
-          onProgress(text.length);
-        }
-      });
-
-      await stream.finalMessage();
-      if (onProgress) onProgress(text.length);
-      return text;
-    } catch (err: unknown) {
-      const apiErr = err as { status?: number; message?: string };
-      const isRetryable = apiErr.status === 429 || apiErr.status === 529 || (apiErr.status && apiErr.status >= 500);
-      if (!isRetryable || attempt === maxRetries) throw err;
-      const delay = apiErr.status === 429 ? 60000 : Math.pow(2, attempt) * 5000;
-      console.warn(`Claude stream error, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})...`);
-      await new Promise((r) => setTimeout(r, delay));
-    }
-  }
-  throw new Error("unreachable");
-}
 
 function buildRestructurePrompt(studyGuide: string, language: string): string {
   // Compute input metrics to enforce output completeness
@@ -259,7 +221,7 @@ export async function POST(
       try {
         send({ status: "restructuring", message: "Claude is analyzing and restructuring the study guide..." });
 
-        const client = getClient();
+        const client = getClaudeClient();
 
         // Scale max_tokens based on input size — output should be condensed (~80% of input)
         // ~0.75 tokens per word for French text, with some headroom
@@ -270,7 +232,7 @@ export async function POST(
         const restructuredGuide = await callClaudeStreamWithRetry(
           client,
           {
-            model: "claude-sonnet-4-20250514",
+            model: CLAUDE_MODEL,
             max_tokens: dynamicMaxTokens,
             messages: [{ role: "user", content: buildRestructurePrompt(chapter.studyGuide!, language) }],
           },

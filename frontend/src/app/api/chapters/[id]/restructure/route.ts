@@ -421,6 +421,12 @@ export async function POST(
         const extractTokens = Math.min(64000, Math.max(8000, Math.round(inputWords * 0.75)));
         const restructureTokens = Math.min(128000, Math.max(16000, Math.round(inputWords * 0.85 * 0.75)));
 
+        // Large study guides can take 6-10 min per call to stream fully.
+        // Default 5 min overall timeout is too short — increase to 11 min.
+        // The 750s guard timeout protects against exceeding Vercel's maxDuration.
+        const heavyCallOverallTimeout = 660_000; // 11 min per API call
+        const heavyCallMaxRetries = 1; // limit retries to conserve time budget
+
         const [factList, restructuredGuide] = await Promise.all([
           // Step 1: Extract facts
           callClaudeStreamWithRetry(
@@ -437,6 +443,9 @@ export async function POST(
                 message: `Step 1/4: Extracting facts... (~${lines} facts so far)`,
               });
             },
+            heavyCallMaxRetries,
+            90_000,
+            heavyCallOverallTimeout,
           ),
           // Step 2: Restructure
           callClaudeStreamWithRetry(
@@ -453,6 +462,9 @@ export async function POST(
                 message: `Step 2/4: Restructuring... (~${words.toLocaleString()} words generated)`,
               });
             },
+            heavyCallMaxRetries,
+            90_000,
+            heavyCallOverallTimeout,
           ),
         ]);
 
@@ -520,6 +532,9 @@ export async function POST(
                 message: `Step 4/4: Patching... (~${words.toLocaleString()} words generated)`,
               });
             },
+            heavyCallMaxRetries,
+            90_000,
+            heavyCallOverallTimeout,
           );
 
           send({
@@ -561,7 +576,12 @@ export async function POST(
       } catch (err) {
         console.error("Restructure error:", err);
         if (!guardFired) {
-          const msg = err instanceof Error ? err.message : "Restructure failed";
+          const raw = err instanceof Error ? err.message : "Restructure failed";
+          // Make Claude stream timeout errors user-friendly
+          const isTimeout = raw.includes("timed out") || raw.includes("stalled");
+          const msg = isTimeout
+            ? "Restructure timed out — the study guide may be too large. Try splitting it into smaller chapters or try again."
+            : raw;
           send({ error: msg });
         }
       } finally {

@@ -9,38 +9,6 @@ function getClient(): Anthropic {
   return new Anthropic();
 }
 
-/** Race a promise against a timeout. */
-function withTimeout<T>(promise: Promise<T>, ms: number, label = "operation"): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms);
-    promise.then(
-      (v) => { clearTimeout(timer); resolve(v); },
-      (e) => { clearTimeout(timer); reject(e); },
-    );
-  });
-}
-
-async function callClaudeWithRetry<T>(
-  fn: () => Promise<T>,
-  maxRetries = 3,
-  timeoutMs = 180_000
-): Promise<T> {
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      return await withTimeout(fn(), timeoutMs, "Claude API call");
-    } catch (err: unknown) {
-      const apiErr = err as { status?: number; message?: string };
-      const isTimeout = apiErr.message?.includes("timed out");
-      const isRetryable = isTimeout || apiErr.status === 429 || apiErr.status === 529 || (apiErr.status && apiErr.status >= 500);
-      if (!isRetryable || attempt === maxRetries) throw err;
-      const delay = apiErr.status === 429 ? 60000 : Math.pow(2, attempt) * 5000;
-      console.warn(`Claude API error, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})...`);
-      await new Promise((r) => setTimeout(r, delay));
-    }
-  }
-  throw new Error("unreachable");
-}
-
 /**
  * Stream a Claude response with retry logic.
  * Uses the streaming API so data flows continuously, preventing Vercel/browser timeouts.
@@ -165,33 +133,6 @@ ${originalText}
 Transform the above into the ultimate Q/A retention guide. Preserve EVERY fact. Do NOT wrap output in code fences — return raw markdown only.`;
 }
 
-/**
- * Build prompt to extract flashcards from the study guide.
- */
-function buildFlashcardPrompt(studyGuide: string, language: string): string {
-  const guideWords = studyGuide.split(/\s+/).length;
-  const minFlashcards = guideWords > 8000 ? 150 : guideWords > 4000 ? 100 : 50;
-
-  const langNote = language === "fr"
-    ? "IMPORTANT: The study guide is in French. Write ALL flashcard front/back text in FRENCH. Keep medical terms in both languages where helpful (e.g., \"Bec d'oiseau / Bird's beak\").\n\n"
-    : "";
-
-  return `${langNote}Extract ALL Q/A pairs from this study guide and return them as a JSON array of flashcards.
-
-Each flashcard should have:
-- "front": The question (concise, exam-style)
-- "back": The answer (concise but complete)
-- "category": One of "anatomy", "pathology", "imaging", "differential", "mnemonic", "clinical"
-
-Extract EVERY Q/A pair from the guide. Also extract key facts from tables, rapid-fire sections, and high-yield boxes as additional flashcards. Aim for ${minFlashcards}+ flashcards — this is a large study guide so do NOT skip any facts.
-
-Return ONLY a valid JSON array, no other text. Example:
-[{"front":"What is the classic sign of achalasia?","back":"Bird's beak — smooth distal tapering of the esophagus","category":"pathology"}]
-
-STUDY GUIDE:
-${studyGuide}`;
-}
-
 export async function POST(request: Request) {
   try {
     const body = await request.json();
@@ -291,61 +232,13 @@ async function handleTransform(body: { organ: string; title: string; text: strin
           },
         });
 
-        // Step 4: Generate flashcards via Claude
-        send({ status: "flashcards", message: "Generating flashcards from study guide..." });
-
-        let flashcardsCreated = 0;
-        try {
-          // Scale flashcard tokens based on study guide size
-          const guideWords = studyGuide.split(/\s+/).length;
-          const fcMaxTokens = guideWords > 8000 ? 32000 : 16000;
-
-          const flashcardJson = await callClaudeStreamWithRetry(
-            client,
-            {
-              model: "claude-sonnet-4-20250514",
-              max_tokens: fcMaxTokens,
-              messages: [{ role: "user", content: buildFlashcardPrompt(studyGuide, language) }],
-            },
-            (charCount) => {
-              send({ status: "flashcards", message: `Extracting flashcards... (${Math.round(charCount / 1000)}KB generated)` });
-            },
-          );
-
-          // Parse flashcards — handle potential markdown wrapping or extra text
-          let cleaned = flashcardJson.trim();
-          if (cleaned.startsWith("```")) {
-            cleaned = cleaned.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
-          }
-          // Extract JSON array even if Claude wrapped it in extra text
-          const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
-          if (arrayMatch) {
-            cleaned = arrayMatch[0];
-          }
-
-          const flashcards: { front: string; back: string; category: string }[] = JSON.parse(cleaned);
-
-          if (Array.isArray(flashcards) && flashcards.length > 0) {
-            await prisma.flashcard.createMany({
-              data: flashcards.map((fc) => ({
-                chapterId: chapter.id,
-                front: fc.front,
-                back: fc.back,
-                category: fc.category || "pathology",
-              })),
-            });
-            flashcardsCreated = flashcards.length;
-          }
-        } catch (fcErr) {
-          console.warn("Flashcard generation failed (non-fatal):", fcErr);
-          send({ status: "warning", message: "Flashcard generation had issues, but study guide was saved." });
-        }
-
+        // Flashcards are now generated in a separate request via /api/generate-flashcards
+        // This prevents the combined pipeline from exceeding Vercel's timeout
         send({
           success: true,
           chapterId: chapter.id,
-          flashcardsCreated,
-          message: `Created study guide with ${flashcardsCreated} flashcards`,
+          flashcardsCreated: 0,
+          message: "Study guide saved. Flashcards will be generated next.",
         });
       } catch (err) {
         console.error("Transform error:", err);

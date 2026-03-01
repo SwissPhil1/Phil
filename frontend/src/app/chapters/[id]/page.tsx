@@ -385,6 +385,10 @@ export default function ChapterDetailPage() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const pendingScrollY = useRef<number | null>(null);
 
+  // Flashcard generation state (for chapters with study guide but no flashcards)
+  const [generatingFlashcards, setGeneratingFlashcards] = useState(false);
+  const [flashcardGenMessage, setFlashcardGenMessage] = useState("");
+
   // Append section state
   const [showAppendPanel, setShowAppendPanel] = useState(false);
   const [appendContent, setAppendContent] = useState("");
@@ -480,6 +484,61 @@ export default function ChapterDetailPage() {
       }
     } catch (err) {
       setGenerateStatus({ phase: "error", message: err instanceof Error ? err.message : "Generation failed" });
+    }
+  }, [chapter]);
+
+  // Generate flashcards for chapters that have a study guide but no flashcards
+  const generateFlashcardsOnly = useCallback(async () => {
+    if (!chapter) return;
+    setGeneratingFlashcards(true);
+    setFlashcardGenMessage("Generating flashcards from study guide...");
+
+    try {
+      const res = await fetch("/api/generate-flashcards", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chapterId: chapter.id, language: "fr" }),
+      });
+
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("No response stream");
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() || "";
+        for (const part of parts) {
+          const dataLine = part.split("\n").find((l) => l.startsWith("data: "));
+          if (!dataLine) continue;
+          try {
+            const data = JSON.parse(dataLine.slice(6));
+            if (data.error) {
+              setFlashcardGenMessage(`Failed: ${data.error}`);
+              setGeneratingFlashcards(false);
+              return;
+            }
+            if (data.success) {
+              setFlashcardGenMessage(`Created ${data.flashcardsCreated} flashcards!`);
+              // Refresh chapter data
+              const refreshed = await (await fetch(`/api/chapters/${chapter.id}`)).json();
+              setChapter(refreshed);
+              setGeneratingFlashcards(false);
+              return;
+            }
+            if (data.message) {
+              setFlashcardGenMessage(data.message);
+            }
+          } catch { /* partial JSON */ }
+        }
+      }
+      setGeneratingFlashcards(false);
+    } catch (err) {
+      setFlashcardGenMessage(err instanceof Error ? err.message : "Failed");
+      setGeneratingFlashcards(false);
     }
   }, [chapter]);
 
@@ -858,6 +917,17 @@ export default function ChapterDetailPage() {
       <div className="flex gap-3 flex-wrap">
         <Link href={`/quiz?chapterId=${chapter.id}`}><Button size="sm" className="gap-2"><Brain className="h-4 w-4" />Quiz ({chapter.questions.length})</Button></Link>
         <Link href={`/flashcards?chapterId=${chapter.id}`}><Button size="sm" variant="outline" className="gap-2"><Layers className="h-4 w-4" />Flashcards ({chapter.flashcards.length})</Button></Link>
+        {chapter.studyGuide && chapter.flashcards.length === 0 && !generatingFlashcards && (
+          <Button size="sm" variant="outline" className="gap-2 border-amber-300 text-amber-700 hover:bg-amber-50" onClick={generateFlashcardsOnly}>
+            <Sparkles className="h-4 w-4" />Generate Flashcards
+          </Button>
+        )}
+        {generatingFlashcards && (
+          <span className="text-xs text-muted-foreground flex items-center gap-1.5">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            {flashcardGenMessage}
+          </span>
+        )}
         {hasPdfChunks && (
           <Button size="sm" variant="ghost" className="gap-2 text-muted-foreground" onClick={generateContent}><RefreshCw className="h-4 w-4" />Regenerate All</Button>
         )}

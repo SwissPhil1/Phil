@@ -47,7 +47,7 @@ type TransformStatus =
   | { phase: "saving"; message: string }
   | { phase: "flashcards"; message: string }
   | { phase: "done"; chapterId: number; flashcardsCreated: number }
-  | { phase: "error"; message: string };
+  | { phase: "error"; message: string; chapterId?: number };
 
 export default function ImportNotesPage() {
   const [organ, setOrgan] = useState("");
@@ -76,12 +76,80 @@ export default function ImportNotesPage() {
   const canSubmit = effectiveOrgan && title && text.length > 100 && !status;
   const isProcessing = status && status.phase !== "done" && status.phase !== "error";
 
+  /** Read an SSE stream and dispatch events via a callback. Returns the last data event. */
+  const readSSEStream = useCallback(async (
+    response: Response,
+    onEvent: (data: Record<string, unknown>) => void,
+  ): Promise<Record<string, unknown> | null> => {
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("No response stream");
+
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let lastData: Record<string, unknown> | null = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop() || "";
+
+      for (const part of parts) {
+        const dataLine = part.split("\n").find((l) => l.startsWith("data: "));
+        if (!dataLine) continue;
+        try {
+          const data = JSON.parse(dataLine.slice(6));
+          lastData = data;
+          onEvent(data);
+        } catch { /* partial JSON */ }
+      }
+    }
+    return lastData;
+  }, []);
+
+  /** Phase 2: generate flashcards for a saved chapter (separate request). */
+  const generateFlashcards = useCallback(async (chapterId: number): Promise<number> => {
+    setStatus({ phase: "flashcards", message: "Generating flashcards from study guide..." });
+
+    const res = await fetch("/api/generate-flashcards", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chapterId, language }),
+    });
+
+    let flashcardsCreated = 0;
+    let hadError = false;
+
+    await readSSEStream(res, (data) => {
+      if (data.error) {
+        hadError = true;
+        return;
+      }
+      if (data.success) {
+        flashcardsCreated = (data.flashcardsCreated as number) || 0;
+      } else if (data.status === "generating") {
+        setStatus({ phase: "flashcards", message: (data.message as string) || "Generating flashcards..." });
+      }
+    });
+
+    if (hadError) {
+      console.warn("Flashcard generation failed, but study guide was saved.");
+    }
+
+    return flashcardsCreated;
+  }, [language, readSSEStream]);
+
   const handleTransform = useCallback(async () => {
     if (!canSubmit) return;
 
     setStatus({ phase: "transforming", message: "Sending to Claude..." });
 
+    let savedChapterId: number | null = null;
+
     try {
+      // Phase 1: Transform notes into study guide and save
       const res = await fetch("/api/import-notes", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -94,64 +162,52 @@ export default function ImportNotesPage() {
         }),
       });
 
-      const reader = res.body?.getReader();
-      if (!reader) throw new Error("No response stream");
-
-      const decoder = new TextDecoder();
-      let buffer = "";
-
       let streamCompleted = false;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        const parts = buffer.split("\n\n");
-        buffer = parts.pop() || "";
-
-        for (const part of parts) {
-          const dataLine = part.split("\n").find((l) => l.startsWith("data: "));
-          if (!dataLine) continue;
-
-          try {
-            const data = JSON.parse(dataLine.slice(6));
-
-            if (data.error) {
-              setStatus({ phase: "error", message: data.error });
-              return;
-            }
-
-            if (data.success) {
-              streamCompleted = true;
-              setStatus({
-                phase: "done",
-                chapterId: data.chapterId,
-                flashcardsCreated: data.flashcardsCreated || 0,
-              });
-            } else if (data.status === "transforming") {
-              setStatus({ phase: "transforming", message: data.message || "Transforming..." });
-            } else if (data.status === "saving") {
-              setStatus({ phase: "saving", message: data.message || "Saving..." });
-            } else if (data.status === "flashcards" || data.status === "warning") {
-              setStatus({ phase: "flashcards", message: data.message || "Generating flashcards..." });
-            }
-          } catch { /* partial JSON */ }
+      await readSSEStream(res, (data) => {
+        if (data.error) {
+          setStatus({ phase: "error", message: data.error as string });
+          return;
         }
-      }
+        if (data.success) {
+          streamCompleted = true;
+          savedChapterId = data.chapterId as number;
+        } else if (data.status === "transforming") {
+          setStatus({ phase: "transforming", message: (data.message as string) || "Transforming..." });
+        } else if (data.status === "saving") {
+          setStatus({ phase: "saving", message: (data.message as string) || "Saving..." });
+        }
+      });
 
-      // If the stream ended without a success or error event (e.g. Vercel timeout),
-      // show an error so the user isn't stuck forever.
-      if (!streamCompleted) {
+      if (!streamCompleted || !savedChapterId) {
         setStatus({
           phase: "error",
           message: "Connection lost — the server may have timed out. Your study guide was likely saved. Check your chapters and try again if needed.",
         });
+        return;
       }
+
+      // Phase 2: Generate flashcards (separate request — won't lose study guide if this times out)
+      const flashcardsCreated = await generateFlashcards(savedChapterId);
+
+      setStatus({
+        phase: "done",
+        chapterId: savedChapterId,
+        flashcardsCreated,
+      });
     } catch (err) {
-      setStatus({ phase: "error", message: err instanceof Error ? err.message : "Failed" });
+      // If we already saved the study guide, show a recoverable error
+      if (savedChapterId) {
+        setStatus({
+          phase: "error",
+          chapterId: savedChapterId,
+          message: "Study guide was saved but flashcard generation failed. You can retry from the chapter page.",
+        });
+      } else {
+        setStatus({ phase: "error", message: err instanceof Error ? err.message : "Failed" });
+      }
     }
-  }, [canSubmit, effectiveOrgan, title, text, language]);
+  }, [canSubmit, effectiveOrgan, title, text, language, readSSEStream, generateFlashcards]);
 
   const handleReset = () => {
     setStatus(null);
@@ -267,12 +323,22 @@ export default function ImportNotesPage() {
             <div>
               <p className="font-medium text-red-700 dark:text-red-300">Transform failed</p>
               <p className="text-sm text-red-600 dark:text-red-400 mt-0.5">{status.message}</p>
-              <button
-                onClick={() => setStatus(null)}
-                className="text-sm text-red-600 hover:text-red-800 underline mt-2"
-              >
-                Try again
-              </button>
+              <div className="flex gap-3 mt-2">
+                <button
+                  onClick={() => setStatus(null)}
+                  className="text-sm text-red-600 hover:text-red-800 underline"
+                >
+                  Try again
+                </button>
+                {status.chapterId && (
+                  <Link
+                    href={`/chapters/${status.chapterId}`}
+                    className="text-sm text-primary hover:text-primary/80 underline"
+                  >
+                    View saved study guide
+                  </Link>
+                )}
+              </div>
             </div>
           </div>
         </div>

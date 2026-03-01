@@ -111,6 +111,8 @@ This is the MOST IMPORTANT instruction. Content loss during restructuring is UNA
 - Every entity/pathology/syndrome mentioned MUST appear in the output
 - If a topic doesn't fit neatly into the standard sections, create an appropriate subsection — do NOT silently drop it
 - Content that appears informal or hand-written (short notes, abbreviations, incomplete sentences) must be PRESERVED and can be cleaned up, but the medical facts they contain must NOT be lost
+- **Clinical reasoning frameworks** (🎯 STOP & THINK questions, decision trees, "ask yourself: is it mobile? is there Doppler?" approaches) are THINKING TOOLS, not just facts — preserve them as COMPLETE units with their full reasoning structure intact. Do NOT reduce them to simple facts
+- **Management summary sections** (consolidated surgical indications, treatment decision tables, "drainage vs surgery" comparisons, indication lists with absolute vs relative categories) must be kept as STANDALONE units — do NOT scatter their content across individual pathology subsections. If the original groups management decisions together, keep them grouped
 
 **AFTER writing, mentally verify:**
 - Every distinct pathology, syndrome, sign, or entity from the input appears in the output
@@ -156,6 +158,12 @@ TASK: RESTRUCTURE & IMPROVE
    - Ensure EVERY major pathology has a Quick-Facts table and Imaging Appearances table
    - Ensure ALL sections of the standard structure are present and properly ordered
    - If the input has a rapid-fire/drill section with N questions, the output must have AT LEAST N questions (add more if needed)
+   - **CONSOLIDATED DIFFERENTIAL TABLES (CRITICAL):** For the "📊 Differential Diagnosis Master Tables" section, you MUST generate comprehensive consolidated differential tables — even if the original does NOT have them organized this way. Scan the ENTIRE guide and extract every differential diagnosis point into organized, exam-ready tables. Differentials to consolidate include:
+     • "Causes of X" tables (e.g., causes of gallbladder wall thickening, causes of biliary strictures, causes of intrahepatic duct dilatation)
+     • Lesion comparison tables (e.g., intravesicular masses: mobility, Doppler, shadow type, size thresholds)
+     • Imaging sign comparison tables (e.g., acoustic shadow types: clean vs dirty vs comet-tail vs absent)
+     • Any recurring differential mentioned across multiple Q/As that would benefit from side-by-side consolidation
+     A student should be able to use this section ALONE to review ALL differentials for the topic. This section adds significant learning value and should be thorough
 
 4. **DO NOT** (HARD RULES):
    - ❌ NEVER drop a pathology, syndrome, sign, or entity that exists in the input
@@ -192,6 +200,7 @@ REQUIRED SECTION ORDER (restructure to match this)
 ## ⚡ High-Yield Rapid-Fire Section
 ---
 ## 📊 Differential Diagnosis Master Tables
+(MUST be comprehensive. Consolidate ALL differentials from the chapter into organized tables: "causes of X", lesion comparisons, imaging sign comparisons. Generate these even if not explicitly organized this way in the input. This section should be usable as a standalone differential review)
 ---
 ## 🧠 Mnemonics — All in One Place
 ---

@@ -735,9 +735,9 @@ export default function ChapterDetailPage() {
     setRestructuring(true);
     setRestructureMessage("Starting restructure...");
 
-    // Abort after 5 minutes to prevent infinite hangs
+    // Abort after 15 minutes to prevent infinite hangs
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5 * 60 * 1000);
+    const timeout = setTimeout(() => controller.abort(), 15 * 60 * 1000);
 
     try {
       const res = await fetch(`/api/chapters/${chapter.id}/restructure`, {
@@ -791,7 +791,7 @@ export default function ChapterDetailPage() {
       setRestructuring(false);
     } catch (err) {
       if (controller.signal.aborted) {
-        setRestructureMessage("Restructure timed out after 5 minutes. Please try again.");
+        setRestructureMessage("Restructure timed out after 15 minutes. Please try again.");
       } else {
         setRestructureMessage(err instanceof Error ? err.message : "Restructure failed");
       }

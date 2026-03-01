@@ -2,12 +2,13 @@ import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import {
   CLAUDE_MODEL,
+  CLAUDE_MODEL_FAST,
   getClaudeClient,
   callClaudeStreamWithRetry,
 } from "@/lib/claude";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 300;
+export const maxDuration = 800;
 
 // ── Step 1: Extract all discrete facts into a flat checklist ─────────────────
 
@@ -381,7 +382,7 @@ export async function POST(
       // Heartbeat to prevent timeout
       const heartbeat = setInterval(() => {
         controller.enqueue(encoder.encode(": heartbeat\n\n"));
-      }, 8000);
+      }, 5000);
 
       try {
         const client = getClaudeClient();
@@ -452,10 +453,12 @@ export async function POST(
         const verifyResult = await callClaudeStreamWithRetry(
           client,
           {
-            model: CLAUDE_MODEL,
+            model: CLAUDE_MODEL_FAST,
             max_tokens: verifyTokens,
             messages: [{ role: "user", content: buildVerifyPrompt(factList, restructuredGuide, language) }],
           },
+          undefined,
+          1, // fewer retries for verification to save time
         );
 
         const { hasMissing, missingText, missingCount } = parseMissingFacts(verifyResult);

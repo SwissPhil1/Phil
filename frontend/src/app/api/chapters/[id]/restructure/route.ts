@@ -54,7 +54,6 @@ function buildRestructurePrompt(studyGuide: string, language: string): string {
   const tableCount = (studyGuide.match(/\|.*\|.*\|/g) || []).length;
   const calloutCount = (studyGuide.match(/>\s*[💡🔴⚡🧠🎯✅⚖️]/g) || []).length;
   const linkCount = (studyGuide.match(/\[Radiopaedia/gi) || []).length;
-  const minOutputWords = Math.max(inputWordCount, Math.round(inputWordCount * 1.1));
 
   const langInstruction = language === "fr"
     ? `
@@ -102,13 +101,17 @@ This is the MOST IMPORTANT instruction. Content loss during restructuring is UNA
 - Content that appears informal or hand-written (short notes, abbreviations, incomplete sentences) must be PRESERVED and can be cleaned up, but the medical facts they contain must NOT be lost
 
 **AFTER writing, mentally verify:**
-- The output contains AT LEAST as many Q/A pairs as the input (${qaCount}+)
-- No pathology, syndrome, sign, or entity from the input is missing
+- Every distinct pathology, syndrome, sign, or entity from the input appears in the output
 - All numeric values are present
 - All callouts are present
 - All comparison tables are present with all their rows
 
-**OUTPUT LENGTH:** The input is ~${inputWordCount.toLocaleString()} words. Your output MUST be at least ${minOutputWords.toLocaleString()} words. If your output is shorter than the input, you have LOST content — go back and find what you dropped.
+**OUTPUT LENGTH & STYLE:** The input is ~${inputWordCount.toLocaleString()} words. Your output should be MORE CONDENSED and DIRECT than the input — aim for ~70-85% of the input length. Achieve this by:
+- Merging duplicate Q/A pairs into single comprehensive entries instead of keeping both
+- Making answers direct and to-the-point (no filler phrases, no restating the question)
+- Using tables and bullet points instead of verbose paragraphs
+- Removing redundant explanations while keeping ALL medical facts and data
+- Being concise does NOT mean losing content — every fact, value, and entity must still be present, just expressed more efficiently
 
 ═══════════════════════════════════════════════════════
 TASK: RESTRUCTURE & IMPROVE
@@ -143,14 +146,14 @@ TASK: RESTRUCTURE & IMPROVE
    - If the input has a rapid-fire/drill section with N questions, the output must have AT LEAST N questions (add more if needed)
 
 4. **DO NOT** (HARD RULES):
-   - ❌ NEVER delete any Q/A pair, even if it seems redundant — merge content into the richer version instead
-   - ❌ NEVER summarize or shorten — the guide must remain EXHAUSTIVE
    - ❌ NEVER drop a pathology, syndrome, sign, or entity that exists in the input
-   - ❌ NEVER reduce the number of items in drill/rapid-fire sections
    - ❌ NEVER remove table rows or callouts
    - ❌ NEVER omit staging systems, classifications, or scoring systems present in the input
    - ❌ NEVER wrap output in code fences (except the cheat sheet) — return raw markdown only
    - ❌ NEVER write a preamble or commentary — output the guide directly
+   - ✅ DO merge duplicate/redundant Q/A pairs into single comprehensive entries
+   - ✅ DO condense verbose answers into direct, fact-dense responses
+   - ✅ DO prefer tables and bullets over long paragraphs
 
 ═══════════════════════════════════════════════════════
 HANDLING DUPLICATES & OVERLAPPING CONTENT
@@ -258,11 +261,11 @@ export async function POST(
 
         const client = getClient();
 
-        // Scale max_tokens based on input size — output must be at least as long as input
-        // ~0.75 tokens per word for French text, plus headroom for improvements
+        // Scale max_tokens based on input size — output should be condensed (~80% of input)
+        // ~0.75 tokens per word for French text, with some headroom
         const inputWords = chapter.studyGuide!.split(/\s+/).length;
-        const estimatedOutputTokens = Math.round(inputWords * 1.3 * 0.75);
-        const dynamicMaxTokens = Math.min(128000, Math.max(32000, estimatedOutputTokens));
+        const estimatedOutputTokens = Math.round(inputWords * 0.85 * 0.75);
+        const dynamicMaxTokens = Math.min(128000, Math.max(16000, estimatedOutputTokens));
 
         const restructuredGuide = await callClaudeStreamWithRetry(
           client,

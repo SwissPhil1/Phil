@@ -675,16 +675,23 @@ export default function ChapterDetailPage() {
     if (!chapter || !chapter.studyGuide) return;
     setRestructuring(true);
     setRestructureMessage("Starting restructure...");
+
+    // Abort after 5 minutes to prevent infinite hangs
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5 * 60 * 1000);
+
     try {
       const res = await fetch(`/api/chapters/${chapter.id}/restructure`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ language: "fr" }),
+        signal: controller.signal,
       });
       const reader = res.body?.getReader();
       if (!reader) throw new Error("No response stream");
       const decoder = new TextDecoder();
       let buf = "";
+      let receivedSuccess = false;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -701,6 +708,7 @@ export default function ChapterDetailPage() {
                 return;
               }
               if (data.success) {
+                receivedSuccess = true;
                 setRestructureMessage(data.message || "Restructure complete!");
                 setRestructuring(false);
                 // Navigate to the new chapter after a short delay
@@ -718,10 +726,19 @@ export default function ChapterDetailPage() {
           }
         }
       }
+      if (!receivedSuccess) {
+        setRestructureMessage("Restructure ended without completing. Please try again.");
+      }
       setRestructuring(false);
     } catch (err) {
-      setRestructureMessage(err instanceof Error ? err.message : "Restructure failed");
+      if (controller.signal.aborted) {
+        setRestructureMessage("Restructure timed out after 5 minutes. Please try again.");
+      } else {
+        setRestructureMessage(err instanceof Error ? err.message : "Restructure failed");
+      }
       setRestructuring(false);
+    } finally {
+      clearTimeout(timeout);
     }
   }, [chapter]);
 

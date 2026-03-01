@@ -8,6 +8,7 @@ import Anthropic from "@anthropic-ai/sdk";
 
 // ── Model configuration ──────────────────────────────────────────────────────
 export const CLAUDE_MODEL = "claude-sonnet-4-20250514";
+export const CLAUDE_MODEL_FAST = "claude-haiku-4-5-20251001";
 
 // ── Client factory ───────────────────────────────────────────────────────────
 export function getClaudeClient(): Anthropic {

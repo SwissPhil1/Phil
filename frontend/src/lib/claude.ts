@@ -73,27 +73,82 @@ export async function callClaudeStreamWithRetry(
   },
   onProgress?: (charCount: number) => void,
   maxRetries = 3,
+  stallTimeoutMs = 90_000,   // abort if no data chunk for 90s
+  overallTimeoutMs = 300_000, // abort if a single call exceeds 5 min
 ): Promise<string> {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      const stream = client.messages.stream(params);
-      let text = "";
-      let lastReport = 0;
+      const text = await new Promise<string>((resolve, reject) => {
+        const stream = client.messages.stream(params);
+        let accumulated = "";
+        let lastReport = 0;
+        let settled = false;
 
-      stream.on("text", (chunk) => {
-        text += chunk;
-        if (onProgress && text.length - lastReport > 500) {
-          lastReport = text.length;
-          onProgress(text.length);
-        }
+        const settle = (fn: () => void) => {
+          if (!settled) { settled = true; fn(); }
+        };
+
+        // Overall timeout: cap each individual API call
+        const overallTimer = setTimeout(() => {
+          settle(() => {
+            console.warn(`Claude stream overall timeout (${overallTimeoutMs / 1000}s), aborting...`);
+            stream.abort();
+            reject(new Error(`Claude stream timed out after ${overallTimeoutMs / 1000}s`));
+          });
+        }, overallTimeoutMs);
+
+        // Stall detection: abort if no data chunk received for stallTimeoutMs
+        let stallTimer = setTimeout(() => {
+          settle(() => {
+            console.warn(`Claude stream stalled (no data for ${stallTimeoutMs / 1000}s), aborting...`);
+            stream.abort();
+            reject(new Error(`Claude stream stalled (no data for ${stallTimeoutMs / 1000}s)`));
+          });
+        }, stallTimeoutMs);
+
+        const resetStallTimer = () => {
+          clearTimeout(stallTimer);
+          stallTimer = setTimeout(() => {
+            settle(() => {
+              console.warn(`Claude stream stalled (no data for ${stallTimeoutMs / 1000}s), aborting...`);
+              stream.abort();
+              reject(new Error(`Claude stream stalled (no data for ${stallTimeoutMs / 1000}s)`));
+            });
+          }, stallTimeoutMs);
+        };
+
+        stream.on("text", (chunk) => {
+          accumulated += chunk;
+          resetStallTimer();
+          if (onProgress && accumulated.length - lastReport > 500) {
+            lastReport = accumulated.length;
+            onProgress(accumulated.length);
+          }
+        });
+
+        stream.finalMessage().then(
+          () => {
+            clearTimeout(overallTimer);
+            clearTimeout(stallTimer);
+            settle(() => {
+              if (onProgress) onProgress(accumulated.length);
+              resolve(accumulated);
+            });
+          },
+          (err) => {
+            clearTimeout(overallTimer);
+            clearTimeout(stallTimer);
+            settle(() => reject(err));
+          },
+        );
       });
 
-      await stream.finalMessage();
-      if (onProgress) onProgress(text.length);
       return text;
     } catch (err: unknown) {
-      const apiErr = err as { status?: number; headers?: Record<string, string> };
+      const apiErr = err as { status?: number; headers?: Record<string, string>; message?: string };
+      const isStall = apiErr.message?.includes("stalled") || apiErr.message?.includes("timed out");
       const isRetryable =
+        isStall ||
         apiErr.status === 429 ||
         apiErr.status === 529 ||
         (apiErr.status != null && apiErr.status >= 500);
@@ -102,13 +157,15 @@ export async function callClaudeStreamWithRetry(
       let delay: number;
       if (apiErr.status === 429) {
         const retryAfter = apiErr.headers?.["retry-after"];
-        delay = retryAfter ? Math.max(parseInt(retryAfter, 10) * 1000, 30000) : 60000;
+        delay = retryAfter ? Math.min(parseInt(retryAfter, 10) * 1000 || 15000, 30000) : 15000;
+      } else if (isStall) {
+        delay = 5000; // quick retry after stall
       } else {
         delay = Math.pow(2, attempt) * 5000;
       }
 
       console.warn(
-        `Claude streaming returned ${apiErr.status}, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})...`
+        `Claude streaming ${isStall ? "stalled/timed out" : `returned ${apiErr.status}`}, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})...`
       );
       await new Promise((r) => setTimeout(r, delay));
     }

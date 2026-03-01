@@ -30,6 +30,7 @@ import {
   ExternalLink,
   Printer,
   FilePlus,
+  Wand2,
 } from "lucide-react";
 import React, { useEffect, useState, useCallback, useRef } from "react";
 import ReactMarkdown, { Components } from "react-markdown";
@@ -396,6 +397,10 @@ export default function ChapterDetailPage() {
   const [appending, setAppending] = useState(false);
   const [appendMessage, setAppendMessage] = useState("");
 
+  // Restructure state
+  const [restructuring, setRestructuring] = useState(false);
+  const [restructureMessage, setRestructureMessage] = useState("");
+
   // Parse study guide sections for the position selector
   const guideSections = React.useMemo(() => {
     if (!chapter?.studyGuide) return [];
@@ -664,6 +669,61 @@ export default function ChapterDetailPage() {
     }
     setAppending(false);
   }, [chapter, appendContent, appendPosition]);
+
+  // Restructure study guide → creates a new chapter with improved content
+  const restructureStudyGuide = useCallback(async () => {
+    if (!chapter || !chapter.studyGuide) return;
+    setRestructuring(true);
+    setRestructureMessage("Starting restructure...");
+    try {
+      const res = await fetch(`/api/chapters/${chapter.id}/restructure`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ language: "fr" }),
+      });
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("No response stream");
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() || "";
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (data.error) {
+                setRestructureMessage(`Error: ${data.error}`);
+                setRestructuring(false);
+                return;
+              }
+              if (data.success) {
+                setRestructureMessage(data.message || "Restructure complete!");
+                setRestructuring(false);
+                // Navigate to the new chapter after a short delay
+                if (data.newChapterId) {
+                  setTimeout(() => {
+                    window.location.href = `/chapters/${data.newChapterId}`;
+                  }, 2000);
+                }
+                return;
+              }
+              if (data.message) {
+                setRestructureMessage(data.message);
+              }
+            } catch { /* partial JSON */ }
+          }
+        }
+      }
+      setRestructuring(false);
+    } catch (err) {
+      setRestructureMessage(err instanceof Error ? err.message : "Restructure failed");
+      setRestructuring(false);
+    }
+  }, [chapter]);
 
   // Auto-generate study guide
   useEffect(() => {
@@ -988,6 +1048,9 @@ export default function ChapterDetailPage() {
                         </Button>
                       </div>
                       <div className="flex gap-2">
+                        <Button size="sm" variant="outline" className="gap-1.5 border-purple-300 text-purple-700 hover:bg-purple-50 dark:border-purple-700 dark:text-purple-300 dark:hover:bg-purple-950/30" onClick={restructureStudyGuide} disabled={isGenerating || restructuring}>
+                          {restructuring ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}Restructure
+                        </Button>
                         {!isImported && (
                           <Button size="sm" variant="outline" className="gap-1.5" onClick={mergeStudyGuide} disabled={isGenerating}>
                             <Merge className="h-3.5 w-3.5" />Merge
@@ -1057,6 +1120,35 @@ export default function ChapterDetailPage() {
                           {appendMessage}
                         </div>
                       )}
+                    </div>
+                  )}
+
+                  {/* Restructure status message */}
+                  {restructureMessage && (
+                    <div className={`rounded-lg px-4 py-3 mb-6 flex items-start gap-2 ${
+                      restructureMessage.startsWith("Error")
+                        ? "bg-red-50 border border-red-200 dark:bg-red-950/20 dark:border-red-800"
+                        : restructureMessage.includes("complete") || restructureMessage.includes("restructured")
+                          ? "bg-emerald-50 border border-emerald-200 dark:bg-emerald-950/20 dark:border-emerald-800"
+                          : "bg-purple-50 border border-purple-200 dark:bg-purple-950/20 dark:border-purple-800"
+                    }`}>
+                      {restructuring && <Loader2 className="h-4 w-4 animate-spin text-purple-600 dark:text-purple-400 mt-0.5 flex-shrink-0" />}
+                      {!restructuring && !restructureMessage.startsWith("Error") && <Wand2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400 mt-0.5 flex-shrink-0" />}
+                      {restructureMessage.startsWith("Error") && <AlertCircle className="h-4 w-4 text-red-500 mt-0.5 flex-shrink-0" />}
+                      <div>
+                        <p className={`text-sm ${
+                          restructureMessage.startsWith("Error")
+                            ? "text-red-600 dark:text-red-400"
+                            : restructureMessage.includes("complete") || restructureMessage.includes("restructured")
+                              ? "text-emerald-600 dark:text-emerald-400"
+                              : "text-purple-600 dark:text-purple-400"
+                        }`}>
+                          {restructureMessage}
+                        </p>
+                        {restructureMessage.includes("restructured") && (
+                          <p className="text-xs text-muted-foreground mt-1">Redirecting to the new chapter...</p>
+                        )}
+                      </div>
                     </div>
                   )}
 

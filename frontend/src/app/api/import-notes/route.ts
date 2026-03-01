@@ -1,55 +1,13 @@
 import { prisma } from "@/lib/prisma";
-import Anthropic from "@anthropic-ai/sdk";
 import { NextResponse } from "next/server";
+import {
+  CLAUDE_MODEL,
+  getClaudeClient,
+  callClaudeStreamWithRetry,
+} from "@/lib/claude";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
-
-function getClient(): Anthropic {
-  return new Anthropic();
-}
-
-/**
- * Stream a Claude response with retry logic.
- * Uses the streaming API so data flows continuously, preventing Vercel/browser timeouts.
- * Calls onProgress periodically with the accumulated character count.
- */
-async function callClaudeStreamWithRetry(
-  client: Anthropic,
-  params: { model: string; max_tokens: number; messages: Anthropic.Messages.MessageParam[] },
-  onProgress?: (charCount: number) => void,
-  maxRetries = 3,
-): Promise<string> {
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      const stream = client.messages.stream(params);
-      let text = "";
-      let lastReport = 0;
-
-      stream.on("text", (chunk) => {
-        text += chunk;
-        // Report progress roughly every 500 chars
-        if (onProgress && text.length - lastReport > 500) {
-          lastReport = text.length;
-          onProgress(text.length);
-        }
-      });
-
-      await stream.finalMessage();
-      // Final progress report
-      if (onProgress) onProgress(text.length);
-      return text;
-    } catch (err: unknown) {
-      const apiErr = err as { status?: number; message?: string };
-      const isRetryable = apiErr.status === 429 || apiErr.status === 529 || (apiErr.status && apiErr.status >= 500);
-      if (!isRetryable || attempt === maxRetries) throw err;
-      const delay = apiErr.status === 429 ? 60000 : Math.pow(2, attempt) * 5000;
-      console.warn(`Claude stream error, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})...`);
-      await new Promise((r) => setTimeout(r, delay));
-    }
-  }
-  throw new Error("unreachable");
-}
 
 /**
  * Build the prompt to transform a NotebookLM summary into a retention-optimized Q/A guide.
@@ -177,7 +135,8 @@ async function handleTransform(body: { organ: string; title: string; text: strin
     return NextResponse.json({ error: "Missing organ, title, or text" }, { status: 400 });
   }
 
-  const organKey = organ.toLowerCase().trim().replace(/[^a-z0-9]+/g, "_");
+  // Store the readable organ name (not a slug) so it displays properly in UI
+  const organDisplay = organ.trim();
 
   // Use SSE for progress
   const encoder = new TextEncoder();
@@ -187,11 +146,18 @@ async function handleTransform(body: { organ: string; title: string; text: strin
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
       }
 
+      // Heartbeat to prevent proxy/gateway/browser timeouts
+      const heartbeat = setInterval(() => {
+        try {
+          controller.enqueue(encoder.encode(": heartbeat\n\n"));
+        } catch { /* controller already closed */ }
+      }, 8000);
+
       try {
         // Step 1: Transform via Claude
         send({ status: "transforming", message: "Claude is transforming your summary into Q/A format..." });
 
-        const client = getClient();
+        const client = getClaudeClient();
         // Scale max_tokens based on input size — large combined summaries need more room
         const inputWords = text.split(/\s+/).length;
         const dynamicMaxTokens = inputWords > 5000 ? 64000 : 32000;
@@ -199,7 +165,7 @@ async function handleTransform(body: { organ: string; title: string; text: strin
         const studyGuide = await callClaudeStreamWithRetry(
           client,
           {
-            model: "claude-sonnet-4-20250514",
+            model: CLAUDE_MODEL,
             max_tokens: dynamicMaxTokens,
             messages: [{ role: "user", content: buildTransformPrompt(organ, text, language) }],
           },
@@ -225,7 +191,7 @@ async function handleTransform(body: { organ: string; title: string; text: strin
             bookSource: "notebook_import",
             number: nextNumber,
             title,
-            organ: organKey,
+            organ: organDisplay,
             rawText: text,
             studyGuide,
             summary: text.substring(0, 500),
@@ -244,6 +210,7 @@ async function handleTransform(body: { organ: string; title: string; text: strin
         console.error("Transform error:", err);
         send({ error: err instanceof Error ? err.message : "Transform failed" });
       } finally {
+        clearInterval(heartbeat);
         controller.close();
       }
     },

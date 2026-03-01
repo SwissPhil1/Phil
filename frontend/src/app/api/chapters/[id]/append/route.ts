@@ -1,13 +1,9 @@
 import { prisma } from "@/lib/prisma";
-import Anthropic from "@anthropic-ai/sdk";
 import { NextResponse } from "next/server";
+import { CLAUDE_MODEL, getClaudeClient } from "@/lib/claude";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
-
-function getClient(): Anthropic {
-  return new Anthropic();
-}
 
 /**
  * Append new content to an existing study guide.
@@ -60,7 +56,7 @@ export async function POST(
       try {
         send({ status: "formatting", message: "Formatting new content to match study guide style..." });
 
-        const client = getClient();
+        const client = getClaudeClient();
 
         // Take a sample of the existing guide (first ~3000 chars) for style reference
         const styleSample = chapter.studyGuide!.substring(0, 3000);
@@ -102,7 +98,7 @@ Output ONLY the formatted section — no preamble, no wrapping code fences. Retu
 
         // Stream the response
         const clientStream = client.messages.stream({
-          model: "claude-sonnet-4-20250514",
+          model: CLAUDE_MODEL,
           max_tokens: 16000,
           messages: [{ role: "user", content: prompt }],
         });

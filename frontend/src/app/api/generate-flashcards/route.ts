@@ -1,59 +1,13 @@
 import { prisma } from "@/lib/prisma";
-import Anthropic from "@anthropic-ai/sdk";
 import { NextResponse } from "next/server";
+import {
+  CLAUDE_MODEL,
+  getClaudeClient,
+  callClaudeStreamWithRetry,
+} from "@/lib/claude";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
-
-function getClient(): Anthropic {
-  return new Anthropic();
-}
-
-/** Race a promise against a timeout. */
-function withTimeout<T>(promise: Promise<T>, ms: number, label = "operation"): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms);
-    promise.then(
-      (v) => { clearTimeout(timer); resolve(v); },
-      (e) => { clearTimeout(timer); reject(e); },
-    );
-  });
-}
-
-async function callClaudeStreamWithRetry(
-  client: Anthropic,
-  params: { model: string; max_tokens: number; messages: Anthropic.Messages.MessageParam[] },
-  onProgress?: (charCount: number) => void,
-  maxRetries = 3,
-): Promise<string> {
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      const stream = client.messages.stream(params);
-      let text = "";
-      let lastReport = 0;
-
-      stream.on("text", (chunk) => {
-        text += chunk;
-        if (onProgress && text.length - lastReport > 500) {
-          lastReport = text.length;
-          onProgress(text.length);
-        }
-      });
-
-      await stream.finalMessage();
-      if (onProgress) onProgress(text.length);
-      return text;
-    } catch (err: unknown) {
-      const apiErr = err as { status?: number; message?: string };
-      const isRetryable = apiErr.status === 429 || apiErr.status === 529 || (apiErr.status && apiErr.status >= 500);
-      if (!isRetryable || attempt === maxRetries) throw err;
-      const delay = apiErr.status === 429 ? 60000 : Math.pow(2, attempt) * 5000;
-      console.warn(`Claude stream error, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})...`);
-      await new Promise((r) => setTimeout(r, delay));
-    }
-  }
-  throw new Error("unreachable");
-}
 
 function buildFlashcardPrompt(studyGuide: string, language: string): string {
   const guideWords = studyGuide.split(/\s+/).length;
@@ -126,14 +80,14 @@ export async function POST(request: Request) {
         try {
           send({ status: "generating", message: "Generating flashcards from study guide..." });
 
-          const client = getClient();
+          const client = getClaudeClient();
           const guideWords = chapter.studyGuide!.split(/\s+/).length;
           const fcMaxTokens = guideWords > 8000 ? 32000 : 16000;
 
           const flashcardJson = await callClaudeStreamWithRetry(
             client,
             {
-              model: "claude-sonnet-4-20250514",
+              model: CLAUDE_MODEL,
               max_tokens: fcMaxTokens,
               messages: [{ role: "user", content: buildFlashcardPrompt(chapter.studyGuide!, language) }],
             },

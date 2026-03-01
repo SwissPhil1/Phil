@@ -390,6 +390,10 @@ export default function ChapterDetailPage() {
   const [generatingFlashcards, setGeneratingFlashcards] = useState(false);
   const [flashcardGenMessage, setFlashcardGenMessage] = useState("");
 
+  // Question generation state (for chapters with study guide but no questions)
+  const [generatingQuestions, setGeneratingQuestions] = useState(false);
+  const [questionGenMessage, setQuestionGenMessage] = useState("");
+
   // Append section state
   const [showAppendPanel, setShowAppendPanel] = useState(false);
   const [appendContent, setAppendContent] = useState("");
@@ -544,6 +548,61 @@ export default function ChapterDetailPage() {
     } catch (err) {
       setFlashcardGenMessage(err instanceof Error ? err.message : "Failed");
       setGeneratingFlashcards(false);
+    }
+  }, [chapter]);
+
+  // Generate QCM questions for chapters that have a study guide but no questions
+  const generateQuestionsOnly = useCallback(async () => {
+    if (!chapter) return;
+    setGeneratingQuestions(true);
+    setQuestionGenMessage("Generating questions from study guide...");
+
+    try {
+      const res = await fetch("/api/generate-questions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chapterId: chapter.id, language: "fr" }),
+      });
+
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("No response stream");
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() || "";
+        for (const part of parts) {
+          const dataLine = part.split("\n").find((l) => l.startsWith("data: "));
+          if (!dataLine) continue;
+          try {
+            const data = JSON.parse(dataLine.slice(6));
+            if (data.error) {
+              setQuestionGenMessage(`Failed: ${data.error}`);
+              setGeneratingQuestions(false);
+              return;
+            }
+            if (data.success) {
+              setQuestionGenMessage(`Created ${data.questionsCreated} questions!`);
+              // Refresh chapter data
+              const refreshed = await (await fetch(`/api/chapters/${chapter.id}`)).json();
+              setChapter(refreshed);
+              setGeneratingQuestions(false);
+              return;
+            }
+            if (data.message) {
+              setQuestionGenMessage(data.message);
+            }
+          } catch { /* partial JSON */ }
+        }
+      }
+      setGeneratingQuestions(false);
+    } catch (err) {
+      setQuestionGenMessage(err instanceof Error ? err.message : "Failed");
+      setGeneratingQuestions(false);
     }
   }, [chapter]);
 
@@ -1003,6 +1062,17 @@ export default function ChapterDetailPage() {
           <span className="text-xs text-muted-foreground flex items-center gap-1.5">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
             {flashcardGenMessage}
+          </span>
+        )}
+        {chapter.studyGuide && chapter.questions.length === 0 && !generatingQuestions && (
+          <Button size="sm" variant="outline" className="gap-2 border-blue-300 text-blue-700 hover:bg-blue-50" onClick={generateQuestionsOnly}>
+            <Sparkles className="h-4 w-4" />Generate Questions
+          </Button>
+        )}
+        {generatingQuestions && (
+          <span className="text-xs text-muted-foreground flex items-center gap-1.5">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            {questionGenMessage}
           </span>
         )}
         {hasPdfChunks && (

@@ -43,6 +43,15 @@ export async function POST(request: Request) {
     );
   }
 
+  // Validate selectedAnswer is within the actual options range
+  const options: string[] = JSON.parse(question.options);
+  if (selectedAnswer >= options.length) {
+    return NextResponse.json(
+      { error: `selectedAnswer ${selectedAnswer} is out of range (question has ${options.length} options)` },
+      { status: 400 }
+    );
+  }
+
   const isCorrect = selectedAnswer === question.correctAnswer;
 
   const attempt = await prisma.questionAttempt.create({

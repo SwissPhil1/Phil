@@ -37,19 +37,35 @@ export async function POST(request: Request) {
     // If target is "flashcard" and we have a flashcard ID, update it directly
     const flashcardId = formData.get("flashcardId") as string | null;
     if (target === "flashcard" && flashcardId) {
-      await prisma.flashcard.update({
-        where: { id: parseInt(flashcardId, 10) },
-        data: { imageUrl: dataUri },
-      });
+      try {
+        await prisma.flashcard.update({
+          where: { id: parseInt(flashcardId, 10) },
+          data: { imageUrl: dataUri },
+        });
+      } catch (dbErr) {
+        console.error("Failed to update flashcard image:", dbErr);
+        return NextResponse.json(
+          { error: "Image uploaded but failed to link to flashcard" },
+          { status: 500 }
+        );
+      }
     }
 
     // If target is "question" and we have a question ID, update it
     const questionId = formData.get("questionId") as string | null;
     if (target === "question" && questionId) {
-      await prisma.question.update({
-        where: { id: parseInt(questionId, 10) },
-        data: { imageUrl: dataUri },
-      });
+      try {
+        await prisma.question.update({
+          where: { id: parseInt(questionId, 10) },
+          data: { imageUrl: dataUri },
+        });
+      } catch (dbErr) {
+        console.error("Failed to update question image:", dbErr);
+        return NextResponse.json(
+          { error: "Image uploaded but failed to link to question" },
+          { status: 500 }
+        );
+      }
     }
 
     return NextResponse.json({

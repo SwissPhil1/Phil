@@ -786,14 +786,19 @@ export default function ChapterDetailPage() {
         }
       }
       if (!receivedSuccess) {
-        setRestructureMessage("Restructure ended without completing. Please try again.");
+        setRestructureMessage("Connection to server lost. The study guide may be too large — try again or split it into smaller chapters.");
       }
       setRestructuring(false);
     } catch (err) {
       if (controller.signal.aborted) {
-        setRestructureMessage("Restructure timed out after 15 minutes. Please try again.");
+        setRestructureMessage("Restructure timed out after 15 minutes. Please try again with a shorter study guide.");
       } else {
-        setRestructureMessage(err instanceof Error ? err.message : "Restructure failed");
+        const msg = err instanceof Error ? err.message : "Restructure failed";
+        const isNetwork = msg.includes("Failed to fetch") || msg.includes("NetworkError") || msg.includes("network");
+        setRestructureMessage(isNetwork
+          ? "Network error — connection to server lost. Please check your connection and try again."
+          : msg
+        );
       }
       setRestructuring(false);
     } finally {

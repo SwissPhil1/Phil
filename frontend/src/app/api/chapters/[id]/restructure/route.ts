@@ -388,10 +388,22 @@ export async function POST(
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
       }
 
-      // Heartbeat to prevent timeout
+      // Heartbeat to prevent connection timeout
       const heartbeat = setInterval(() => {
         controller.enqueue(encoder.encode(": heartbeat\n\n"));
       }, 5000);
+
+      // Guard timeout: send a proper error before Vercel kills the function
+      // maxDuration is 800s, so fire at 750s to leave margin
+      let guardFired = false;
+      const guardTimeout = setTimeout(() => {
+        guardFired = true;
+        try {
+          send({ error: "Restructure timed out — the study guide may be too large. Try splitting it into smaller chapters." });
+          clearInterval(heartbeat);
+          controller.close();
+        } catch { /* stream already closed */ }
+      }, 750_000);
 
       try {
         const client = getClaudeClient();
@@ -548,10 +560,16 @@ export async function POST(
         });
       } catch (err) {
         console.error("Restructure error:", err);
-        send({ error: err instanceof Error ? err.message : "Restructure failed" });
+        if (!guardFired) {
+          const msg = err instanceof Error ? err.message : "Restructure failed";
+          send({ error: msg });
+        }
       } finally {
+        clearTimeout(guardTimeout);
         clearInterval(heartbeat);
-        controller.close();
+        if (!guardFired) {
+          try { controller.close(); } catch { /* already closed */ }
+        }
       }
     },
   });

@@ -2,12 +2,13 @@ import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import {
   CLAUDE_MODEL,
+  CLAUDE_MODEL_FAST,
   getClaudeClient,
   callClaudeStreamWithRetry,
 } from "@/lib/claude";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 800;
+export const maxDuration = 900;
 
 // ── Step 1: Extract all discrete facts into a flat checklist ─────────────────
 
@@ -530,7 +531,7 @@ export async function POST(
       }, 5000);
 
       // Guard timeout: send a proper error before Vercel kills the function
-      // maxDuration is 800s, so fire at 750s to leave margin
+      // maxDuration is 900s, so fire at 850s to leave margin
       let guardFired = false;
       const guardTimeout = setTimeout(() => {
         guardFired = true;
@@ -539,7 +540,7 @@ export async function POST(
           clearInterval(heartbeat);
           controller.close();
         } catch { /* stream already closed */ }
-      }, 750_000);
+      }, 850_000);
 
       try {
         const client = getClaudeClient();
@@ -621,10 +622,11 @@ export async function POST(
           message: `Pass 1 — Step 3/7: Verifying all ${factCount} facts are present...`,
         });
 
+        // Verification is a presence-check task — use the fast model for speed
         const verifyResult1 = await callClaudeStreamWithRetry(
           client,
           {
-            model: CLAUDE_MODEL,
+            model: CLAUDE_MODEL_FAST,
             max_tokens: verifyTokens(factCount),
             messages: [{ role: "user", content: buildVerifyPrompt(factList, restructuredGuide, language) }],
           },
@@ -709,64 +711,77 @@ export async function POST(
           message: "Pass 2 — Step 5 complete: Guide polished.",
         });
 
-        // ══════════════════════════════════════════════════════
-        // PASS 2 — Step 6: Verify completeness again
-        // ══════════════════════════════════════════════════════
-        send({
-          status: "verifying",
-          message: `Pass 2 — Step 6/7: Final verification of all ${factCount} facts...`,
-        });
-
-        const verifyResult2 = await callClaudeStreamWithRetry(
-          client,
-          {
-            model: CLAUDE_MODEL,
-            max_tokens: verifyTokens(factCount),
-            messages: [{ role: "user", content: buildVerifyPrompt(factList, pass2Restructured, language) }],
-          },
-          undefined,
-          1,
-        );
-
-        const pass2Verify = parseMissingFacts(verifyResult2);
+        // Skip Pass 2 verify+patch when Pass 1 found zero missing facts.
+        // If the original restructure was complete, the polish pass is very
+        // unlikely to drop facts — saves 2-4 min on large guides.
+        let pass2Verify = { hasMissing: false, missingText: "", missingCount: 0 };
         let finalGuide = pass2Restructured;
 
-        if (!pass2Verify.hasMissing) {
+        if (pass1Verify.hasMissing) {
+          // ══════════════════════════════════════════════════════
+          // PASS 2 — Step 6: Verify completeness again
+          // ══════════════════════════════════════════════════════
           send({
             status: "verifying",
-            message: `Pass 2 — Step 6 complete: All ${factCount} facts preserved! No patching needed.`,
-          });
-        } else {
-          // ══════════════════════════════════════════════════════
-          // PASS 2 — Step 7: Final patch (if any facts still missing)
-          // ══════════════════════════════════════════════════════
-          send({
-            status: "patching",
-            message: `Pass 2 — Step 7/7: Final patch — ${pass2Verify.missingCount} remaining fact(s)...`,
+            message: `Pass 2 — Step 6/7: Final verification of all ${factCount} facts...`,
           });
 
-          finalGuide = await callClaudeStreamWithRetry(
+          // Verification is a presence-check task — use the fast model for speed
+          const verifyResult2 = await callClaudeStreamWithRetry(
             client,
             {
-              model: CLAUDE_MODEL,
-              max_tokens: patchTokens,
-              messages: [{ role: "user", content: buildPatchPrompt(pass2Restructured, pass2Verify.missingText, language) }],
+              model: CLAUDE_MODEL_FAST,
+              max_tokens: verifyTokens(factCount),
+              messages: [{ role: "user", content: buildVerifyPrompt(factList, pass2Restructured, language) }],
             },
-            (charCount) => {
-              const words = Math.round(charCount / 5);
-              send({
-                status: "patching",
-                message: `Pass 2 — Step 7/7: Final patching... (~${words.toLocaleString()} words generated)`,
-              });
-            },
-            heavyCallMaxRetries,
-            90_000,
-            heavyCallOverallTimeout,
+            undefined,
+            1,
           );
 
+          pass2Verify = parseMissingFacts(verifyResult2);
+
+          if (!pass2Verify.hasMissing) {
+            send({
+              status: "verifying",
+              message: `Pass 2 — Step 6 complete: All ${factCount} facts preserved! No patching needed.`,
+            });
+          } else {
+            // ══════════════════════════════════════════════════════
+            // PASS 2 — Step 7: Final patch (if any facts still missing)
+            // ══════════════════════════════════════════════════════
+            send({
+              status: "patching",
+              message: `Pass 2 — Step 7/7: Final patch — ${pass2Verify.missingCount} remaining fact(s)...`,
+            });
+
+            finalGuide = await callClaudeStreamWithRetry(
+              client,
+              {
+                model: CLAUDE_MODEL,
+                max_tokens: patchTokens,
+                messages: [{ role: "user", content: buildPatchPrompt(pass2Restructured, pass2Verify.missingText, language) }],
+              },
+              (charCount) => {
+                const words = Math.round(charCount / 5);
+                send({
+                  status: "patching",
+                  message: `Pass 2 — Step 7/7: Final patching... (~${words.toLocaleString()} words generated)`,
+                });
+              },
+              heavyCallMaxRetries,
+              90_000,
+              heavyCallOverallTimeout,
+            );
+
+            send({
+              status: "patching",
+              message: `Pass 2 complete: ${pass2Verify.missingCount} remaining fact(s) recovered.`,
+            });
+          }
+        } else {
           send({
-            status: "patching",
-            message: `Pass 2 complete: ${pass2Verify.missingCount} remaining fact(s) recovered.`,
+            status: "verifying",
+            message: `Pass 2 — Steps 6-7 skipped: Pass 1 had zero missing facts.`,
           });
         }
 

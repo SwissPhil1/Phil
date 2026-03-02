@@ -8,7 +8,7 @@ import {
 } from "@/lib/claude";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 900;
+export const maxDuration = 800;
 
 // ── Step 1: Extract all discrete facts into a flat checklist ─────────────────
 
@@ -531,7 +531,7 @@ export async function POST(
       }, 5000);
 
       // Guard timeout: send a proper error before Vercel kills the function
-      // maxDuration is 900s, so fire at 850s to leave margin
+      // maxDuration is 800s, so fire at 750s to leave margin
       let guardFired = false;
       const guardTimeout = setTimeout(() => {
         guardFired = true;
@@ -540,7 +540,7 @@ export async function POST(
           clearInterval(heartbeat);
           controller.close();
         } catch { /* stream already closed */ }
-      }, 850_000);
+      }, 750_000);
 
       try {
         const client = getClaudeClient();

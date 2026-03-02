@@ -735,120 +735,65 @@ export default function ChapterDetailPage() {
     setRestructuring(true);
     setRestructureMessage("Starting restructure...");
 
-    // Abort after 35 minutes to account for two sequential long-running functions
+    // Single-pass restructure: 15 min is generous for one Claude call
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 35 * 60 * 1000);
-
-    // Helper: read an SSE stream and return the final success data (or throw on error)
-    async function readSSEStream(
-      res: Response,
-      signal: AbortSignal,
-    ): Promise<Record<string, unknown> | null> {
-      const reader = res.body?.getReader();
-      if (!reader) throw new Error("No response stream");
-      const decoder = new TextDecoder();
-      let buf = "";
-      let successData: Record<string, unknown> | null = null;
-
-      while (!signal.aborted) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split("\n");
-        buf = lines.pop() || "";
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            try {
-              const data = JSON.parse(line.slice(6));
-              if (data.error) {
-                throw new Error(data.error);
-              }
-              if (data.success) {
-                successData = data;
-                setRestructureMessage(data.message || "Complete!");
-                return successData;
-              }
-              if (data.message) {
-                setRestructureMessage(data.message);
-              }
-            } catch (e) {
-              if (e instanceof Error && e.message !== "data.error") throw e;
-              // partial JSON — ignore
-            }
-          }
-        }
-      }
-      return successData;
-    }
+    const timeout = setTimeout(() => controller.abort(), 15 * 60 * 1000);
 
     try {
-      // ── Phase 1: Restructure (Pass 1) ──────────────────────────
-      const restructureRes = await fetch(`/api/chapters/${chapter.id}/restructure`, {
+      const res = await fetch(`/api/chapters/${chapter.id}/restructure`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ language: "fr" }),
         signal: controller.signal,
       });
 
-      const restructureResult = await readSSEStream(restructureRes, controller.signal);
+      // Read SSE stream for progress updates
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("No response stream");
+      const decoder = new TextDecoder();
+      let buf = "";
+      let newChapterId: number | undefined;
 
-      if (!restructureResult) {
-        setRestructureMessage("Connection to server lost during restructure. The study guide may be too large — try again or split it into smaller chapters.");
-        setRestructuring(false);
-        return;
+      while (!controller.signal.aborted) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (data.error) throw new Error(data.error);
+            if (data.message) setRestructureMessage(data.message);
+            if (data.success) {
+              newChapterId = data.newChapterId;
+            }
+          } catch (e) {
+            if (e instanceof Error && e.message !== line.slice(6)) throw e;
+          }
+        }
       }
-
-      const newChapterId = restructureResult.newChapterId as number | undefined;
-      const factList = restructureResult.factList as string | undefined;
 
       if (!newChapterId) {
+        setRestructureMessage("Connection lost during restructure. Try again or split into smaller chapters.");
         setRestructuring(false);
         return;
       }
 
-      // ── Phase 2: Reconcile (Pass 2) ────────────────────────────
-      setRestructureMessage("Pass 1 complete — starting reconciliation pass...");
-
-      const reconcileRes = await fetch(`/api/chapters/${newChapterId}/reconcile`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          factList,
-          language: "fr",
-          polish: true,
-          saveInPlace: true,
-        }),
-        signal: controller.signal,
-      });
-
-      const reconcileResult = await readSSEStream(reconcileRes, controller.signal);
-
-      if (!reconcileResult) {
-        // Restructure succeeded but reconcile failed — still navigate to the new chapter
-        setRestructureMessage("Restructure saved but reconciliation lost connection. You can retry reconciliation from the new chapter.");
-        setTimeout(() => {
-          window.location.href = `/chapters/${newChapterId}`;
-        }, 3000);
-        setRestructuring(false);
-        return;
-      }
-
-      // Both phases complete — navigate to the new chapter
-      setRestructureMessage(
-        `Study guide restructured and reconciled! Redirecting...`
-      );
+      setRestructureMessage("Restructure complete! Redirecting...");
       setRestructuring(false);
       setTimeout(() => {
         window.location.href = `/chapters/${newChapterId}`;
-      }, 2000);
+      }, 1500);
     } catch (err) {
       if (controller.signal.aborted) {
-        setRestructureMessage("Restructure timed out after 35 minutes. Please try again with a shorter study guide.");
+        setRestructureMessage("Restructure timed out after 15 minutes. Try again or split into smaller chapters.");
       } else {
         const raw = err instanceof Error ? err.message : "Restructure failed";
         const isNetwork = raw.includes("Failed to fetch") || raw.includes("NetworkError") || raw.includes("network");
         setRestructureMessage(isNetwork
-          ? "Network error — connection to server lost. Please check your connection and try again."
+          ? "Network error — connection lost. Check your connection and try again."
           : `Error: ${raw}`
         );
       }

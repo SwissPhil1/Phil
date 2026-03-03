@@ -2,7 +2,6 @@ import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import {
   CLAUDE_MODEL,
-  CLAUDE_MODEL_FAST,
   getClaudeClient,
   callClaudeStreamWithRetry,
 } from "@/lib/claude";
@@ -13,6 +12,7 @@ import {
   buildPatchPrompt,
   countFactLines,
   parseMissingFacts,
+  applyPatches,
 } from "@/lib/restructure-prompts";
 
 export const dynamic = "force-dynamic";
@@ -120,7 +120,6 @@ export async function POST(
         // Token budgets
         const extractTokens = Math.min(64000, Math.max(8000, Math.round(inputWords * 1.3)));
         const polishTokens = Math.min(128000, Math.max(16000, Math.round(inputWords * 1.1 * 1.3)));
-        const patchTokens = Math.min(128000, Math.max(16000, Math.round(inputWords * 0.95 * 1.3)));
 
         // Determine total steps for progress messages
         const totalSteps = polish ? 3 : 2; // polish+verify+patch or verify+patch
@@ -211,10 +210,11 @@ export async function POST(
           message: `Reconcile — Step ${currentStep}/${totalSteps}: Verifying all ${factCount} facts are present...`,
         });
 
+        // Sonnet for accuracy — reduces false positives that trigger unnecessary patching
         const verifyResult = await callClaudeStreamWithRetry(
           client,
           {
-            model: CLAUDE_MODEL_FAST,
+            model: CLAUDE_MODEL,
             max_tokens: verifyTokens,
             messages: [{ role: "user", content: buildVerifyPrompt(factList, targetText, language) }],
           },
@@ -231,7 +231,7 @@ export async function POST(
           });
         } else {
           // ══════════════════════════════════════════════════════
-          // Step 3: Patch missing facts
+          // Step 3: Targeted patch — only generate missing content, then merge
           // ══════════════════════════════════════════════════════
           currentStep++;
           send({
@@ -239,24 +239,27 @@ export async function POST(
             message: `Reconcile — Step ${currentStep}/${totalSteps}: Patching ${missingCount} missing fact(s)...`,
           });
 
-          targetText = await callClaudeStreamWithRetry(
+          const targetedPatchTokens = Math.min(16000, Math.max(2000, Math.round(missingCount * 200)));
+          const patchContent = await callClaudeStreamWithRetry(
             client,
             {
               model: CLAUDE_MODEL,
-              max_tokens: patchTokens,
+              max_tokens: targetedPatchTokens,
               messages: [{ role: "user", content: buildPatchPrompt(targetText, missingText, language) }],
             },
             (charCount) => {
-              const words = Math.round(charCount / 5);
+              const facts = Math.round(charCount / 80);
               send({
                 status: "patching",
-                message: `Reconcile — Step ${currentStep}/${totalSteps}: Patching... (~${words.toLocaleString()} words generated)`,
+                message: `Reconcile — Step ${currentStep}/${totalSteps}: Formatting ${facts} missing fact(s)...`,
               });
             },
             heavyCallMaxRetries,
             90_000,
-            heavyCallOverallTimeout,
+            300_000, // targeted patch is fast — 5 min max
           );
+
+          targetText = applyPatches(targetText, patchContent);
 
           send({
             status: "patching",

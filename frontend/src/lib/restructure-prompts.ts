@@ -339,33 +339,124 @@ export function buildPatchPrompt(restructuredText: string, missingFacts: string,
     ? "\nThe guide is in French. Keep all insertions in French with bilingual medical terms where appropriate.\n"
     : "";
 
-  return `You are a medical study guide editor. The restructured guide below is MISSING some facts that were in the original. Your job is to INSERT these missing facts into the most logical locations.
+  // Extract section headings from the restructured guide for reference
+  const sectionHeadings = restructuredText.match(/^## .+$/gm)?.join('\n') || '';
+
+  return `You are a medical study guide editor. The restructured guide is MISSING some facts. Your job is to FORMAT these missing facts as study guide content, grouped by which section they belong in.
 ${langNote}
 RULES:
-- INSERT each missing fact into the MOST APPROPRIATE existing section of the guide
-- Use the SAME formatting system as the rest of the guide:
+- Format each missing fact using the SAME formatting system as the guide:
   • Q/A pairs: ### Q: ... / **A:** ...
-  • Callouts: 💡 PEARL, 🔴 PITFALL/TRAP, ⚡ HIGH YIELD, 🧠 MNEMONIC, 🎯 STOP & THINK, ✅ KEY POINT
+  • Callouts: > 💡 PEARL, > 🔴 PITFALL/TRAP, > ⚡ HIGH YIELD, > 🧠 MNEMONIC, > 🎯 STOP & THINK, > ✅ KEY POINT
   • Markdown tables where appropriate
   • Radiopaedia links: [Radiopaedia: Name](URL)
-- If a missing fact naturally ENRICHES an existing Q/A answer, add it to that answer
-- If a missing fact is a standalone concept, create a new Q/A pair or callout
-- If a missing fact belongs in the checklist section, add it there
-- Do NOT remove, reword, modify, or reorder ANY existing content — ONLY ADD
-- Do NOT change the structure or formatting of existing content
-- Output the COMPLETE guide with all missing facts integrated
+- Group the formatted content under the EXACT section heading where it belongs
+- Use the section headings listed below (with their emojis)
+- Output ONLY the new content to add — do NOT reproduce the existing guide
 
-MISSING FACTS TO INSERT:
+OUTPUT FORMAT (only include sections that have new content to add):
+
+## [Exact section heading from the guide]
+
+[formatted new content for this section]
+
+## [Another section heading]
+
+[formatted new content for this section]
+
+SECTION HEADINGS IN THE GUIDE:
+${sectionHeadings}
+
+MISSING FACTS TO FORMAT AND PLACE:
 ${missingFacts}
 
-═══════════════════════════════════════════════════════
-RESTRUCTURED GUIDE (insert missing facts into this):
-═══════════════════════════════════════════════════════
+Format and group the missing facts now. Output ONLY the new content grouped by section heading — no preamble, no commentary, no code fences.`;
+}
 
-${restructuredText}
+// ── Helper: apply targeted patches into the restructured guide ───────────────
 
-═══════════════════════════════════════════════════════
-Output the COMPLETE guide with all missing facts inserted. No preamble, no commentary, no code fences — raw markdown only.`;
+const SECTION_MARKERS = ['🎯', '🔬', '📚', '🔧', '📊', '⚖️', '🧠', '⚡', '📋', 'EXAM-DAY'];
+
+export function applyPatches(guide: string, patchOutput: string): string {
+  // Split patch output into blocks by ## headings
+  const blocks: { heading: string; content: string }[] = [];
+  const parts = patchOutput.split(/(?=^## )/m);
+  for (const part of parts) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const newlineIdx = trimmed.indexOf('\n');
+    if (newlineIdx === -1) continue;
+    const heading = trimmed.substring(0, newlineIdx).trim();
+    const content = trimmed.substring(newlineIdx + 1).trim();
+    if (heading.startsWith('## ') && content) {
+      blocks.push({ heading, content });
+    }
+  }
+
+  if (blocks.length === 0) return guide;
+
+  const guideLines = guide.split('\n');
+  const unmatched: string[] = [];
+
+  for (const block of blocks) {
+    // Find matching section by emoji/marker
+    const marker = SECTION_MARKERS.find(m => block.heading.includes(m));
+    if (!marker) {
+      unmatched.push(block.content);
+      continue;
+    }
+
+    // Find the section line in the guide
+    let sectionLineIdx = -1;
+    for (let i = 0; i < guideLines.length; i++) {
+      if (guideLines[i].startsWith('## ') && guideLines[i].includes(marker)) {
+        sectionLineIdx = i;
+        break;
+      }
+    }
+
+    if (sectionLineIdx === -1) {
+      unmatched.push(block.content);
+      continue;
+    }
+
+    // Find the next ## heading (end of this section)
+    let nextSectionIdx = guideLines.length;
+    for (let i = sectionLineIdx + 1; i < guideLines.length; i++) {
+      if (guideLines[i].startsWith('## ')) {
+        nextSectionIdx = i;
+        break;
+      }
+    }
+
+    // Insert before any trailing --- separator, or before the next section heading
+    let insertIdx = nextSectionIdx;
+    for (let i = nextSectionIdx - 1; i > sectionLineIdx; i--) {
+      if (guideLines[i].trim() === '---') {
+        insertIdx = i;
+        break;
+      }
+    }
+
+    // Splice the new content in
+    const contentLines = block.content.split('\n');
+    guideLines.splice(insertIdx, 0, '', ...contentLines, '');
+  }
+
+  let result = guideLines.join('\n');
+
+  // Append unmatched content before EXAM-DAY CHEAT SHEET or at end
+  if (unmatched.length > 0) {
+    const extra = unmatched.join('\n\n');
+    const cheatIdx = result.indexOf('\n## EXAM-DAY');
+    if (cheatIdx >= 0) {
+      result = result.substring(0, cheatIdx) + '\n\n' + extra + '\n' + result.substring(cheatIdx);
+    } else {
+      result += '\n\n' + extra;
+    }
+  }
+
+  return result;
 }
 
 // ── Pass 2 restructure prompt: polish pass for natural integration ───────────

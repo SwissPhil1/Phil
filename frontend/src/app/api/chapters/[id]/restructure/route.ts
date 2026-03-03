@@ -83,9 +83,9 @@ export async function POST(
         const studyGuide = chapter.studyGuide!;
         const inputWords = studyGuide.split(/\s+/).length;
 
-        // Words-to-tokens ratio for medical text with markdown formatting ≈ 1.3 tokens/word
+        // Words-to-tokens ratio for medical text with markdown/tables/callouts ≈ 1.4 tokens/word
         // Allow headroom for additions (differential tables, STOP & THINK, etc.)
-        const restructureTokens = Math.min(128000, Math.max(16000, Math.round(inputWords * 1.1 * 1.3)));
+        const restructureTokens = Math.min(128000, Math.max(16000, Math.round(inputWords * 1.1 * 1.4)));
 
         // ══════════════════════════════════════════════════════
         // Single pass: Restructure the study guide

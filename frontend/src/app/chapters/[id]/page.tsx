@@ -732,6 +732,17 @@ export default function ChapterDetailPage() {
   // Restructure study guide → creates a new chapter with improved content
   const restructureStudyGuide = useCallback(async () => {
     if (!chapter || !chapter.studyGuide) return;
+
+    // Warn for very large guides that may hit token/timeout limits
+    const wordCount = chapter.studyGuide.split(/\s+/).length;
+    if (wordCount > 30000 && !confirm(
+      `This study guide is very large (~${wordCount.toLocaleString()} words). ` +
+      `Restructuring may take 10+ minutes and could time out. ` +
+      `Consider splitting into smaller chapters first.\n\nContinue anyway?`
+    )) {
+      return;
+    }
+
     setRestructuring(true);
     setRestructureMessage("Starting restructure...");
 

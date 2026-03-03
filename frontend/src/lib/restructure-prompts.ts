@@ -160,12 +160,15 @@ This is the MOST IMPORTANT instruction. Content loss during restructuring is UNA
 - All callouts are present
 - All comparison tables are present with all their rows
 
-**OUTPUT LENGTH & STYLE:** The input is ~${inputWordCount.toLocaleString()} words. Your output should be MORE CONDENSED and DIRECT than the input — aim for ~70-85% of the input length. Achieve this by:
+**OUTPUT LENGTH & STYLE:** The input is ~${inputWordCount.toLocaleString()} words. Your output should be SHORTER and MORE FOCUSED — aim for ~65-80% of the input length. Achieve this by:
+- Applying the DEDUPLICATION ZONE RULES strictly (max 2 zones per concept)
 - Merging duplicate Q/A pairs into single comprehensive entries instead of keeping both
 - Making answers direct and to-the-point (no filler phrases, no restating the question)
 - Using tables and bullet points instead of verbose paragraphs
-- Removing redundant explanations while keeping ALL medical facts and data
-- Being concise does NOT mean losing content — every fact, value, and entity must still be present, just expressed more efficiently
+- Keeping Quick-Facts tables to key data only (not restating Q/A content)
+- Making the Cheat Sheet an ultra-condensed index (not a full summary)
+- Making the Checklist a topic tracker (not embedding facts)
+- Being concise does NOT mean losing content — every fact, value, and entity must still be present, just expressed more efficiently and in FEWER places
 
 ═══════════════════════════════════════════════════════
 TASK: RESTRUCTURE & IMPROVE
@@ -195,9 +198,10 @@ TASK: RESTRUCTURE & IMPROVE
    - Add STOP & THINK questions where key concepts lack them
    - Complete comparison tables if entities are missing — add rows, never remove existing ones
    - Re-organize sections if the flow is disrupted
-   - Ensure EVERY major pathology has a Quick-Facts table and Imaging Appearances table
+   - Ensure EVERY major pathology has a Quick-Facts table (KEY DATA ONLY — see deduplication rules) and Imaging Appearances table
    - Ensure ALL sections of the standard structure are present and properly ordered
    - If the input has a rapid-fire/drill section with N questions, the output must have AT LEAST N questions (add more if needed)
+   - Apply DEDUPLICATION ZONE RULES strictly — adding content to one zone means NOT repeating it in other zones
    - **CONSOLIDATED DIFFERENTIAL TABLES (CRITICAL):** For the "📊 Differential Diagnosis Master Tables" section, you MUST generate comprehensive consolidated differential tables — even if the original does NOT have them organized this way. Scan the ENTIRE guide and extract every differential diagnosis point into organized, exam-ready tables. Differentials to consolidate include:
      • "Causes of X" tables (e.g., causes of gallbladder wall thickening, causes of biliary strictures, causes of intrahepatic duct dilatation)
      • Lesion comparison tables (e.g., intravesicular masses: mobility, Doppler, shadow type, size thresholds)
@@ -216,13 +220,55 @@ TASK: RESTRUCTURE & IMPROVE
    - ✅ DO prefer tables and bullets over long paragraphs
 
 ═══════════════════════════════════════════════════════
-HANDLING DUPLICATES & OVERLAPPING CONTENT
+DEDUPLICATION & ZONE RULES (CRITICAL FOR CONCISENESS)
 ═══════════════════════════════════════════════════════
 
-The input may contain the same topic covered multiple times (e.g., two Q/As about Mirizzi syndrome). When this happens:
+🚨 REPETITION IS THE #1 QUALITY PROBLEM in restructured guides. A concept repeated 4-6 times does NOT help learning — it DILUTES attention and creates an illusion of mastery. Follow these rules STRICTLY:
+
+**RULE 1: MAXIMUM 2 ZONES PER CONCEPT**
+Each fact/concept may appear in AT MOST 2 of these zones:
+  - Zone A: **Q/A pairs** (Core Pathologies, Anatomy, etc.) — detailed explanations
+  - Zone B: **Quick-Facts tables** — key data only (numbers, names, 3-5 word descriptions)
+  - Zone C: **Differential/Comparison tables** — side-by-side comparisons
+  - Zone D: **Rapid-Fire** — one-line Q/A drills
+  - Zone E: **Checklist** — checkbox items
+  - Zone F: **Cheat Sheet** — ultra-condensed reference
+
+Allowed combinations (pick ONE):
+  - A + D (detailed Q/A + rapid-fire drill) — most common
+  - A + C (detailed Q/A + comparison table) — for entities that need side-by-side
+  - B + D (quick-facts + rapid-fire) — for simple factual items
+  - A only (for complex concepts that don't reduce well)
+  - D + F (rapid-fire + cheat sheet) — for key numbers/signs
+
+FORBIDDEN: A + B + D + E + F (the same fact in Q/A, quick-facts, rapid-fire, checklist, AND cheat sheet)
+
+**RULE 2: QUICK-FACTS TABLES = KEY DATA ONLY**
+Quick-Facts tables at the top of each pathology subsection must contain ONLY:
+  - Key numbers/thresholds (e.g., ">3 cm", "60-70%")
+  - One-line identifiers (e.g., "Cause #1: Adhérences post-chirurgicales")
+  - Pathognomonic sign NAME (not its description — that goes in the Q/A below)
+Do NOT repeat explanations that appear in the Q/A pairs below. The table is a LOOKUP, not a summary.
+
+**RULE 3: CHEAT SHEET = INDEX, NOT DUPLICATE**
+The Exam-Day Cheat Sheet must be an ULTRA-CONDENSED index (~50% shorter than current). Rules:
+  - Only include items the student is MOST LIKELY to forget under exam pressure
+  - Use "keyword = keyword" format (e.g., "Whirl sign = volvulus")
+  - Do NOT include items already drilled thoroughly in Rapid-Fire
+  - Focus on: emergency actions, easily confused pairs, key numbers, classic traps
+
+**RULE 4: CHECKLIST = TOPIC TRACKER ONLY**
+The Pre-Exam Checklist is a "have I studied this?" tracker, NOT a fact repository. Each item should be a TOPIC REFERENCE, not a fact statement:
+  - ✅ "- [ ] Obstruction simple vs boucle fermée" (topic reference)
+  - ❌ "- [ ] Simple vs boucle fermée (1 vs 3 points transition)" (fact embedded — this belongs in Rapid-Fire)
+
+**RULE 5: NEVER CONVERT Q/A TO NARRATIVE TEXT**
+Every concept that was in Q/A format in the input MUST remain in Q/A format in the output. Q/A format forces active recall; narrative text is passive. The Overview section may use brief narrative for context setting, but must NOT absorb Q/A pairs as prose.
+
+**RULE 6: MERGE INPUT DUPLICATES**
+If the input contains the same topic covered multiple times (e.g., two Q/As about the same syndrome):
 - MERGE into ONE comprehensive Q/A that contains ALL details from BOTH versions
 - Keep the RICHEST version as the base and ADD any unique facts from the other
-- If version A says "Mirizzi = calcul comprimant CHC" and version B adds "plus fréquent avec insertion basse du canal cystique, diagnostic par MRCP, traitement = cholécystectomie + exploration VB", the merged version must include ALL of these details
 - Place the merged Q/A in the most appropriate section
 - NEVER resolve a duplicate by simply deleting one version — always merge first
 
@@ -240,7 +286,7 @@ The order follows a learning-science progression: Learn → Apply → Recognize 
 (Foundation: build the baseline before pathology)
 ---
 ## 📚 Core Pathologies — Systematic Deep Dive
-(### subheading per pathology, each with Quick-Facts table, Imaging table, inline callouts, STOP & THINK, Radiopaedia link)
+(### subheading per pathology, each with Quick-Facts table [KEY DATA ONLY — numbers and names, not explanations], Imaging table, inline callouts, STOP & THINK, Radiopaedia link)
 ---
 ## 🔧 Imaging Protocols & Technique (if applicable)
 (Practical application: what to order and how — applies knowledge from core pathologies)
@@ -255,13 +301,13 @@ The order follows a learning-science progression: Learn → Apply → Recognize 
 (Memory encoding: comes AFTER comparisons so it encodes what was just compared)
 ---
 ## ⚡ High-Yield Rapid-Fire + Active Recall Self-Test
-(MERGED testing section: quick-fire pattern → answer drills + deeper active recall questions together. If the input has separate rapid-fire and self-test sections, MERGE them here. The output must have AT LEAST as many items as the input had across both sections combined)
+(MERGED testing section: quick-fire Q/A drills. This is the PRIMARY drilling zone — concepts tested here should NOT also appear in the Checklist or Cheat Sheet. If the input has separate rapid-fire and self-test sections, MERGE them here. The output must have AT LEAST as many items as the input had across both sections combined)
 ---
 ## 📋 Pre-Exam Rapid Review Checklist
-(Systematic "have I seen everything?" checklist format)
+(TOPIC TRACKER ONLY — each item is a topic reference like "- [ ] Obstruction simple vs boucle fermée", NOT a fact statement. Do NOT embed answers or details — those belong in Rapid-Fire or Q/A sections)
 ---
 ## EXAM-DAY CHEAT SHEET (in code block)
-(Final reference: fits on one screen, the distilled essence)
+(ULTRA-CONDENSED INDEX — only items most likely forgotten under exam pressure. Use "keyword = keyword" format. Do NOT duplicate what is already thoroughly drilled in Rapid-Fire. Focus on: emergency actions, easily confused pairs, key numbers, classic traps. Should be ~50% shorter than a naive summary)
 
 **IMPORTANT:** If the input contains content that does not fit into any of the above sections (e.g., management/treatment details, pediatric pathologies, trauma, complications, special techniques), create an appropriate ### subsection within "Core Pathologies" or add a dedicated ## section. NEVER silently drop content because it doesn't match a predefined section.
 

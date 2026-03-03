@@ -13,33 +13,17 @@ import {
   ArrowRight,
 } from "lucide-react";
 
+import { getAllSystems } from "@/lib/taxonomy";
+
 interface OrganOption {
   key: string;
   label: string;
 }
 
-const PRESET_ORGANS: OrganOption[] = [
-  { key: "esophagus", label: "Esophagus" },
-  { key: "stomach", label: "Stomach" },
-  { key: "small_bowel", label: "Small Bowel" },
-  { key: "colon", label: "Colon & Rectum" },
-  { key: "liver", label: "Liver" },
-  { key: "biliary", label: "Biliary System" },
-  { key: "pancreas", label: "Pancreas" },
-  { key: "spleen", label: "Spleen" },
-  { key: "kidney", label: "Kidney & Adrenal" },
-  { key: "bladder", label: "Bladder & Prostate" },
-  { key: "uterus", label: "Uterus & Ovaries" },
-  { key: "chest", label: "Chest & Lungs" },
-  { key: "heart", label: "Heart & Vessels" },
-  { key: "brain", label: "Brain & Spine" },
-  { key: "msk", label: "MSK" },
-  { key: "breast", label: "Breast" },
-  { key: "head_neck", label: "Head & Neck" },
-  { key: "pediatric", label: "Pediatric" },
-  { key: "nuclear", label: "Nuclear Medicine" },
-  { key: "interventional", label: "Interventional" },
-];
+// Build flat list from taxonomy for backward compatibility
+const PRESET_ORGANS: OrganOption[] = getAllSystems().flatMap((sys) =>
+  sys.organs.map((o) => ({ key: o.key, label: o.label }))
+);
 
 type TransformStatus =
   | null

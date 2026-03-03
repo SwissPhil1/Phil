@@ -21,28 +21,7 @@ interface Chapter {
   };
 }
 
-const ORGAN_LABELS: Record<string, string> = {
-  esophagus: "Esophagus",
-  stomach: "Stomach",
-  small_bowel: "Small Bowel",
-  colon: "Colon & Rectum",
-  liver: "Liver",
-  biliary: "Biliary System",
-  pancreas: "Pancreas",
-  spleen: "Spleen",
-  kidney: "Kidney & Adrenal",
-  bladder: "Bladder & Prostate",
-  uterus: "Uterus & Ovaries",
-  chest: "Chest & Lungs",
-  heart: "Heart & Vessels",
-  brain: "Brain & Spine",
-  msk: "MSK",
-  breast: "Breast",
-  head_neck: "Head & Neck",
-  pediatric: "Pediatric",
-  nuclear: "Nuclear Medicine",
-  interventional: "Interventional",
-};
+import { ORGAN_LABELS } from "@/lib/taxonomy";
 
 function getBookLabel(bookSource: string): string {
   if (bookSource === "core_radiology") return "Core Radiology";

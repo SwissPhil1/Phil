@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { calculateSM2 } from "@/lib/sm2";
+import { calculateSM2, xpForQuality } from "@/lib/sm2";
 import { NextResponse } from "next/server";
 
 export async function POST(request: Request) {
@@ -59,5 +59,6 @@ export async function POST(request: Request) {
   return NextResponse.json({
     ...review,
     nextReviewIn: `${result.interval} day${result.interval !== 1 ? "s" : ""}`,
+    xpEarned: xpForQuality(quality),
   });
 }

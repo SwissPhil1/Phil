@@ -135,6 +135,8 @@ Every medical fact, numeric value, sign, pathology, mnemonic, Radiopaedia link, 
 
 Input stats: ~${qaCount} Q/A pairs, ~${calloutCount} callouts, ~${linkCount} Radiopaedia links, ~${tableCount} table rows.
 
+**ORPHAN FACT PROTECTION (CRITICAL):** Some facts in the input may appear ONLY in the Cheat Sheet, Rapid-Fire, or Aunt Minnie lists WITHOUT a corresponding Q/A in Core Pathologies. These "orphan facts" are the most vulnerable to being lost. For EVERY fact you find that lacks a Q/A anchor, CREATE a new ### Q: / **A:** pair in the appropriate Core Pathologies subsection BEFORE placing it in any reference zone. Examples of commonly orphaned facts: classic Aunt Minnie signs, syndrome associations, specific imaging appearances mentioned only in summary zones.
+
 **RULE 2 — EACH CONCEPT HAS ONE HOME + ONE RECALL MAX**
 This is the anti-repetition rule. Each concept appears in exactly 2 places:
 
@@ -146,14 +148,15 @@ This is the anti-repetition rule. Each concept appears in exactly 2 places:
 What each zone does (and does NOT do):
 - **Quick-Facts table** (top of each pathology): ONLY numbers, names, and 3-word identifiers. NOT a summary of the Q/A below it. Max 5 rows per pathology.
 - **Rapid-Fire**: Reformulated 1-line drills. Do NOT copy-paste from the detailed Q/As — rephrase as a quick-fire question.
-- **Checklist**: Topic tracker ONLY. Format: "- [ ] Topic name" — no facts, no numbers, no explanations embedded.
-- **Cheat Sheet**: Max 30 lines in a code block. Only what you'd forget under exam stress. "keyword = keyword" format.
+- **Checklist**: Topic tracker ONLY. Format: "- [ ] Topic name" — NEVER include numbers, measurements, percentages, or factual statements. ONLY topic names or topic pairs (e.g., "- [ ] Crohn vs TB ileo-caecale"). If you find yourself writing a number or measurement in a checklist item, STOP — that belongs in Rapid-Fire.
+- **Cheat Sheet**: HARD CAP 25 LINES MAXIMUM in the code block (count your lines — if you have more than 25, delete the least critical ones). Only what you'd forget under exam stress. "keyword = keyword" format. Do NOT repeat Rapid-Fire content.
 
 FORBIDDEN: same fact in Q/A + Quick-Facts + Rapid-Fire + Checklist + Cheat Sheet. If it's well-drilled in Rapid-Fire, it does NOT go in Cheat Sheet.
 
 **RULE 3 — PRESERVE FORMAT**
 - Q/A: ### Q: [question] / **A:** [answer]
-- Callouts: > 💡 **PEARL**, > 🔴 **TRAP/PITFALL**, > ⚡ **HIGH YIELD**, > 🧠 **MNEMONIC**, > 🎯 **STOP & THINK**, > ✅ **KEY POINT**
+- Callouts MUST use blockquote prefix: > 💡 **PEARL**, > 🔴 **TRAP/PITFALL**, > ⚡ **HIGH YIELD**, > 🧠 **MNEMONIC**, > 🎯 **STOP & THINK**, > ✅ **KEY POINT**
+  (The > prefix is MANDATORY for correct markdown rendering — never omit it)
 - Markdown tables for Quick-Facts, Imaging, Comparisons, Differentials
 - Radiopaedia links per major pathology: [Radiopaedia: Name](URL)
 - Section separators: ---
@@ -174,6 +177,7 @@ Generate these even if the input doesn't have them organized this way. A student
 - ❌ Write a preamble or commentary
 - ❌ Silently drop content that doesn't fit a section (create a subsection instead)
 - ❌ Expand PEARLs/PITFALLs into paragraphs
+- ❌ Omit the > prefix on callouts
 
 ═══════════════════════════════════════════════════════
 REQUIRED SECTION ORDER
@@ -199,10 +203,12 @@ REQUIRED SECTION ORDER
 (1-line Q/A drills, reformulated — NOT copied from detailed Q/As. At least as many items as the input)
 ---
 ## 📋 Pre-Exam Rapid Review Checklist
-(TOPICS ONLY: "- [ ] Topic name" — no facts embedded)
+(TOPICS ONLY: "- [ ] Topic name" — ZERO numbers, ZERO facts, ZERO measurements. Just topic names)
 ---
-## EXAM-DAY CHEAT SHEET (code block, max 30 lines)
-(keyword = keyword format. Only what you'd forget under exam stress. Do NOT repeat Rapid-Fire content)
+## EXAM-DAY CHEAT SHEET (code block, HARD CAP 25 LINES)
+(keyword = keyword format. Only what you'd forget under exam stress. Do NOT repeat Rapid-Fire content. COUNT your lines — max 25)
+
+If content doesn't fit any section, create a ### subsection in Core Pathologies. NEVER silently drop content.
 
 ═══════════════════════════════════════════════════════
 STUDY GUIDE TO RESTRUCTURE (~${inputWordCount.toLocaleString()} words)
@@ -212,7 +218,7 @@ ${studyGuide}
 
 ═══════════════════════════════════════════════════════
 
-Restructure the guide above following the 5 rules. Preserve every fact. Each concept in max 2 zones. Output raw markdown only — no preamble, no code fences.`;
+Restructure the guide above following the 5 rules. Preserve every fact — especially orphan facts that lack Q/A anchors. Each concept in max 2 zones. Output raw markdown only — no preamble, no code fences.`;
 }
 
 // ── Step 3: Verify completeness of restructured guide against fact list ──────

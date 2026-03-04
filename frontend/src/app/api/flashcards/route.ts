@@ -227,6 +227,15 @@ export async function GET(request: Request) {
   }
 
   // ── mode=all: all flashcards for a chapter ──
+  const hasImage = searchParams.get("hasImage");
+  if (hasImage === "true") {
+    where.imageUrl = { not: null };
+  }
+  const categoryFilter = searchParams.get("category");
+  if (categoryFilter) {
+    where.category = categoryFilter;
+  }
+
   const flashcards = await prisma.flashcard.findMany({
     where,
     take: limit,

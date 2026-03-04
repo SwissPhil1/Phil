@@ -11,10 +11,10 @@ import {
   Loader2,
   CheckCircle,
   Trash2,
-  RefreshCw,
   ImageIcon,
   Layers,
   X,
+  Plus,
 } from "lucide-react";
 import {
   getAllSystems,
@@ -22,15 +22,6 @@ import {
 } from "@/lib/taxonomy";
 
 // ── Types ────────────────────────────────────────────────────────────────────
-
-interface GeneratedCard {
-  front: string;
-  back: string;
-  findings: string[];
-  imageDataUri: string;
-  fileName: string;
-  included: boolean;
-}
 
 interface GalleryCard {
   id: number;
@@ -42,7 +33,6 @@ interface GalleryCard {
 }
 
 type PageTab = "upload" | "gallery";
-type UploadPhase = "config" | "analyzing" | "review" | "saving" | "done";
 
 const MODALITIES = [
   { key: "xr", label: "RX" },
@@ -74,8 +64,8 @@ export default function ImageCasesPage() {
           onClick={() => setTab("upload")}
           className="gap-2"
         >
-          <Upload className="h-4 w-4" />
-          Uploader
+          <Plus className="h-4 w-4" />
+          Ajouter
         </Button>
         <Button
           variant={tab === "gallery" ? "default" : "ghost"}
@@ -94,118 +84,56 @@ export default function ImageCasesPage() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// UPLOAD TAB
+// UPLOAD TAB — Direct: drop image, type Q&A, save
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function UploadTab() {
   const systems = useMemo(() => getAllSystems(), []);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Config state
+  // Form state
   const [selectedSystem, setSelectedSystem] = useState<string | null>(null);
   const [selectedOrgan, setSelectedOrgan] = useState<string | null>(null);
-  const [modality, setModality] = useState<string>("xr");
-  const [context, setContext] = useState("");
-  const [files, setFiles] = useState<File[]>([]);
-  const [previews, setPreviews] = useState<string[]>([]);
+  const [modality, setModality] = useState<string>("ct");
+  const [preview, setPreview] = useState<string | null>(null);
+  const [front, setFront] = useState("");
+  const [back, setBack] = useState("");
 
-  // Flow state
-  const [phase, setPhase] = useState<UploadPhase>("config");
-  const [cards, setCards] = useState<GeneratedCard[]>([]);
-  const [savedCount, setSavedCount] = useState(0);
-  const [savedChapterId, setSavedChapterId] = useState<number | null>(null);
+  // Save state
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [savedTotal, setSavedTotal] = useState(0);
 
   // ── File handling ──────────────────────────────────────────────────────
 
-  const handleFiles = useCallback((newFiles: FileList | File[]) => {
-    const valid = Array.from(newFiles).filter(
-      (f) => f.type.startsWith("image/") && f.size <= 5 * 1024 * 1024
-    );
-    setFiles((prev) => [...prev, ...valid]);
-
-    // Generate previews
-    for (const f of valid) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        setPreviews((prev) => [...prev, e.target?.result as string]);
-      };
-      reader.readAsDataURL(f);
-    }
-  }, []);
-
-  const removeFile = useCallback((index: number) => {
-    setFiles((prev) => prev.filter((_, i) => i !== index));
-    setPreviews((prev) => prev.filter((_, i) => i !== index));
+  const handleFile = useCallback((file: File) => {
+    if (!file.type.startsWith("image/") || file.size > 5 * 1024 * 1024) return;
+    const reader = new FileReader();
+    reader.onload = (e) => setPreview(e.target?.result as string);
+    reader.readAsDataURL(file);
   }, []);
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
-      handleFiles(e.dataTransfer.files);
+      const file = e.dataTransfer.files[0];
+      if (file) handleFile(file);
     },
-    [handleFiles]
+    [handleFile]
   );
 
-  // ── Analyze ────────────────────────────────────────────────────────────
-
-  const handleAnalyze = useCallback(async () => {
-    if (!selectedOrgan || files.length === 0) return;
-    setPhase("analyzing");
-    setError(null);
-    setCards([]);
-
-    try {
-      const formData = new FormData();
-      for (const file of files) {
-        formData.append("images", file);
-      }
-      formData.append("organ", selectedOrgan);
-      formData.append("modality", modality);
-      formData.append("language", "fr");
-      if (context.trim()) formData.append("context", context.trim());
-
-      const res = await fetch("/api/analyze-image", {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || `Error ${res.status}`);
-      }
-
-      const data = await res.json();
-      const allCards: GeneratedCard[] = [];
-
-      for (const result of data.results) {
-        for (const card of result.cards) {
-          allCards.push({
-            front: card.front,
-            back: card.back,
-            findings: card.findings || [],
-            imageDataUri: result.imageDataUri,
-            fileName: result.fileName,
-            included: true,
-          });
-        }
-      }
-
-      setCards(allCards);
-      setPhase("review");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Analysis failed");
-      setPhase("config");
-    }
-  }, [selectedOrgan, files, modality, context]);
+  const clearImage = useCallback(() => {
+    setPreview(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }, []);
 
   // ── Save ───────────────────────────────────────────────────────────────
 
   const handleSave = useCallback(async () => {
-    const toSave = cards.filter((c) => c.included);
-    if (toSave.length === 0) return;
+    if (!selectedOrgan || !preview || !front.trim() || !back.trim()) return;
 
-    setPhase("saving");
+    setSaving(true);
     setError(null);
 
     try {
@@ -215,11 +143,7 @@ function UploadTab() {
         body: JSON.stringify({
           organ: selectedOrgan,
           modality,
-          cards: toSave.map((c) => ({
-            front: c.front,
-            back: c.back,
-            imageDataUri: c.imageDataUri,
-          })),
+          cards: [{ front: front.trim(), back: back.trim(), imageDataUri: preview }],
         }),
       });
 
@@ -228,216 +152,46 @@ function UploadTab() {
         throw new Error(err.error || `Error ${res.status}`);
       }
 
-      const data = await res.json();
-      setSavedCount(data.count);
-      setSavedChapterId(data.chapterId);
-      setPhase("done");
+      // Success — clear form for next card, keep organ/modality
+      setSavedTotal((n) => n + 1);
+      setSaved(true);
+      setPreview(null);
+      setFront("");
+      setBack("");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+
+      // Auto-dismiss success after 2s
+      setTimeout(() => setSaved(false), 2000);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Save failed");
-      setPhase("review");
+      setError(err instanceof Error ? err.message : "Erreur de sauvegarde");
+    } finally {
+      setSaving(false);
     }
-  }, [cards, selectedOrgan, modality]);
+  }, [selectedOrgan, preview, front, back, modality]);
 
-  // ── Reset ──────────────────────────────────────────────────────────────
-
-  const handleReset = useCallback(() => {
-    setPhase("config");
-    setFiles([]);
-    setPreviews([]);
-    setCards([]);
-    setError(null);
-    setSavedCount(0);
-    setSavedChapterId(null);
-  }, []);
-
-  // ── Update card text ──────────────────────────────────────────────────
-
-  const updateCard = useCallback(
-    (index: number, field: "front" | "back", value: string) => {
-      setCards((prev) =>
-        prev.map((c, i) => (i === index ? { ...c, [field]: value } : c))
-      );
-    },
-    []
-  );
-
-  const toggleCard = useCallback((index: number) => {
-    setCards((prev) =>
-      prev.map((c, i) => (i === index ? { ...c, included: !c.included } : c))
-    );
-  }, []);
-
-  const canAnalyze = selectedOrgan && files.length > 0;
-
-  // ═══════════════════════════════════════════════════════════════════════
-  // RENDER: DONE
-  // ═══════════════════════════════════════════════════════════════════════
-
-  if (phase === "done") {
-    return (
-      <Card>
-        <CardContent className="p-8 text-center space-y-4">
-          <CheckCircle className="h-16 w-16 mx-auto text-green-500" />
-          <h2 className="text-2xl font-bold">
-            {savedCount} flashcard{savedCount !== 1 ? "s" : ""} créée
-            {savedCount !== 1 ? "s" : ""} !
-          </h2>
-          <p className="text-muted-foreground">
-            Les cartes sont maintenant dans votre file de révision avec
-            répétition espacée.
-          </p>
-          <div className="flex justify-center gap-3 pt-2">
-            <Link href={`/flashcards?organ=${selectedOrgan}`}>
-              <Button className="gap-2">
-                <Layers className="h-4 w-4" />
-                Réviser
-              </Button>
-            </Link>
-            <Button variant="outline" onClick={handleReset} className="gap-2">
-              <Upload className="h-4 w-4" />
-              Uploader plus
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════
-  // RENDER: REVIEW
-  // ═══════════════════════════════════════════════════════════════════════
-
-  if (phase === "review" || phase === "saving") {
-    const includedCount = cards.filter((c) => c.included).length;
-
-    return (
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-xl font-semibold">
-            Vérifier & modifier ({includedCount} carte
-            {includedCount !== 1 ? "s" : ""})
-          </h2>
-          <div className="flex gap-2">
-            <Button variant="ghost" size="sm" onClick={() => setPhase("config")}>
-              Retour
-            </Button>
-            <Button
-              onClick={handleSave}
-              disabled={phase === "saving" || includedCount === 0}
-              className="gap-2"
-            >
-              {phase === "saving" ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <CheckCircle className="h-4 w-4" />
-              )}
-              Sauvegarder {includedCount} carte{includedCount !== 1 ? "s" : ""}
-            </Button>
-          </div>
-        </div>
-
-        {error && (
-          <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-3 text-sm text-destructive">
-            {error}
-          </div>
-        )}
-
-        {cards.map((card, i) => (
-          <Card
-            key={i}
-            className={card.included ? "" : "opacity-50"}
-          >
-            <CardContent className="p-4">
-              <div className="flex gap-4">
-                {/* Image thumbnail */}
-                {card.imageDataUri && (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={card.imageDataUri}
-                    alt={card.fileName}
-                    className="w-32 h-32 object-cover rounded-lg border flex-shrink-0"
-                  />
-                )}
-                {/* Editable fields */}
-                <div className="flex-1 space-y-3 min-w-0">
-                  <div>
-                    <label className="text-xs font-medium text-muted-foreground">
-                      Question (front)
-                    </label>
-                    <textarea
-                      className="w-full mt-1 p-2 text-sm border rounded-md bg-background resize-y min-h-[60px]"
-                      value={card.front}
-                      onChange={(e) => updateCard(i, "front", e.target.value)}
-                      disabled={!card.included}
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium text-muted-foreground">
-                      Réponse (back)
-                    </label>
-                    <textarea
-                      className="w-full mt-1 p-2 text-sm border rounded-md bg-background resize-y min-h-[100px]"
-                      value={card.back}
-                      onChange={(e) => updateCard(i, "back", e.target.value)}
-                      disabled={!card.included}
-                    />
-                  </div>
-                  {card.findings.length > 0 && (
-                    <div className="flex flex-wrap gap-1">
-                      {card.findings.map((f, j) => (
-                        <Badge key={j} variant="secondary" className="text-xs">
-                          {f}
-                        </Badge>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                {/* Toggle include */}
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => toggleCard(i)}
-                  className="flex-shrink-0"
-                  title={card.included ? "Exclure" : "Inclure"}
-                >
-                  {card.included ? (
-                    <Trash2 className="h-4 w-4 text-destructive" />
-                  ) : (
-                    <RefreshCw className="h-4 w-4 text-muted-foreground" />
-                  )}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-
-        {/* Bottom save button */}
-        {cards.length > 3 && (
-          <div className="flex justify-end">
-            <Button
-              onClick={handleSave}
-              disabled={phase === "saving" || includedCount === 0}
-              className="gap-2"
-            >
-              {phase === "saving" ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <CheckCircle className="h-4 w-4" />
-              )}
-              Sauvegarder {includedCount} carte{includedCount !== 1 ? "s" : ""}
-            </Button>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════
-  // RENDER: CONFIG (upload form)
-  // ═══════════════════════════════════════════════════════════════════════
+  const canSave = selectedOrgan && preview && front.trim() && back.trim() && !saving;
 
   return (
     <div className="space-y-4">
+      {/* Saved counter */}
+      {savedTotal > 0 && (
+        <div className="flex items-center gap-2 text-sm text-green-600">
+          <CheckCircle className="h-4 w-4" />
+          {savedTotal} carte{savedTotal !== 1 ? "s" : ""} ajoutée{savedTotal !== 1 ? "s" : ""} cette session
+          <Link href={`/flashcards${selectedOrgan ? `?organ=${selectedOrgan}` : ""}`} className="ml-auto text-xs underline">
+            Réviser
+          </Link>
+        </div>
+      )}
+
+      {/* Success flash */}
+      {saved && (
+        <div className="bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 rounded-lg p-3 text-sm text-green-700 dark:text-green-400 flex items-center gap-2">
+          <CheckCircle className="h-4 w-4" />
+          Sauvegardée ! Ajoutez la prochaine image.
+        </div>
+      )}
+
       {/* Organ selector */}
       <Card>
         <CardContent className="p-4 space-y-3">
@@ -496,74 +250,71 @@ function UploadTab() {
         </CardContent>
       </Card>
 
-      {/* Clinical context */}
+      {/* Image + Q&A form */}
       <Card>
-        <CardContent className="p-4 space-y-2">
-          <div className="text-sm font-medium">
-            Contexte clinique{" "}
-            <span className="text-muted-foreground font-normal">(optionnel)</span>
-          </div>
-          <input
-            type="text"
-            className="w-full p-2 text-sm border rounded-md bg-background"
-            placeholder="Ex: Patient de 70 ans, fumeur, toux persistante..."
-            value={context}
-            onChange={(e) => setContext(e.target.value)}
-          />
-        </CardContent>
-      </Card>
-
-      {/* Image drop zone */}
-      <Card>
-        <CardContent className="p-4 space-y-3">
-          <div className="text-sm font-medium">Images</div>
-          <div
-            className="border-2 border-dashed rounded-lg p-8 text-center cursor-pointer hover:border-primary/50 transition-colors"
-            onDrop={handleDrop}
-            onDragOver={(e) => e.preventDefault()}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <Upload className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
-            <p className="text-sm text-muted-foreground">
-              Glissez-déposez des images ici ou cliquez pour parcourir
-            </p>
-            <p className="text-xs text-muted-foreground mt-1">
-              JPEG, PNG, WebP — max 5MB par image
-            </p>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              multiple
-              className="hidden"
-              onChange={(e) => e.target.files && handleFiles(e.target.files)}
-            />
-          </div>
-
-          {/* Thumbnails */}
-          {previews.length > 0 && (
-            <div className="flex flex-wrap gap-2">
-              {previews.map((src, i) => (
-                <div key={i} className="relative group">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={src}
-                    alt={files[i]?.name || `Image ${i + 1}`}
-                    className="w-20 h-20 object-cover rounded-lg border"
-                  />
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      removeFile(i);
-                    }}
-                    className="absolute -top-1 -right-1 bg-destructive text-destructive-foreground rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </div>
-              ))}
+        <CardContent className="p-4 space-y-4">
+          {/* Drop zone / preview */}
+          {preview ? (
+            <div className="relative">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={preview}
+                alt="Image uploadée"
+                className="w-full max-h-64 object-contain rounded-lg border"
+              />
+              <button
+                onClick={clearImage}
+                className="absolute top-2 right-2 bg-destructive text-destructive-foreground rounded-full p-1 hover:opacity-80"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          ) : (
+            <div
+              className="border-2 border-dashed rounded-lg p-8 text-center cursor-pointer hover:border-primary/50 transition-colors"
+              onDrop={handleDrop}
+              onDragOver={(e) => e.preventDefault()}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <Upload className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">
+                Glissez une image ou cliquez pour parcourir
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                JPEG, PNG, WebP — max 5MB
+              </p>
             </div>
           )}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) handleFile(file);
+            }}
+          />
+
+          {/* Front / Back text */}
+          <div>
+            <label className="text-sm font-medium">Question (front)</label>
+            <textarea
+              className="w-full mt-1 p-2 text-sm border rounded-md bg-background resize-y min-h-[60px]"
+              placeholder="Ex: Quels sont les signes sur ce scanner abdominal ?"
+              value={front}
+              onChange={(e) => setFront(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="text-sm font-medium">Réponse (back)</label>
+            <textarea
+              className="w-full mt-1 p-2 text-sm border rounded-md bg-background resize-y min-h-[100px]"
+              placeholder="Ex: Masse hépatique hypervascularisée au temps artériel avec wash-out au temps portal — HCC typique."
+              value={back}
+              onChange={(e) => setBack(e.target.value)}
+            />
+          </div>
         </CardContent>
       </Card>
 
@@ -573,24 +324,19 @@ function UploadTab() {
         </div>
       )}
 
-      {/* Analyze button */}
+      {/* Save button */}
       <Button
         size="lg"
         className="w-full gap-2"
-        onClick={handleAnalyze}
-        disabled={!canAnalyze || phase === "analyzing"}
+        onClick={handleSave}
+        disabled={!canSave}
       >
-        {phase === "analyzing" ? (
-          <>
-            <Loader2 className="h-5 w-5 animate-spin" />
-            Analyse en cours...
-          </>
+        {saving ? (
+          <Loader2 className="h-5 w-5 animate-spin" />
         ) : (
-          <>
-            <ScanEye className="h-5 w-5" />
-            Analyser {files.length} image{files.length !== 1 ? "s" : ""}
-          </>
+          <CheckCircle className="h-5 w-5" />
         )}
+        Sauvegarder
       </Button>
     </div>
   );
@@ -632,15 +378,6 @@ function GalleryTab() {
       setLoading(false);
     }
   }, [filterOrgan, filterModality]);
-
-  // Load on first render and when filters change
-  const handleFilter = useCallback(
-    (organ: string, mod: string) => {
-      setFilterOrgan(organ);
-      setFilterModality(mod);
-    },
-    []
-  );
 
   // Start editing
   const startEdit = useCallback((card: GalleryCard) => {
@@ -702,7 +439,7 @@ function GalleryTab() {
               {systems.flatMap((sys) =>
                 sys.organs.map((o) => (
                   <option key={o.key} value={o.key}>
-                    {sys.label} → {o.label}
+                    {sys.label} &rarr; {o.label}
                   </option>
                 ))
               )}
@@ -738,7 +475,7 @@ function GalleryTab() {
         <div className="text-center py-12 text-muted-foreground">
           <ImageIcon className="h-12 w-12 mx-auto mb-3 opacity-50" />
           <p>Aucune image flashcard trouvée.</p>
-          <p className="text-sm mt-1">Uploadez des images dans l&apos;onglet &quot;Uploader&quot; pour commencer.</p>
+          <p className="text-sm mt-1">Ajoutez des images dans l&apos;onglet &quot;Ajouter&quot; pour commencer.</p>
         </div>
       )}
 

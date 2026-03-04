@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useMemo } from "react";
+import { useState, useCallback, useRef, useMemo, useEffect } from "react";
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -127,6 +127,25 @@ function UploadTab() {
     setPreview(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
   }, []);
+
+  // ── Paste from clipboard (Ctrl+V / Cmd+V) ─────────────────────────────
+
+  useEffect(() => {
+    const handlePaste = (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (const item of Array.from(items)) {
+        if (item.type.startsWith("image/")) {
+          e.preventDefault();
+          const file = item.getAsFile();
+          if (file) handleFile(file);
+          return;
+        }
+      }
+    };
+    window.addEventListener("paste", handlePaste);
+    return () => window.removeEventListener("paste", handlePaste);
+  }, [handleFile]);
 
   // ── Save ───────────────────────────────────────────────────────────────
 
@@ -278,7 +297,7 @@ function UploadTab() {
             >
               <Upload className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
               <p className="text-sm text-muted-foreground">
-                Glissez une image ou cliquez pour parcourir
+                Collez (Ctrl+V), glissez, ou cliquez pour parcourir
               </p>
               <p className="text-xs text-muted-foreground mt-1">
                 JPEG, PNG, WebP — max 5MB

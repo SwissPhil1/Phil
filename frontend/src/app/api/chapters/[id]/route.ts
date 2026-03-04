@@ -85,7 +85,7 @@ export async function GET(
   });
 }
 
-// ── Rename chapter ──────────────────────────────────────────────────
+// ── Update chapter (title and/or organ) ─────────────────────────────
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -97,9 +97,10 @@ export async function PATCH(
   }
 
   const body = await request.json();
-  const { title } = body;
-  if (!title || typeof title !== "string" || !title.trim()) {
-    return NextResponse.json({ error: "Title is required" }, { status: 400 });
+  const { title, organ } = body;
+
+  if (!title && organ === undefined) {
+    return NextResponse.json({ error: "At least title or organ is required" }, { status: 400 });
   }
 
   const chapter = await prisma.chapter.findUnique({ where: { id: chapterId } });
@@ -107,9 +108,17 @@ export async function PATCH(
     return NextResponse.json({ error: "Chapter not found" }, { status: 404 });
   }
 
+  const data: Record<string, string> = {};
+  if (title && typeof title === "string" && title.trim()) {
+    data.title = title.trim();
+  }
+  if (organ !== undefined) {
+    data.organ = typeof organ === "string" ? organ.trim() : organ;
+  }
+
   const updated = await prisma.chapter.update({
     where: { id: chapterId },
-    data: { title: title.trim() },
+    data,
   });
 
   return NextResponse.json(updated);

@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { BookOpen, Brain, Layers, Pencil, Trash2, Check, X, MoreVertical } from "lucide-react";
+import { BookOpen, Brain, Layers, Pencil, Trash2, Check, X, MoreVertical, FolderInput } from "lucide-react";
 import { useEffect, useState, useCallback, useMemo, Suspense } from "react";
 import {
   ORGAN_LABELS,
@@ -56,6 +56,7 @@ function ChaptersContent() {
   const [editTitle, setEditTitle] = useState("");
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [menuOpenId, setMenuOpenId] = useState<number | null>(null);
+  const [assigningOrganId, setAssigningOrganId] = useState<number | null>(null);
 
   const systems = useMemo(() => getAllSystems(), []);
 
@@ -99,6 +100,26 @@ function ChaptersContent() {
       }
     } catch (e) { console.error(e); }
   };
+
+  const assignOrgan = async (id: number, organ: string) => {
+    try {
+      const res = await fetch(`/api/chapters/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ organ }),
+      });
+      if (res.ok) {
+        setChapters((prev) => prev.map((ch) => ch.id === id ? { ...ch, organ } : ch));
+        setAssigningOrganId(null);
+      }
+    } catch (e) { console.error(e); }
+  };
+
+  // Build flat organ list for the organ picker
+  const allOrgans = useMemo(() =>
+    systems.flatMap((sys) => sys.organs.map((o) => ({ ...o, system: sys.label }))),
+    [systems]
+  );
 
   // Only show systems that have at least one chapter
   const systemsWithChapters = useMemo(() => {
@@ -199,7 +220,31 @@ function ChaptersContent() {
   const renderChapterCard = (ch: Chapter) => (
     <Card key={ch.id} className="hover:border-primary/50 transition-colors">
       <CardContent className="p-5">
-        {deletingId === ch.id ? (
+        {assigningOrganId === ch.id ? (
+          <div className="space-y-3">
+            <p className="text-sm font-medium">
+              Assigner &quot;{ch.title}&quot; à une section :
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {allOrgans.map((o) => (
+                <button
+                  key={o.key}
+                  onClick={() => assignOrgan(ch.id, o.key)}
+                  className={`px-2.5 py-1 rounded-md border text-xs font-medium transition-colors ${
+                    ch.organ === o.key
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "hover:bg-accent border-border"
+                  }`}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+            <Button size="sm" variant="outline" onClick={() => setAssigningOrganId(null)} className="text-xs">
+              Annuler
+            </Button>
+          </div>
+        ) : deletingId === ch.id ? (
           <div className="flex items-center justify-between">
             <p className="text-sm text-destructive font-medium">
               Supprimer &quot;{ch.title}&quot; et toutes ses questions, flashcards et notes ?
@@ -302,6 +347,17 @@ function ChaptersContent() {
                       >
                         <Pencil className="h-3.5 w-3.5" />
                         Renommer
+                      </button>
+                      <button
+                        className="w-full px-3 py-2 text-sm text-left hover:bg-accent flex items-center gap-2"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          setAssigningOrganId(ch.id);
+                          setMenuOpenId(null);
+                        }}
+                      >
+                        <FolderInput className="h-3.5 w-3.5" />
+                        Changer de section
                       </button>
                       <button
                         className="w-full px-3 py-2 text-sm text-left hover:bg-accent flex items-center gap-2 text-destructive"

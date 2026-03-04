@@ -12,6 +12,7 @@ import {
   Library,
   ClipboardPaste,
   BarChart3,
+  ScanEye,
 } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
@@ -21,6 +22,7 @@ const navItems = [
   { href: "/chapters", label: "Chapters", icon: BookOpen },
   { href: "/quiz", label: "Quiz", icon: Brain },
   { href: "/flashcards", label: "Flashcards", icon: Layers },
+  { href: "/image-cases", label: "Image Cases", icon: ScanEye },
   { href: "/import", label: "Import Notes", icon: ClipboardPaste },
   { href: "/analytics", label: "Analytics", icon: BarChart3 },
   { href: "/ingest", label: "Sources", icon: Library },

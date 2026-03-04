@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Layers, RotateCcw, Trophy, Flame, Star, ArrowLeft,
-  Zap, BookOpen, GraduationCap, Target,
+  Zap, BookOpen, GraduationCap, Target, Pencil, X, Loader2, Trash2,
 } from "lucide-react";
 import { useEffect, useState, useCallback, Suspense, useMemo } from "react";
 import { previewIntervals, formatInterval, xpForQuality, levelFromXp } from "@/lib/sm2";
@@ -120,6 +120,12 @@ function FlashcardsContent() {
   const [totalReviewed, setTotalReviewed] = useState(0);
   const [againIntervals, setAgainIntervals] = useState<number[]>([]);
   const [hardIntervals, setHardIntervals] = useState<number[]>([]);
+
+  // Edit state
+  const [editingCard, setEditingCard] = useState(false);
+  const [editFront, setEditFront] = useState("");
+  const [editBack, setEditBack] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
 
   const systems = useMemo(() => getAllSystems(), []);
 
@@ -271,6 +277,56 @@ function FlashcardsContent() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [flipped, pageState, loading, error, queue.length, handleRate]);
+
+  // ── Edit flashcard ─────────────────────────────────────────────────────
+
+  const startEditCard = useCallback(() => {
+    const card = queue[currentIndex];
+    if (!card) return;
+    setEditFront(card.front);
+    setEditBack(card.back);
+    setEditingCard(true);
+  }, [queue, currentIndex]);
+
+  const saveEditCard = useCallback(async () => {
+    const card = queue[currentIndex];
+    if (!card) return;
+    setEditSaving(true);
+    try {
+      const res = await fetch(`/api/flashcards/${card.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ front: editFront, back: editBack }),
+      });
+      if (res.ok) {
+        // Update in queue
+        setQueue((q) =>
+          q.map((c, i) =>
+            i === currentIndex ? { ...c, front: editFront, back: editBack } : c
+          )
+        );
+        setEditingCard(false);
+      }
+    } catch (err) {
+      console.error("Failed to save edit:", err);
+    } finally {
+      setEditSaving(false);
+    }
+  }, [queue, currentIndex, editFront, editBack]);
+
+  const deleteCurrentCard = useCallback(async () => {
+    const card = queue[currentIndex];
+    if (!card || !confirm("Supprimer cette flashcard ?")) return;
+    try {
+      await fetch(`/api/flashcards/${card.id}`, { method: "DELETE" });
+      setQueue((q) => q.filter((_, i) => i !== currentIndex));
+      setFlipped(false);
+      // If we deleted the last card, go to summary
+      if (queue.length <= 1) setPageState("summary");
+    } catch (err) {
+      console.error("Failed to delete:", err);
+    }
+  }, [queue, currentIndex]);
 
   // ── Helper: new limit change ────────────────────────────────────────────
 
@@ -513,10 +569,15 @@ function FlashcardsContent() {
           <Button variant="ghost" size="sm" className="gap-1" onClick={() => { setPageState("summary"); }}>
             <ArrowLeft className="h-4 w-4" />Terminer
           </Button>
-          <span className="text-sm text-muted-foreground">
-            {totalReviewed + 1} / {uniqueTotal}
-            {card.isNew && <Badge variant="secondary" className="ml-2 text-xs">Nouvelle</Badge>}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground">
+              {totalReviewed + 1} / {uniqueTotal}
+              {card.isNew && <Badge variant="secondary" className="ml-2 text-xs">Nouvelle</Badge>}
+            </span>
+            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={startEditCard} title="Modifier">
+              <Pencil className="h-3.5 w-3.5" />
+            </Button>
+          </div>
         </div>
 
         {/* Progress */}
@@ -594,6 +655,50 @@ function FlashcardsContent() {
             <Button variant="outline" onClick={() => setFlipped(true)}>
               Voir la réponse
             </Button>
+          </div>
+        )}
+
+        {/* Edit modal */}
+        {editingCard && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setEditingCard(false)}>
+            <Card className="w-full max-w-lg mx-4" onClick={(e) => e.stopPropagation()}>
+              <CardContent className="p-6 space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-semibold">Modifier la flashcard</h3>
+                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setEditingCard(false)}>
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-muted-foreground">Question</label>
+                  <textarea
+                    className="w-full mt-1 p-2 text-sm border rounded-md bg-background resize-y min-h-[80px]"
+                    value={editFront}
+                    onChange={(e) => setEditFront(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-muted-foreground">Réponse</label>
+                  <textarea
+                    className="w-full mt-1 p-2 text-sm border rounded-md bg-background resize-y min-h-[120px]"
+                    value={editBack}
+                    onChange={(e) => setEditBack(e.target.value)}
+                  />
+                </div>
+                <div className="flex justify-between">
+                  <Button variant="outline" size="sm" className="text-destructive gap-1" onClick={() => { setEditingCard(false); deleteCurrentCard(); }}>
+                    <Trash2 className="h-3.5 w-3.5" />Supprimer
+                  </Button>
+                  <div className="flex gap-2">
+                    <Button variant="ghost" size="sm" onClick={() => setEditingCard(false)}>Annuler</Button>
+                    <Button size="sm" onClick={saveEditCard} disabled={editSaving} className="gap-1">
+                      {editSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                      Sauvegarder
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
           </div>
         )}
       </div>

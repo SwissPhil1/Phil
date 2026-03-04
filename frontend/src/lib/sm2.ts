@@ -1,13 +1,18 @@
 /**
- * SM-2 Spaced Repetition Algorithm
+ * SM-2 Spaced Repetition Algorithm (Anki-style)
  *
- * Quality ratings:
- * 0 - Complete blackout
- * 1 - Incorrect, but upon seeing the answer, remembered
- * 2 - Incorrect, but the answer seemed easy to recall
- * 3 - Correct with serious difficulty
- * 4 - Correct with some hesitation
- * 5 - Perfect response
+ * Based on Anki's modified SM-2 with per-button interval factors:
+ * - Again (q=0): lapse → reset to 1 day, ease −0.20
+ * - Hard  (q=3): interval × 1.2, ease −0.15
+ * - Good  (q=4): interval × ease, ease unchanged
+ * - Easy  (q=5): interval × ease × 1.3 (easy bonus), ease +0.15
+ *
+ * Learning phase (reps 0-1): fixed graduating steps, no ease changes.
+ * Review phase  (reps 2+):  multiplicative intervals with ease tracking.
+ *
+ * References:
+ *   https://faqs.ankiweb.net/what-spaced-repetition-algorithm
+ *   https://docs.ankiweb.net/deck-options.html
  */
 
 export interface SM2Result {
@@ -17,13 +22,19 @@ export interface SM2Result {
   nextReview: Date;
 }
 
+// Anki-style constants
+const HARD_FACTOR = 1.2;       // Hard interval multiplier
+const EASY_BONUS = 1.3;        // Easy interval bonus multiplier
+const EASY_GRADUATE = 4;       // Days when pressing Easy on a new card
+const GRADUATING_INTERVAL = 6; // Days when graduating from learning (Good)
+const MIN_EASE = 1.3;          // Minimum ease factor (Anki: 130%)
+
 export function calculateSM2(
   quality: number,
   previousEaseFactor: number = 2.5,
-  previousInterval: number = 1,
+  previousInterval: number = 0,
   previousRepetitions: number = 0
 ): SM2Result {
-  // Clamp quality to 0-5
   const q = Math.max(0, Math.min(5, quality));
 
   let easeFactor = previousEaseFactor;
@@ -31,39 +42,65 @@ export function calculateSM2(
   let repetitions: number;
 
   if (q < 3) {
-    // Failed recall - reset
+    // ── Lapse: reset ──
     repetitions = 0;
     interval = 1;
-  } else {
-    // Successful recall
-    repetitions = previousRepetitions + 1;
-
-    if (repetitions === 1) {
-      interval = 1;
-    } else if (repetitions === 2) {
-      interval = 6;
+    // Only penalise ease for graduated cards (Anki: new cards keep starting ease)
+    if (previousRepetitions >= 2) {
+      easeFactor = Math.max(MIN_EASE, easeFactor - 0.2);
+    }
+  } else if (previousRepetitions === 0) {
+    // ── New card: first successful review ──
+    // No ease changes during learning (Anki behaviour)
+    repetitions = 1;
+    if (q === 5) {
+      interval = EASY_GRADUATE; // Easy: skip learning → 4 days
     } else {
-      interval = Math.round(previousInterval * previousEaseFactor);
+      interval = 1;            // Hard & Good: 1 day
+    }
+  } else if (previousRepetitions === 1) {
+    // ── Learning card: graduating review ──
+    // No ease changes during learning
+    repetitions = 2;
+    if (q === 3) {
+      // Hard: modest increase from previous interval
+      interval = Math.max(previousInterval + 1, Math.round(previousInterval * HARD_FACTOR));
+    } else if (q === 5) {
+      // Easy: graduating interval × easy bonus
+      interval = Math.round(GRADUATING_INTERVAL * EASY_BONUS); // ≈ 8 days
+    } else {
+      // Good: standard graduating interval
+      interval = GRADUATING_INTERVAL; // 6 days
+    }
+  } else {
+    // ── Review phase: graduated card ──
+    repetitions = previousRepetitions + 1;
+    if (q === 3) {
+      // Hard: interval × 1.2, ease −0.15
+      interval = Math.max(previousInterval + 1, Math.round(previousInterval * HARD_FACTOR));
+      easeFactor = Math.max(MIN_EASE, easeFactor - 0.15);
+    } else if (q === 5) {
+      // Easy: interval × ease × easy bonus, ease +0.15
+      interval = Math.round(previousInterval * easeFactor * EASY_BONUS);
+      easeFactor = easeFactor + 0.15;
+    } else {
+      // Good: interval × ease, ease unchanged
+      interval = Math.round(previousInterval * easeFactor);
     }
   }
 
-  // Update ease factor
-  easeFactor =
-    previousEaseFactor + (0.1 - (5 - q) * (0.08 + (5 - q) * 0.02));
+  // Anki rule: successful reviews must always advance the interval by ≥ 1 day
+  if (q >= 3 && interval <= previousInterval) {
+    interval = previousInterval + 1;
+  }
 
-  // Minimum ease factor of 1.3
-  easeFactor = Math.max(1.3, easeFactor);
+  // Floor at 1 day
+  interval = Math.max(1, interval);
 
-  // Calculate next review date
   const nextReview = new Date();
   nextReview.setDate(nextReview.getDate() + interval);
 
-  return {
-    easeFactor,
-    interval,
-    repetitions,
-    nextReview,
-  };
+  return { easeFactor, interval, repetitions, nextReview };
 }
 
 /** Label for quality rating */

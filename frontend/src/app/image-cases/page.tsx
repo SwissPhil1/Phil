@@ -128,11 +128,12 @@ function UploadTab() {
     if (fileInputRef.current) fileInputRef.current.value = "";
   }, []);
 
-  // ── Paste from clipboard (Ctrl+V / Cmd+V) ─────────────────────────────
+  // ── Paste from clipboard (Ctrl+V / Cmd+V / long-press paste) ────────────
 
-  useEffect(() => {
-    const handlePaste = (e: ClipboardEvent) => {
-      const items = e.clipboardData?.items;
+  const handlePaste = useCallback(
+    (e: React.ClipboardEvent | ClipboardEvent) => {
+      const items = (e as ClipboardEvent).clipboardData?.items ??
+        (e as React.ClipboardEvent).clipboardData?.items;
       if (!items) return;
       for (const item of Array.from(items)) {
         if (item.type.startsWith("image/")) {
@@ -142,10 +143,16 @@ function UploadTab() {
           return;
         }
       }
-    };
-    window.addEventListener("paste", handlePaste);
-    return () => window.removeEventListener("paste", handlePaste);
-  }, [handleFile]);
+    },
+    [handleFile]
+  );
+
+  // Global listener for desktop (Ctrl+V / Cmd+V when no input focused)
+  useEffect(() => {
+    const listener = (e: ClipboardEvent) => handlePaste(e);
+    window.addEventListener("paste", listener);
+    return () => window.removeEventListener("paste", listener);
+  }, [handlePaste]);
 
   // ── Save ───────────────────────────────────────────────────────────────
 
@@ -289,17 +296,25 @@ function UploadTab() {
               </button>
             </div>
           ) : (
+            /* Paste target: contentEditable so iPad Safari fires paste events here */
             <div
-              className="border-2 border-dashed rounded-lg p-8 text-center cursor-pointer hover:border-primary/50 transition-colors"
+              contentEditable
+              suppressContentEditableWarning
+              className="border-2 border-dashed rounded-lg p-8 text-center cursor-pointer hover:border-primary/50 transition-colors outline-none caret-transparent"
               onDrop={handleDrop}
               onDragOver={(e) => e.preventDefault()}
+              onPaste={handlePaste}
               onClick={() => fileInputRef.current?.click()}
+              onInput={(e) => {
+                // Prevent actual text from being typed into the div
+                (e.target as HTMLElement).textContent = "";
+              }}
             >
-              <Upload className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
-              <p className="text-sm text-muted-foreground">
-                Collez (Ctrl+V), glissez, ou cliquez pour parcourir
+              <Upload className="h-8 w-8 mx-auto mb-2 text-muted-foreground pointer-events-none" />
+              <p className="text-sm text-muted-foreground pointer-events-none">
+                Collez, glissez, ou cliquez pour parcourir
               </p>
-              <p className="text-xs text-muted-foreground mt-1">
+              <p className="text-xs text-muted-foreground mt-1 pointer-events-none">
                 JPEG, PNG, WebP — max 5MB
               </p>
             </div>
@@ -323,6 +338,7 @@ function UploadTab() {
               placeholder="Ex: Quels sont les signes sur ce scanner abdominal ?"
               value={front}
               onChange={(e) => setFront(e.target.value)}
+              onPaste={handlePaste}
             />
           </div>
           <div>
@@ -332,6 +348,7 @@ function UploadTab() {
               placeholder="Ex: Masse hépatique hypervascularisée au temps artériel avec wash-out au temps portal — HCC typique."
               value={back}
               onChange={(e) => setBack(e.target.value)}
+              onPaste={handlePaste}
             />
           </div>
         </CardContent>

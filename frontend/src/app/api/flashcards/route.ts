@@ -70,6 +70,9 @@ export async function GET(request: Request) {
       }
     }
 
+    // reviewDue = old cards needing revision (excludes new cards)
+    const reviewDue = dueCount;
+
     // Due count includes new cards
     dueCount += newCount;
 
@@ -142,7 +145,7 @@ export async function GET(request: Request) {
     }
 
     return NextResponse.json({
-      counts: { new: newCount, learning: learningCount, due: dueCount, mature: matureCount, total: allCards.length },
+      counts: { new: newCount, learning: learningCount, due: dueCount, reviewDue, mature: matureCount, total: allCards.length },
       streak,
       xp: { total: totalXp, today: todayXp },
       newCardsToday,

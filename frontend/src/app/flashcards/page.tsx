@@ -37,7 +37,7 @@ interface Flashcard {
 }
 
 interface Stats {
-  counts: { new: number; learning: number; due: number; mature: number; total: number };
+  counts: { new: number; learning: number; due: number; reviewDue: number; mature: number; total: number };
   streak: number;
   xp: { total: number; today: number };
   newCardsToday: number;
@@ -308,7 +308,7 @@ function FlashcardsContent() {
               {[
                 { label: "Nouvelles", value: stats.counts.new, icon: Star, color: "text-blue-600" },
                 { label: "En apprentissage", value: stats.counts.learning, icon: BookOpen, color: "text-orange-600" },
-                { label: "À réviser", value: stats.counts.due, icon: Target, color: "text-red-600" },
+                { label: "Révisions", value: stats.counts.reviewDue, icon: Target, color: "text-red-600" },
                 { label: "Maîtrisées", value: stats.counts.mature, icon: GraduationCap, color: "text-green-600" },
               ].map((s) => (
                 <Card key={s.label}>
@@ -460,7 +460,7 @@ function FlashcardsContent() {
                 <Layers className="h-5 w-5" />
               )}
               {stats.counts.due > 0
-                ? `Commencer la révision (${stats.counts.due} cartes)`
+                ? `Commencer la révision (${stats.counts.reviewDue} révision${stats.counts.reviewDue !== 1 ? "s" : ""}${Math.min(newLimit - stats.newCardsToday, stats.counts.new) > 0 ? ` + ${Math.min(newLimit - stats.newCardsToday, stats.counts.new)} nouvelle${Math.min(newLimit - stats.newCardsToday, stats.counts.new) !== 1 ? "s" : ""}` : ""})`
                 : "Aucune carte à réviser"}
             </Button>
 

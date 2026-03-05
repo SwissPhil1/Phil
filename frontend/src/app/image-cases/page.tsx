@@ -290,7 +290,7 @@ function UploadTab() {
               />
               <button
                 onClick={clearImage}
-                className="absolute top-2 right-2 bg-destructive text-destructive-foreground rounded-full p-1 hover:opacity-80"
+                className="absolute top-2 right-2 bg-muted text-muted-foreground rounded-full p-1 hover:bg-destructive hover:text-destructive-foreground transition-colors"
               >
                 <X className="h-4 w-4" />
               </button>
@@ -358,6 +358,19 @@ function UploadTab() {
         <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-3 text-sm text-destructive">
           {error}
         </div>
+      )}
+
+      {/* Validation hint */}
+      {!canSave && (preview || front || back) && (
+        <p className="text-xs text-muted-foreground text-center">
+          {!selectedOrgan
+            ? "Sélectionnez un organe/section ci-dessus"
+            : !preview
+            ? "Ajoutez une image"
+            : !front.trim()
+            ? "Ajoutez une question"
+            : "Ajoutez une réponse"}
+        </p>
       )}
 
       {/* Save button */}

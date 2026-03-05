@@ -13,6 +13,7 @@ import {
   getAllSystems,
   getSystemLabel,
   getOrganLabel,
+  type SystemInfo,
 } from "@/lib/taxonomy";
 
 interface Chapter {
@@ -33,6 +34,86 @@ function getBookLabel(bookSource: string): string {
   if (bookSource === "crack_the_core") return "Crack the Core";
   if (bookSource === "notebook_import") return "Imported Notes";
   return bookSource;
+}
+
+// ── Two-level organ assigner: System → Organ ────────────────────────────────
+
+function OrganAssigner({
+  currentOrgan,
+  title,
+  systems,
+  onAssign,
+  onCancel,
+}: {
+  currentOrgan: string | null;
+  title: string;
+  systems: SystemInfo[];
+  onAssign: (organ: string) => void;
+  onCancel: () => void;
+}) {
+  const [pickedSystem, setPickedSystem] = useState<string | null>(
+    // Pre-select the current system if the chapter already has an organ
+    currentOrgan ? ORGAN_TO_SYSTEM[currentOrgan] ?? null : null
+  );
+
+  const currentSystemOrgans = useMemo(() => {
+    if (!pickedSystem) return [];
+    return systems.find((s) => s.key === pickedSystem)?.organs ?? [];
+  }, [pickedSystem, systems]);
+
+  return (
+    <div className="space-y-3">
+      <p className="text-sm font-medium">
+        Assigner &quot;{title}&quot; — choisir le système puis la section :
+      </p>
+
+      {/* Step 1: System buttons */}
+      <div>
+        <p className="text-xs text-muted-foreground mb-1.5">Système :</p>
+        <div className="flex flex-wrap gap-1.5">
+          {systems.map((sys) => (
+            <button
+              key={sys.key}
+              onClick={() => setPickedSystem(sys.key)}
+              className={`px-2.5 py-1 rounded-md border text-xs font-medium transition-colors ${
+                pickedSystem === sys.key
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "hover:bg-accent border-border"
+              }`}
+            >
+              {sys.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Step 2: Organ buttons (shown after system selection) */}
+      {pickedSystem && currentSystemOrgans.length > 0 && (
+        <div>
+          <p className="text-xs text-muted-foreground mb-1.5">Section :</p>
+          <div className="flex flex-wrap gap-1.5 pl-2 border-l-2 border-primary/20">
+            {currentSystemOrgans.map((o) => (
+              <button
+                key={o.key}
+                onClick={() => onAssign(o.key)}
+                className={`px-2.5 py-1 rounded-md border text-xs font-medium transition-colors ${
+                  currentOrgan === o.key
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "hover:bg-accent border-border"
+                }`}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <Button size="sm" variant="outline" onClick={onCancel} className="text-xs">
+        Annuler
+      </Button>
+    </div>
+  );
 }
 
 function ChaptersContent() {
@@ -221,29 +302,13 @@ function ChaptersContent() {
     <Card key={ch.id} className="hover:border-primary/50 transition-colors">
       <CardContent className="p-5">
         {assigningOrganId === ch.id ? (
-          <div className="space-y-3">
-            <p className="text-sm font-medium">
-              Assigner &quot;{ch.title}&quot; à une section :
-            </p>
-            <div className="flex flex-wrap gap-1.5">
-              {allOrgans.map((o) => (
-                <button
-                  key={o.key}
-                  onClick={() => assignOrgan(ch.id, o.key)}
-                  className={`px-2.5 py-1 rounded-md border text-xs font-medium transition-colors ${
-                    ch.organ === o.key
-                      ? "bg-primary text-primary-foreground border-primary"
-                      : "hover:bg-accent border-border"
-                  }`}
-                >
-                  {o.label}
-                </button>
-              ))}
-            </div>
-            <Button size="sm" variant="outline" onClick={() => setAssigningOrganId(null)} className="text-xs">
-              Annuler
-            </Button>
-          </div>
+          <OrganAssigner
+            currentOrgan={ch.organ}
+            title={ch.title}
+            systems={systems}
+            onAssign={(organ) => assignOrgan(ch.id, organ)}
+            onCancel={() => setAssigningOrganId(null)}
+          />
         ) : deletingId === ch.id ? (
           <div className="flex items-center justify-between">
             <p className="text-sm text-destructive font-medium">

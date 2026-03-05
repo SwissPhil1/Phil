@@ -155,7 +155,7 @@ function FlashcardsContent() {
 
   // ── Start review session ────────────────────────────────────────────────
 
-  const startSession = useCallback(() => {
+  const startSession = useCallback((reviewOnly = false) => {
     setLoading(true);
     setError(null);
     setFlipped(false);
@@ -166,7 +166,8 @@ function FlashcardsContent() {
     setAgainIntervals([]);
     setHardIntervals([]);
 
-    let url = `/api/flashcards?mode=due&limit=50&newLimit=${newLimit}`;
+    const effectiveNewLimit = reviewOnly ? 0 : newLimit;
+    let url = `/api/flashcards?mode=due&limit=50&newLimit=${effectiveNewLimit}`;
     if (paramChapterId) url += `&chapterId=${paramChapterId}`;
     else if (selectedOrgan) url += `&organ=${selectedOrgan}`;
     else if (selectedSystem) url += `&system=${selectedSystem}`;
@@ -178,7 +179,9 @@ function FlashcardsContent() {
       })
       .then((cards: Flashcard[]) => {
         if (cards.length === 0) {
-          setError("Aucune carte à réviser ! Revenez plus tard ou générez de nouvelles cartes.");
+          setError(reviewOnly
+            ? "Aucune révision en attente ! Toutes vos cartes sont à jour."
+            : "Aucune carte à réviser ! Revenez plus tard ou générez de nouvelles cartes.");
           setLoading(false);
           return;
         }
@@ -503,22 +506,36 @@ function FlashcardsContent() {
               </Card>
             )}
 
-            {/* Start button */}
-            <Button
-              size="lg"
-              className="w-full gap-2 text-lg py-6"
-              onClick={startSession}
-              disabled={loading || stats.counts.due === 0}
-            >
-              {loading ? (
-                <RotateCcw className="h-5 w-5 animate-spin" />
-              ) : (
-                <Layers className="h-5 w-5" />
+            {/* Start buttons */}
+            <div className="space-y-2">
+              <Button
+                size="lg"
+                className="w-full gap-2 text-lg py-6"
+                onClick={() => startSession(false)}
+                disabled={loading || stats.counts.due === 0}
+              >
+                {loading ? (
+                  <RotateCcw className="h-5 w-5 animate-spin" />
+                ) : (
+                  <Layers className="h-5 w-5" />
+                )}
+                {stats.counts.due > 0
+                  ? `Tout réviser (${stats.counts.reviewDue} révision${stats.counts.reviewDue !== 1 ? "s" : ""}${Math.min(newLimit - stats.newCardsToday, stats.counts.new) > 0 ? ` + ${Math.min(newLimit - stats.newCardsToday, stats.counts.new)} nouvelle${Math.min(newLimit - stats.newCardsToday, stats.counts.new) !== 1 ? "s" : ""}` : ""})`
+                  : "Aucune carte à réviser"}
+              </Button>
+              {stats.counts.reviewDue > 0 && (
+                <Button
+                  size="lg"
+                  variant="outline"
+                  className="w-full gap-2"
+                  onClick={() => startSession(true)}
+                  disabled={loading}
+                >
+                  <RotateCcw className="h-5 w-5" />
+                  Révisions uniquement ({stats.counts.reviewDue})
+                </Button>
               )}
-              {stats.counts.due > 0
-                ? `Commencer la révision (${stats.counts.reviewDue} révision${stats.counts.reviewDue !== 1 ? "s" : ""}${Math.min(newLimit - stats.newCardsToday, stats.counts.new) > 0 ? ` + ${Math.min(newLimit - stats.newCardsToday, stats.counts.new)} nouvelle${Math.min(newLimit - stats.newCardsToday, stats.counts.new) !== 1 ? "s" : ""}` : ""})`
-                : "Aucune carte à réviser"}
-            </Button>
+            </div>
 
             {error && (
               <p className="text-center text-sm text-destructive">{error}</p>
@@ -788,7 +805,7 @@ function FlashcardsContent() {
 
           {/* Actions */}
           <div className="flex justify-center gap-3">
-            <Button onClick={() => { loadStats(); startSession(); }} className="gap-2">
+            <Button onClick={() => { loadStats(); startSession(false); }} className="gap-2">
               <RotateCcw className="h-4 w-4" />Continuer
             </Button>
             <Button

@@ -150,7 +150,7 @@ function ChaptersContent() {
         if (!r.ok) throw new Error(`Failed to load chapters (${r.status})`);
         return r.json();
       })
-      .then(setChapters)
+      .then((data: Chapter[]) => setChapters(data.filter((ch) => ch.bookSource !== "image_cases")))
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load chapters"))
       .finally(() => setLoading(false));
   }, []);

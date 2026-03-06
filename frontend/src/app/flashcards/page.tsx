@@ -26,6 +26,7 @@ interface Flashcard {
   back: string;
   category: string | null;
   imageUrl: string | null;
+  backImageUrl: string | null;
   isNew?: boolean;
   chapter: {
     title: string;
@@ -814,10 +815,13 @@ function FlashcardsContent() {
             {/* Back */}
             <Card className="flip-card-back absolute inset-0">
               <CardContent className="p-8 flex flex-col items-center justify-center min-h-[300px]">
-                {card.imageUrl && (
+                {card.backImageUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={card.backImageUrl} alt="Image réponse" className="rounded-lg border shadow-sm max-h-40 object-contain mb-4" />
+                ) : card.imageUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={card.imageUrl} alt="Image radiologique" className="rounded-lg border shadow-sm max-h-32 object-contain mb-4 opacity-60" />
-                )}
+                ) : null}
                 <p className="text-lg text-center leading-relaxed">{card.back}</p>
               </CardContent>
             </Card>

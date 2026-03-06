@@ -16,7 +16,8 @@ export async function POST(request: Request) {
       cards: Array<{
         front: string;
         back: string;
-        imageDataUri: string;
+        imageDataUri?: string;
+        backImageDataUri?: string;
       }>;
     };
 
@@ -55,7 +56,8 @@ export async function POST(request: Request) {
         front: card.front,
         back: card.back,
         category,
-        imageUrl: card.imageDataUri,
+        imageUrl: card.imageDataUri || null,
+        backImageUrl: card.backImageDataUri || null,
       })),
     });
 

@@ -34,11 +34,15 @@ interface GalleryCard {
 
 type PageTab = "upload" | "gallery";
 
-const MODALITIES = [
+const IMAGE_TYPES = [
   { key: "xr", label: "RX" },
   { key: "ct", label: "CT" },
   { key: "mri", label: "IRM" },
   { key: "us", label: "US" },
+  { key: "diagram", label: "Schéma" },
+  { key: "table", label: "Tableau" },
+  { key: "photo", label: "Photo" },
+  { key: "other", label: "Autre" },
 ] as const;
 
 // ── Main component ──────────────────────────────────────────────────────────
@@ -90,12 +94,14 @@ export default function ImageCasesPage() {
 function UploadTab() {
   const systems = useMemo(() => getAllSystems(), []);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const backFileInputRef = useRef<HTMLInputElement>(null);
 
   // Form state
   const [selectedSystem, setSelectedSystem] = useState<string | null>(null);
   const [selectedOrgan, setSelectedOrgan] = useState<string | null>(null);
-  const [modality, setModality] = useState<string>("ct");
+  const [imageType, setImageType] = useState<string>("ct");
   const [preview, setPreview] = useState<string | null>(null);
+  const [backPreview, setBackPreview] = useState<string | null>(null);
   const [front, setFront] = useState("");
   const [back, setBack] = useState("");
 
@@ -107,10 +113,14 @@ function UploadTab() {
 
   // ── File handling ──────────────────────────────────────────────────────
 
-  const handleFile = useCallback((file: File) => {
+  const handleFile = useCallback((file: File, target: "front" | "back" = "front") => {
     if (!file.type.startsWith("image/") || file.size > 5 * 1024 * 1024) return;
     const reader = new FileReader();
-    reader.onload = (e) => setPreview(e.target?.result as string);
+    reader.onload = (e) => {
+      const dataUri = e.target?.result as string;
+      if (target === "back") setBackPreview(dataUri);
+      else setPreview(dataUri);
+    };
     reader.readAsDataURL(file);
   }, []);
 
@@ -118,7 +128,16 @@ function UploadTab() {
     (e: React.DragEvent) => {
       e.preventDefault();
       const file = e.dataTransfer.files[0];
-      if (file) handleFile(file);
+      if (file) handleFile(file, "front");
+    },
+    [handleFile]
+  );
+
+  const handleBackDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      const file = e.dataTransfer.files[0];
+      if (file) handleFile(file, "back");
     },
     [handleFile]
   );
@@ -128,24 +147,33 @@ function UploadTab() {
     if (fileInputRef.current) fileInputRef.current.value = "";
   }, []);
 
+  const clearBackImage = useCallback(() => {
+    setBackPreview(null);
+    if (backFileInputRef.current) backFileInputRef.current.value = "";
+  }, []);
+
   // ── Paste from clipboard (Ctrl+V / Cmd+V / long-press paste) ────────────
 
-  const handlePaste = useCallback(
-    (e: React.ClipboardEvent | ClipboardEvent) => {
-      const items = (e as ClipboardEvent).clipboardData?.items ??
-        (e as React.ClipboardEvent).clipboardData?.items;
-      if (!items) return;
-      for (const item of Array.from(items)) {
-        if (item.type.startsWith("image/")) {
-          e.preventDefault();
-          const file = item.getAsFile();
-          if (file) handleFile(file);
-          return;
+  const makePasteHandler = useCallback(
+    (target: "front" | "back" = "front") =>
+      (e: React.ClipboardEvent | ClipboardEvent) => {
+        const items = (e as ClipboardEvent).clipboardData?.items ??
+          (e as React.ClipboardEvent).clipboardData?.items;
+        if (!items) return;
+        for (const item of Array.from(items)) {
+          if (item.type.startsWith("image/")) {
+            e.preventDefault();
+            const file = item.getAsFile();
+            if (file) handleFile(file, target);
+            return;
+          }
         }
-      }
-    },
+      },
     [handleFile]
   );
+
+  const handlePaste = useMemo(() => makePasteHandler("front"), [makePasteHandler]);
+  const handleBackPaste = useMemo(() => makePasteHandler("back"), [makePasteHandler]);
 
   // Global listener for desktop (Ctrl+V / Cmd+V when no input focused)
   useEffect(() => {
@@ -157,7 +185,8 @@ function UploadTab() {
   // ── Save ───────────────────────────────────────────────────────────────
 
   const handleSave = useCallback(async () => {
-    if (!selectedOrgan || !preview || !front.trim() || !back.trim()) return;
+    if (!selectedOrgan || !front.trim() || !back.trim()) return;
+    if (!preview && !backPreview) return; // need at least one image
 
     setSaving(true);
     setError(null);
@@ -168,8 +197,13 @@ function UploadTab() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           organ: selectedOrgan,
-          modality,
-          cards: [{ front: front.trim(), back: back.trim(), imageDataUri: preview }],
+          modality: imageType,
+          cards: [{
+            front: front.trim(),
+            back: back.trim(),
+            imageDataUri: preview || undefined,
+            backImageDataUri: backPreview || undefined,
+          }],
         }),
       });
 
@@ -178,13 +212,15 @@ function UploadTab() {
         throw new Error(err.error || `Error ${res.status}`);
       }
 
-      // Success — clear form for next card, keep organ/modality
+      // Success — clear form for next card, keep organ/imageType
       setSavedTotal((n) => n + 1);
       setSaved(true);
       setPreview(null);
+      setBackPreview(null);
       setFront("");
       setBack("");
       if (fileInputRef.current) fileInputRef.current.value = "";
+      if (backFileInputRef.current) backFileInputRef.current.value = "";
 
       // Auto-dismiss success after 2s
       setTimeout(() => setSaved(false), 2000);
@@ -193,9 +229,9 @@ function UploadTab() {
     } finally {
       setSaving(false);
     }
-  }, [selectedOrgan, preview, front, back, modality]);
+  }, [selectedOrgan, preview, backPreview, front, back, imageType]);
 
-  const canSave = selectedOrgan && preview && front.trim() && back.trim() && !saving;
+  const canSave = selectedOrgan && (preview || backPreview) && front.trim() && back.trim() && !saving;
 
   return (
     <div className="space-y-4">
@@ -256,18 +292,17 @@ function UploadTab() {
         </CardContent>
       </Card>
 
-      {/* Modality selector */}
+      {/* Image type selector */}
       <Card>
         <CardContent className="p-4 space-y-3">
-          <div className="text-sm font-medium">Modalité</div>
-          <div className="flex gap-2">
-            {MODALITIES.map((m) => (
+          <div className="text-sm font-medium">Type d&apos;image</div>
+          <div className="flex flex-wrap gap-2">
+            {IMAGE_TYPES.map((m) => (
               <Button
                 key={m.key}
                 size="sm"
-                variant={modality === m.key ? "default" : "outline"}
-                onClick={() => setModality(m.key)}
-                className="min-w-[60px]"
+                variant={imageType === m.key ? "default" : "outline"}
+                onClick={() => setImageType(m.key)}
               >
                 {m.label}
               </Button>
@@ -279,58 +314,54 @@ function UploadTab() {
       {/* Image + Q&A form */}
       <Card>
         <CardContent className="p-4 space-y-4">
-          {/* Drop zone / preview */}
-          {preview ? (
-            <div className="relative">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={preview}
-                alt="Image uploadée"
-                className="w-full max-h-64 object-contain rounded-lg border"
-              />
-              <button
-                onClick={clearImage}
-                className="absolute top-2 right-2 bg-muted text-muted-foreground rounded-full p-1 hover:bg-destructive hover:text-destructive-foreground transition-colors"
+          {/* Front image (question side) */}
+          <div>
+            <label className="text-sm font-medium mb-1.5 block">Image question (front)</label>
+            {preview ? (
+              <div className="relative">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={preview}
+                  alt="Image question"
+                  className="w-full max-h-48 object-contain rounded-lg border"
+                />
+                <button
+                  onClick={clearImage}
+                  className="absolute top-2 right-2 bg-muted text-muted-foreground rounded-full p-1 hover:bg-destructive hover:text-destructive-foreground transition-colors"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            ) : (
+              <div
+                contentEditable
+                suppressContentEditableWarning
+                className="border-2 border-dashed rounded-lg p-6 text-center cursor-pointer hover:border-primary/50 transition-colors outline-none caret-transparent"
+                onDrop={handleDrop}
+                onDragOver={(e) => e.preventDefault()}
+                onPaste={handlePaste}
+                onClick={() => fileInputRef.current?.click()}
+                onInput={(e) => { (e.target as HTMLElement).textContent = ""; }}
               >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-          ) : (
-            /* Paste target: contentEditable so iPad Safari fires paste events here */
-            <div
-              contentEditable
-              suppressContentEditableWarning
-              className="border-2 border-dashed rounded-lg p-8 text-center cursor-pointer hover:border-primary/50 transition-colors outline-none caret-transparent"
-              onDrop={handleDrop}
-              onDragOver={(e) => e.preventDefault()}
-              onPaste={handlePaste}
-              onClick={() => fileInputRef.current?.click()}
-              onInput={(e) => {
-                // Prevent actual text from being typed into the div
-                (e.target as HTMLElement).textContent = "";
+                <Upload className="h-6 w-6 mx-auto mb-1 text-muted-foreground pointer-events-none" />
+                <p className="text-xs text-muted-foreground pointer-events-none">
+                  Collez, glissez, ou cliquez
+                </p>
+              </div>
+            )}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleFile(file, "front");
               }}
-            >
-              <Upload className="h-8 w-8 mx-auto mb-2 text-muted-foreground pointer-events-none" />
-              <p className="text-sm text-muted-foreground pointer-events-none">
-                Collez, glissez, ou cliquez pour parcourir
-              </p>
-              <p className="text-xs text-muted-foreground mt-1 pointer-events-none">
-                JPEG, PNG, WebP — max 5MB
-              </p>
-            </div>
-          )}
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) handleFile(file);
-            }}
-          />
+            />
+          </div>
 
-          {/* Front / Back text */}
+          {/* Front text */}
           <div>
             <label className="text-sm font-medium">Question (front)</label>
             <textarea
@@ -341,6 +372,55 @@ function UploadTab() {
               onPaste={handlePaste}
             />
           </div>
+
+          <div className="border-t pt-4">
+            {/* Back image (answer side) — optional */}
+            <label className="text-sm font-medium mb-1.5 block">Image réponse (back) — optionnelle</label>
+            {backPreview ? (
+              <div className="relative">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={backPreview}
+                  alt="Image réponse"
+                  className="w-full max-h-48 object-contain rounded-lg border"
+                />
+                <button
+                  onClick={clearBackImage}
+                  className="absolute top-2 right-2 bg-muted text-muted-foreground rounded-full p-1 hover:bg-destructive hover:text-destructive-foreground transition-colors"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            ) : (
+              <div
+                contentEditable
+                suppressContentEditableWarning
+                className="border-2 border-dashed rounded-lg p-4 text-center cursor-pointer hover:border-primary/50 transition-colors outline-none caret-transparent"
+                onDrop={handleBackDrop}
+                onDragOver={(e) => e.preventDefault()}
+                onPaste={handleBackPaste}
+                onClick={() => backFileInputRef.current?.click()}
+                onInput={(e) => { (e.target as HTMLElement).textContent = ""; }}
+              >
+                <Upload className="h-5 w-5 mx-auto mb-1 text-muted-foreground pointer-events-none" />
+                <p className="text-xs text-muted-foreground pointer-events-none">
+                  Ajoutez un schéma, diagramme, tableau...
+                </p>
+              </div>
+            )}
+            <input
+              ref={backFileInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleFile(file, "back");
+              }}
+            />
+          </div>
+
+          {/* Back text */}
           <div>
             <label className="text-sm font-medium">Réponse (back)</label>
             <textarea
@@ -348,7 +428,7 @@ function UploadTab() {
               placeholder="Ex: Masse hépatique hypervascularisée au temps artériel avec wash-out au temps portal — HCC typique."
               value={back}
               onChange={(e) => setBack(e.target.value)}
-              onPaste={handlePaste}
+              onPaste={handleBackPaste}
             />
           </div>
         </CardContent>
@@ -361,12 +441,12 @@ function UploadTab() {
       )}
 
       {/* Validation hint */}
-      {!canSave && (preview || front || back) && (
+      {!canSave && (preview || backPreview || front || back) && (
         <p className="text-xs text-muted-foreground text-center">
           {!selectedOrgan
             ? "Sélectionnez un organe/section ci-dessus"
-            : !preview
-            ? "Ajoutez une image"
+            : !preview && !backPreview
+            ? "Ajoutez au moins une image (front ou back)"
             : !front.trim()
             ? "Ajoutez une question"
             : "Ajoutez une réponse"}
@@ -499,7 +579,7 @@ function GalleryTab() {
               onChange={(e) => setFilterModality(e.target.value)}
             >
               <option value="">Toutes modalités</option>
-              {MODALITIES.map((m) => (
+              {IMAGE_TYPES.map((m) => (
                 <option key={m.key} value={m.key}>
                   {m.label}
                 </option>
@@ -566,7 +646,7 @@ function GalleryTab() {
                     )}
                     {mod && (
                       <Badge variant="outline" className="text-xs">
-                        {MODALITIES.find((m) => m.key === mod)?.label || mod}
+                        {IMAGE_TYPES.find((m) => m.key === mod)?.label || mod}
                       </Badge>
                     )}
                   </div>

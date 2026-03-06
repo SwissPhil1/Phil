@@ -63,8 +63,9 @@ model Flashcard {
   front      String
   back       String
   category   String?
-  imageUrl   String?  // URL to radiological image (for image-based flashcards)
-  createdAt  DateTime @default(now())
+  imageUrl      String?  // Image on the front/question side
+  backImageUrl  String?  // Image on the back/answer side
+  createdAt     DateTime @default(now())
 
   reviews FlashcardReview[]
 }

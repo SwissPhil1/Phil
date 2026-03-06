@@ -20,11 +20,12 @@ export async function PATCH(
     }
 
     const body = await request.json();
-    const { front, back, category, imageUrl } = body as {
+    const { front, back, category, imageUrl, backImageUrl } = body as {
       front?: string;
       back?: string;
       category?: string;
       imageUrl?: string | null;
+      backImageUrl?: string | null;
     };
 
     // Build update data — only include fields that were provided
@@ -33,6 +34,7 @@ export async function PATCH(
     if (back !== undefined) data.back = back;
     if (category !== undefined) data.category = category;
     if (imageUrl !== undefined) data.imageUrl = imageUrl;
+    if (backImageUrl !== undefined) data.backImageUrl = backImageUrl;
 
     if (Object.keys(data).length === 0) {
       return NextResponse.json({ error: "No fields to update" }, { status: 400 });

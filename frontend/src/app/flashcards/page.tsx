@@ -36,12 +36,22 @@ interface Flashcard {
   reviews: FlashcardReview[];
 }
 
+interface OrganStat {
+  total: number;
+  mature: number;
+  due: number;
+  new: number;
+}
+
 interface Stats {
   counts: { new: number; learning: number; due: number; reviewDue: number; mature: number; total: number };
   streak: number;
   xp: { total: number; today: number };
   newCardsToday: number;
   organDueCounts: Record<string, number>;
+  organStats: Record<string, OrganStat>;
+  weakestOrgan: string | null;
+  weeklyHistory: { date: string; count: number }[];
 }
 
 interface SessionRatings {
@@ -106,6 +116,7 @@ function FlashcardsContent() {
   const [selectedSystem, setSelectedSystem] = useState<string | null>(paramSystem);
   const [selectedOrgan, setSelectedOrgan] = useState<string | null>(paramOrgan);
   const [newLimit, setNewLimit] = useState(20);
+  const [sessionGoal, setSessionGoal] = useState<number>(50);
 
   // Review state
   const [queue, setQueue] = useState<Flashcard[]>([]);
@@ -155,7 +166,7 @@ function FlashcardsContent() {
 
   // ── Start review session ────────────────────────────────────────────────
 
-  const startSession = useCallback((reviewOnly = false) => {
+  const startSession = useCallback((reviewOnly = false, organOverride?: string) => {
     setLoading(true);
     setError(null);
     setFlipped(false);
@@ -167,9 +178,11 @@ function FlashcardsContent() {
     setHardIntervals([]);
 
     const effectiveNewLimit = reviewOnly ? 0 : newLimit;
-    let url = `/api/flashcards?mode=due&limit=50&newLimit=${effectiveNewLimit}`;
+    const effectiveLimit = sessionGoal === 0 ? 999 : sessionGoal;
+    let url = `/api/flashcards?mode=due&limit=${effectiveLimit}&newLimit=${effectiveNewLimit}`;
+    const organ = organOverride || selectedOrgan;
     if (paramChapterId) url += `&chapterId=${paramChapterId}`;
-    else if (selectedOrgan) url += `&organ=${selectedOrgan}`;
+    else if (organ) url += `&organ=${organ}`;
     else if (selectedSystem) url += `&system=${selectedSystem}`;
 
     fetch(url)
@@ -193,7 +206,7 @@ function FlashcardsContent() {
         setError(err instanceof Error ? err.message : "Erreur de chargement");
         setLoading(false);
       });
-  }, [newLimit, paramChapterId, selectedOrgan, selectedSystem]);
+  }, [newLimit, sessionGoal, paramChapterId, selectedOrgan, selectedSystem]);
 
   // ── Handle rating ───────────────────────────────────────────────────────
 
@@ -344,59 +357,155 @@ function FlashcardsContent() {
 
   if (pageState === "dashboard") {
     const level = stats ? levelFromXp(stats.xp.total) : null;
+    const SESSION_GOALS = [
+      { label: "Rapide", value: 10 },
+      { label: "Normal", value: 50 },
+      { label: "Marathon", value: 0 },
+    ];
+    const maxHistoryBar = stats?.weeklyHistory ? Math.max(...stats.weeklyHistory.map((d) => d.count), 1) : 1;
+    const dayLabels = ["D", "L", "Ma", "Me", "J", "V", "S"];
 
     return (
-      <div className="space-y-6 max-w-2xl mx-auto">
+      <div className="space-y-4 max-w-2xl mx-auto pb-8">
         {/* Header */}
         <div className="flex items-center justify-between">
           <h1 className="text-3xl font-bold">Flashcards</h1>
-          {stats && stats.streak > 0 && (
-            <div className="flex items-center gap-1.5 text-orange-500 font-semibold">
-              <Flame className="h-5 w-5" />
-              <span>{stats.streak}j</span>
-            </div>
-          )}
+          <div className="flex items-center gap-3">
+            {stats && stats.streak > 0 && (
+              <div className="flex items-center gap-1.5 text-orange-500 font-semibold">
+                <Flame className="h-5 w-5" />
+                <span>{stats.streak}j</span>
+              </div>
+            )}
+            {stats && (
+              <div className="flex items-center gap-1 text-yellow-600 text-sm font-medium">
+                <Zap className="h-4 w-4" />
+                <span>+{stats.xp.today}</span>
+              </div>
+            )}
+          </div>
         </div>
 
         {statsLoading ? (
           <Card><CardContent className="p-8"><div className="h-32 animate-pulse bg-muted rounded" /></CardContent></Card>
         ) : stats ? (
           <>
-            {/* Card state counts */}
-            <div className="grid grid-cols-4 gap-3">
+            {/* Card state counts — compact 2x2 on mobile */}
+            <div className="grid grid-cols-4 gap-2">
               {[
                 { label: "Nouvelles", value: stats.counts.new, icon: Star, color: "text-blue-600" },
-                { label: "En apprentissage", value: stats.counts.learning, icon: BookOpen, color: "text-orange-600" },
+                { label: "Apprentissage", value: stats.counts.learning, icon: BookOpen, color: "text-orange-600" },
                 { label: "Révisions", value: stats.counts.reviewDue, icon: Target, color: "text-red-600" },
                 { label: "Maîtrisées", value: stats.counts.mature, icon: GraduationCap, color: "text-green-600" },
               ].map((s) => (
                 <Card key={s.label}>
-                  <CardContent className="p-3 text-center">
-                    <s.icon className={`h-5 w-5 mx-auto mb-1 ${s.color}`} />
-                    <div className="text-2xl font-bold">{s.value}</div>
-                    <div className="text-xs text-muted-foreground">{s.label}</div>
+                  <CardContent className="p-2 text-center">
+                    <s.icon className={`h-4 w-4 mx-auto mb-0.5 ${s.color}`} />
+                    <div className="text-xl font-bold">{s.value}</div>
+                    <div className="text-[10px] text-muted-foreground leading-tight">{s.label}</div>
                   </CardContent>
                 </Card>
               ))}
             </div>
 
-            {/* XP & Level */}
+            {/* Session goal + Start buttons — moved up */}
+            <Card>
+              <CardContent className="p-4 space-y-3">
+                {/* Session goal picker */}
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium">Objectif de session</span>
+                  <div className="flex gap-1">
+                    {SESSION_GOALS.map((g) => (
+                      <Button
+                        key={g.value}
+                        size="sm"
+                        variant={sessionGoal === g.value ? "default" : "outline"}
+                        className="h-7 px-2.5 text-xs"
+                        onClick={() => setSessionGoal(g.value)}
+                      >
+                        {g.label} {g.value > 0 ? `(${g.value})` : "∞"}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Start buttons */}
+                <Button
+                  size="lg"
+                  className="w-full gap-2 text-base py-5"
+                  onClick={() => startSession(false)}
+                  disabled={loading || stats.counts.due === 0}
+                >
+                  {loading ? (
+                    <RotateCcw className="h-5 w-5 animate-spin" />
+                  ) : (
+                    <Layers className="h-5 w-5" />
+                  )}
+                  {stats.counts.due > 0
+                    ? `Réviser (${stats.counts.reviewDue} rév.${Math.min(newLimit - stats.newCardsToday, stats.counts.new) > 0 ? ` + ${Math.min(newLimit - stats.newCardsToday, stats.counts.new)} nouv.` : ""})`
+                    : "Aucune carte à réviser"}
+                </Button>
+                {stats.counts.reviewDue > 0 && (
+                  <Button
+                    variant="outline"
+                    className="w-full gap-2"
+                    onClick={() => startSession(true)}
+                    disabled={loading}
+                  >
+                    <RotateCcw className="h-4 w-4" />
+                    Révisions uniquement ({stats.counts.reviewDue})
+                  </Button>
+                )}
+              </CardContent>
+            </Card>
+
+            {error && (
+              <p className="text-center text-sm text-destructive">{error}</p>
+            )}
+
+            {/* Weakest section suggestion */}
+            {stats.weakestOrgan && stats.organStats[stats.weakestOrgan] && (
+              <Card className="border-orange-200 dark:border-orange-800 bg-orange-50/50 dark:bg-orange-950/20">
+                <CardContent className="p-3 flex items-center justify-between">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Target className="h-4 w-4 text-orange-500 shrink-0" />
+                    <div className="text-sm truncate">
+                      <span className="font-medium">Point faible :</span>{" "}
+                      <span>{getOrganLabel(stats.weakestOrgan)}</span>
+                      <span className="text-muted-foreground ml-1">
+                        ({Math.round((stats.organStats[stats.weakestOrgan].mature / stats.organStats[stats.weakestOrgan].total) * 100)}% maîtrisé)
+                      </span>
+                    </div>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2 text-xs shrink-0 ml-2"
+                    onClick={() => startSession(false, stats.weakestOrgan!)}
+                  >
+                    Travailler
+                  </Button>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* XP & Level — compact */}
             {level && (
               <Card>
-                <CardContent className="p-4">
-                  <div className="flex items-center justify-between mb-2">
+                <CardContent className="p-3">
+                  <div className="flex items-center justify-between mb-1.5">
                     <div className="flex items-center gap-2">
                       <Zap className="h-4 w-4 text-yellow-500" />
-                      <span className="font-semibold">{stats.xp.total.toLocaleString()} XP</span>
-                      <Badge variant="secondary">Niveau {level.level}</Badge>
+                      <span className="text-sm font-semibold">{stats.xp.total.toLocaleString()} XP</span>
+                      <Badge variant="secondary" className="text-xs">Niv. {level.level}</Badge>
                     </div>
                     <span className="text-xs text-muted-foreground">
-                      {level.currentXp}/{level.nextLevelXp} → Niv. {level.level + 1}
+                      {level.currentXp}/{level.nextLevelXp}
                     </span>
                   </div>
-                  <div className="w-full bg-muted rounded-full h-2">
+                  <div className="w-full bg-muted rounded-full h-1.5">
                     <div
-                      className="bg-yellow-500 rounded-full h-2 transition-all"
+                      className="bg-yellow-500 rounded-full h-1.5 transition-all"
                       style={{ width: `${Math.min(100, level.progress * 100)}%` }}
                     />
                   </div>
@@ -404,20 +513,47 @@ function FlashcardsContent() {
               </Card>
             )}
 
-            {/* Streak */}
-            {stats.streak > 0 && (
-              <div className="text-center text-sm text-muted-foreground">
-                {streakMessage(stats.streak)}
-              </div>
+            {/* 7-day review history chart */}
+            {stats.weeklyHistory && stats.weeklyHistory.length > 0 && (
+              <Card>
+                <CardContent className="p-3">
+                  <div className="text-xs font-medium text-muted-foreground mb-2">7 derniers jours</div>
+                  <div className="flex items-end justify-between gap-1 h-16">
+                    {stats.weeklyHistory.map((day, i) => {
+                      const pct = maxHistoryBar > 0 ? (day.count / maxHistoryBar) * 100 : 0;
+                      const dateObj = new Date(day.date.replace(/-/g, "/"));
+                      const dayLabel = dayLabels[dateObj.getDay()];
+                      const isToday = i === stats.weeklyHistory.length - 1;
+                      return (
+                        <div key={day.date} className="flex-1 flex flex-col items-center gap-0.5">
+                          {day.count > 0 && (
+                            <span className="text-[9px] text-muted-foreground">{day.count}</span>
+                          )}
+                          <div className="w-full flex items-end" style={{ height: "40px" }}>
+                            <div
+                              className={`w-full rounded-sm transition-all ${isToday ? "bg-primary" : "bg-primary/40"}`}
+                              style={{ height: `${Math.max(pct, day.count > 0 ? 8 : 2)}%` }}
+                            />
+                          </div>
+                          <span className={`text-[9px] ${isToday ? "font-bold text-primary" : "text-muted-foreground"}`}>
+                            {dayLabel}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </CardContent>
+              </Card>
             )}
 
             {/* System / Organ filter */}
             <Card>
-              <CardContent className="p-4 space-y-3">
+              <CardContent className="p-3 space-y-2">
                 <div className="text-sm font-medium">Filtre</div>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-1.5">
                   <Button
                     size="sm"
+                    className="h-7 text-xs"
                     variant={!selectedSystem ? "default" : "outline"}
                     onClick={() => { setSelectedSystem(null); setSelectedOrgan(null); }}
                   >
@@ -427,6 +563,7 @@ function FlashcardsContent() {
                     <Button
                       key={sys.key}
                       size="sm"
+                      className="h-7 text-xs"
                       variant={selectedSystem === sys.key ? "default" : "outline"}
                       onClick={() => {
                         setSelectedSystem(sys.key);
@@ -438,9 +575,10 @@ function FlashcardsContent() {
                   ))}
                 </div>
                 {selectedSystem && (
-                  <div className="flex flex-wrap gap-2 pl-2 border-l-2 border-primary/20">
+                  <div className="flex flex-wrap gap-1.5 pl-2 border-l-2 border-primary/20">
                     <Button
                       size="sm"
+                      className="h-7 text-xs"
                       variant={!selectedOrgan ? "default" : "outline"}
                       onClick={() => setSelectedOrgan(null)}
                     >
@@ -450,6 +588,7 @@ function FlashcardsContent() {
                       <Button
                         key={o.key}
                         size="sm"
+                        className="h-7 text-xs"
                         variant={selectedOrgan === o.key ? "default" : "outline"}
                         onClick={() => setSelectedOrgan(o.key)}
                       >
@@ -461,13 +600,13 @@ function FlashcardsContent() {
               </CardContent>
             </Card>
 
-            {/* Daily new card limit */}
+            {/* Daily new card limit — compact */}
             <Card>
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-medium">Nouvelles cartes / jour</span>
-                  <span className="text-sm text-muted-foreground">
-                    {stats.newCardsToday}/{newLimit} utilisées aujourd&apos;hui
+              <CardContent className="p-3">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-medium">Nouvelles cartes / jour</span>
+                  <span className="text-xs text-muted-foreground">
+                    {stats.newCardsToday}/{newLimit} aujourd&apos;hui
                   </span>
                 </div>
                 <input
@@ -479,7 +618,7 @@ function FlashcardsContent() {
                   onChange={(e) => handleNewLimitChange(parseInt(e.target.value, 10))}
                   className="w-full accent-primary"
                 />
-                <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                <div className="flex justify-between text-[10px] text-muted-foreground">
                   <span>0</span>
                   <span className="font-medium">{newLimit}</span>
                   <span>50</span>
@@ -487,58 +626,52 @@ function FlashcardsContent() {
               </CardContent>
             </Card>
 
-            {/* Per-organ due counts */}
-            {Object.keys(stats.organDueCounts).length > 0 && (
+            {/* Per-organ breakdown with mastery bars — clickable */}
+            {Object.keys(stats.organStats).length > 0 && (
               <Card>
-                <CardContent className="p-4">
-                  <div className="text-sm font-medium mb-3">Par section</div>
-                  <div className="space-y-2">
-                    {Object.entries(stats.organDueCounts as Record<string, number>)
-                      .sort(([, a], [, b]) => b - a)
-                      .map(([organ, count]) => (
-                        <div key={organ} className="flex items-center justify-between text-sm">
-                          <span>{getOrganLabel(organ)}</span>
-                          <Badge variant="secondary">{count} à réviser</Badge>
-                        </div>
-                      ))}
+                <CardContent className="p-3">
+                  <div className="text-sm font-medium mb-2">Par section</div>
+                  <div className="space-y-1.5">
+                    {Object.entries(stats.organStats)
+                      .sort(([, a], [, b]) => b.due - a.due)
+                      .map(([organ, s]) => {
+                        const masteryPct = s.total > 0 ? Math.round((s.mature / s.total) * 100) : 0;
+                        const isWeak = organ === stats.weakestOrgan;
+                        return (
+                          <button
+                            key={organ}
+                            className={`w-full text-left p-2 rounded-md hover:bg-muted/50 transition-colors ${isWeak ? "ring-1 ring-orange-300 dark:ring-orange-700" : ""}`}
+                            onClick={() => startSession(false, organ)}
+                            title={`Réviser ${getOrganLabel(organ)}`}
+                          >
+                            <div className="flex items-center justify-between text-sm mb-1">
+                              <span className="font-medium truncate">{getOrganLabel(organ)}</span>
+                              <div className="flex items-center gap-2 shrink-0">
+                                {s.due > 0 && (
+                                  <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{s.due} à rév.</Badge>
+                                )}
+                                <span className="text-xs text-muted-foreground w-10 text-right">{masteryPct}%</span>
+                              </div>
+                            </div>
+                            <div className="w-full bg-muted rounded-full h-1.5">
+                              <div
+                                className={`rounded-full h-1.5 transition-all ${masteryPct >= 80 ? "bg-green-500" : masteryPct >= 50 ? "bg-yellow-500" : "bg-orange-500"}`}
+                                style={{ width: `${masteryPct}%` }}
+                              />
+                            </div>
+                          </button>
+                        );
+                      })}
                   </div>
                 </CardContent>
               </Card>
             )}
 
-            {/* Start buttons */}
-            <div className="space-y-2">
-              <Button
-                size="lg"
-                className="w-full gap-2 text-lg py-6"
-                onClick={() => startSession(false)}
-                disabled={loading || stats.counts.due === 0}
-              >
-                {loading ? (
-                  <RotateCcw className="h-5 w-5 animate-spin" />
-                ) : (
-                  <Layers className="h-5 w-5" />
-                )}
-                {stats.counts.due > 0
-                  ? `Tout réviser (${stats.counts.reviewDue} révision${stats.counts.reviewDue !== 1 ? "s" : ""}${Math.min(newLimit - stats.newCardsToday, stats.counts.new) > 0 ? ` + ${Math.min(newLimit - stats.newCardsToday, stats.counts.new)} nouvelle${Math.min(newLimit - stats.newCardsToday, stats.counts.new) !== 1 ? "s" : ""}` : ""})`
-                  : "Aucune carte à réviser"}
-              </Button>
-              {stats.counts.reviewDue > 0 && (
-                <Button
-                  size="lg"
-                  variant="outline"
-                  className="w-full gap-2"
-                  onClick={() => startSession(true)}
-                  disabled={loading}
-                >
-                  <RotateCcw className="h-5 w-5" />
-                  Révisions uniquement ({stats.counts.reviewDue})
-                </Button>
-              )}
-            </div>
-
-            {error && (
-              <p className="text-center text-sm text-destructive">{error}</p>
+            {/* Streak message */}
+            {stats.streak > 0 && (
+              <div className="text-center text-xs text-muted-foreground">
+                {streakMessage(stats.streak)}
+              </div>
             )}
           </>
         ) : null}

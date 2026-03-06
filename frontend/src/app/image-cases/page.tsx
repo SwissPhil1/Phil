@@ -185,8 +185,10 @@ function UploadTab() {
   // ── Save ───────────────────────────────────────────────────────────────
 
   const handleSave = useCallback(async () => {
-    if (!selectedOrgan || !front.trim() || !back.trim()) return;
+    if (!selectedOrgan || !front.trim()) return;
     if (!preview && !backPreview) return; // need at least one image
+    // Back text is optional if there's a back image
+    if (!back.trim() && !backPreview) return;
 
     setSaving(true);
     setError(null);
@@ -200,7 +202,7 @@ function UploadTab() {
           modality: imageType,
           cards: [{
             front: front.trim(),
-            back: back.trim(),
+            back: back.trim() || "(voir image)",
             imageDataUri: preview || undefined,
             backImageDataUri: backPreview || undefined,
           }],
@@ -231,7 +233,8 @@ function UploadTab() {
     }
   }, [selectedOrgan, preview, backPreview, front, back, imageType]);
 
-  const canSave = selectedOrgan && (preview || backPreview) && front.trim() && back.trim() && !saving;
+  // Back text optional if back image provided
+  const canSave = selectedOrgan && (preview || backPreview) && front.trim() && (back.trim() || backPreview) && !saving;
 
   return (
     <div className="space-y-4">
@@ -449,7 +452,9 @@ function UploadTab() {
             ? "Ajoutez au moins une image (front ou back)"
             : !front.trim()
             ? "Ajoutez une question"
-            : "Ajoutez une réponse"}
+            : !back.trim() && !backPreview
+            ? "Ajoutez une réponse (texte ou image)"
+            : ""}
         </p>
       )}
 

@@ -132,17 +132,60 @@ export async function GET(request: Request) {
       },
     });
 
-    // Per-organ due counts for the dashboard breakdown
+    // Per-organ stats for the dashboard breakdown (due, total, mature)
     const organDueCounts: Record<string, number> = {};
+    const organStats: Record<string, { total: number; mature: number; due: number; new: number }> = {};
     for (const card of allCards) {
       const o = card.chapter.organ;
       if (!o) continue;
-      const isDue = card.reviews.length === 0 ||
-        new Date(card.reviews[0].nextReview) <= now;
-      if (isDue) {
+      if (!organStats[o]) organStats[o] = { total: 0, mature: 0, due: 0, new: 0 };
+      organStats[o].total++;
+      if (card.reviews.length === 0) {
+        organStats[o].new++;
+        organStats[o].due++;
         organDueCounts[o] = (organDueCounts[o] || 0) + 1;
+      } else {
+        const r = card.reviews[0];
+        const isDue = new Date(r.nextReview) <= now;
+        if (r.interval >= 90) organStats[o].mature++;
+        if (isDue) {
+          organStats[o].due++;
+          organDueCounts[o] = (organDueCounts[o] || 0) + 1;
+        }
       }
     }
+
+    // Weakest organ: lowest mastery % (mature/total) among organs with ≥5 cards
+    let weakestOrgan: string | null = null;
+    let lowestMastery = Infinity;
+    for (const [o, s] of Object.entries(organStats)) {
+      if (s.total < 5) continue;
+      const mastery = s.mature / s.total;
+      if (mastery < lowestMastery) {
+        lowestMastery = mastery;
+        weakestOrgan = o;
+      }
+    }
+
+    // 7-day review history
+    const sevenDaysAgo = new Date(todayStart);
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+    const recentReviews = await prisma.flashcardReview.findMany({
+      where: { reviewedAt: { gte: sevenDaysAgo } },
+      select: { reviewedAt: true },
+    });
+    const dailyCounts: Record<string, number> = {};
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(todayStart);
+      d.setDate(d.getDate() - (6 - i));
+      dailyCounts[`${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`] = 0;
+    }
+    for (const r of recentReviews) {
+      const d = new Date(r.reviewedAt);
+      const key = `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+      if (dailyCounts[key] !== undefined) dailyCounts[key]++;
+    }
+    const weeklyHistory = Object.entries(dailyCounts).map(([date, count]) => ({ date, count }));
 
     return NextResponse.json({
       counts: { new: newCount, learning: learningCount, due: dueCount, reviewDue, mature: matureCount, total: allCards.length },
@@ -150,6 +193,9 @@ export async function GET(request: Request) {
       xp: { total: totalXp, today: todayXp },
       newCardsToday,
       organDueCounts,
+      organStats,
+      weakestOrgan,
+      weeklyHistory,
     });
   }
 

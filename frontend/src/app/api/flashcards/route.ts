@@ -132,13 +132,13 @@ export async function GET(request: Request) {
       },
     });
 
-    // Per-organ stats for the dashboard breakdown (due, total, mature)
+    // Per-organ stats for the dashboard breakdown
     const organDueCounts: Record<string, number> = {};
-    const organStats: Record<string, { total: number; mature: number; due: number; new: number }> = {};
+    const organStats: Record<string, { total: number; started: number; mature: number; due: number; new: number; progressSum: number }> = {};
     for (const card of allCards) {
       const o = card.chapter.organ;
       if (!o) continue;
-      if (!organStats[o]) organStats[o] = { total: 0, mature: 0, due: 0, new: 0 };
+      if (!organStats[o]) organStats[o] = { total: 0, started: 0, mature: 0, due: 0, new: 0, progressSum: 0 };
       organStats[o].total++;
       if (card.reviews.length === 0) {
         organStats[o].new++;
@@ -146,8 +146,13 @@ export async function GET(request: Request) {
         organDueCounts[o] = (organDueCounts[o] || 0) + 1;
       } else {
         const r = card.reviews[0];
+        organStats[o].started++;
         const isDue = new Date(r.nextReview) <= now;
         if (r.interval >= 90) organStats[o].mature++;
+        // Weighted progress: interval-based (0-100 per card)
+        const interval = r.interval || 0;
+        const progress = interval >= 90 ? 100 : interval >= 21 ? 75 : interval >= 7 ? 50 : 25;
+        organStats[o].progressSum += progress;
         if (isDue) {
           organStats[o].due++;
           organDueCounts[o] = (organDueCounts[o] || 0) + 1;
@@ -155,14 +160,15 @@ export async function GET(request: Request) {
       }
     }
 
-    // Weakest organ: lowest mastery % (mature/total) among organs with ≥5 cards
+    // Weakest organ: lowest progress among organs with ≥5 cards that have been started
     let weakestOrgan: string | null = null;
-    let lowestMastery = Infinity;
+    let lowestProgress = Infinity;
     for (const [o, s] of Object.entries(organStats)) {
       if (s.total < 5) continue;
-      const mastery = s.mature / s.total;
-      if (mastery < lowestMastery) {
-        lowestMastery = mastery;
+      // Progress = average of started cards' progress (0 for unstarted)
+      const avgProgress = s.total > 0 ? s.progressSum / s.total : 0;
+      if (avgProgress < lowestProgress) {
+        lowestProgress = avgProgress;
         weakestOrgan = o;
       }
     }

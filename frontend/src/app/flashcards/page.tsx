@@ -38,9 +38,11 @@ interface Flashcard {
 
 interface OrganStat {
   total: number;
+  started: number;
   mature: number;
   due: number;
   new: number;
+  progressSum: number;
 }
 
 interface Stats {
@@ -358,81 +360,104 @@ function FlashcardsContent() {
   if (pageState === "dashboard") {
     const level = stats ? levelFromXp(stats.xp.total) : null;
     const SESSION_GOALS = [
-      { label: "Rapide", value: 10 },
-      { label: "Normal", value: 50 },
-      { label: "Marathon", value: 0 },
+      { label: "Rapide", value: 10, emoji: "\u26A1" },
+      { label: "Normal", value: 50, emoji: "\uD83D\uDCDA" },
+      { label: "Marathon", value: 0, emoji: "\uD83C\uDFC6" },
     ];
     const maxHistoryBar = stats?.weeklyHistory ? Math.max(...stats.weeklyHistory.map((d) => d.count), 1) : 1;
     const dayLabels = ["D", "L", "Ma", "Me", "J", "V", "S"];
+    const totalCards = stats?.counts.total ?? 0;
+    const overallProgress = stats && totalCards > 0
+      ? Math.round(((stats.counts.mature + stats.counts.learning * 0.3) / totalCards) * 100)
+      : 0;
 
     return (
       <div className="space-y-4 max-w-2xl mx-auto pb-8">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <h1 className="text-3xl font-bold">Flashcards</h1>
-          <div className="flex items-center gap-3">
-            {stats && stats.streak > 0 && (
-              <div className="flex items-center gap-1.5 text-orange-500 font-semibold">
-                <Flame className="h-5 w-5" />
-                <span>{stats.streak}j</span>
-              </div>
-            )}
-            {stats && (
-              <div className="flex items-center gap-1 text-yellow-600 text-sm font-medium">
-                <Zap className="h-4 w-4" />
-                <span>+{stats.xp.today}</span>
-              </div>
-            )}
+        {/* Hero header with gradient */}
+        <div className="rounded-xl bg-gradient-to-br from-blue-600 via-blue-500 to-indigo-600 p-5 text-white shadow-lg">
+          <div className="flex items-center justify-between mb-3">
+            <h1 className="text-2xl font-bold tracking-tight">Flashcards</h1>
+            <div className="flex items-center gap-3">
+              {stats && stats.streak > 0 && (
+                <div className="flex items-center gap-1 bg-white/20 rounded-full px-2.5 py-1 text-sm font-semibold">
+                  <Flame className="h-4 w-4" />
+                  <span>{stats.streak}j</span>
+                </div>
+              )}
+              {level && (
+                <div className="flex items-center gap-1 bg-white/20 rounded-full px-2.5 py-1 text-sm font-semibold">
+                  <Zap className="h-4 w-4" />
+                  <span>Niv. {level.level}</span>
+                </div>
+              )}
+            </div>
           </div>
+
+          {/* Overall progress ring */}
+          {stats && (
+            <div className="flex items-center gap-4">
+              <div className="relative w-16 h-16 shrink-0">
+                <svg className="w-16 h-16 -rotate-90" viewBox="0 0 64 64">
+                  <circle cx="32" cy="32" r="28" fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="5" />
+                  <circle cx="32" cy="32" r="28" fill="none" stroke="white" strokeWidth="5"
+                    strokeDasharray={`${overallProgress * 1.76} 176`}
+                    strokeLinecap="round" />
+                </svg>
+                <div className="absolute inset-0 flex items-center justify-center text-sm font-bold">
+                  {overallProgress}%
+                </div>
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium opacity-90 mb-1">
+                  {stats.xp.total.toLocaleString()} XP total{stats.xp.today > 0 ? ` \u00B7 +${stats.xp.today} aujourd'hui` : ""}
+                </div>
+                <div className="grid grid-cols-4 gap-1.5 text-center">
+                  {[
+                    { v: stats.counts.new, l: "Nouv.", bg: "bg-blue-400/30" },
+                    { v: stats.counts.learning, l: "Apprent.", bg: "bg-orange-400/30" },
+                    { v: stats.counts.reviewDue, l: "R\u00E9vis.", bg: "bg-red-400/30" },
+                    { v: stats.counts.mature, l: "Ma\u00EEtris.", bg: "bg-green-400/30" },
+                  ].map((s) => (
+                    <div key={s.l} className={`${s.bg} rounded-lg py-1`}>
+                      <div className="text-lg font-bold leading-tight">{s.v}</div>
+                      <div className="text-[9px] opacity-80">{s.l}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {statsLoading ? (
           <Card><CardContent className="p-8"><div className="h-32 animate-pulse bg-muted rounded" /></CardContent></Card>
         ) : stats ? (
           <>
-            {/* Card state counts — compact 2x2 on mobile */}
-            <div className="grid grid-cols-4 gap-2">
-              {[
-                { label: "Nouvelles", value: stats.counts.new, icon: Star, color: "text-blue-600" },
-                { label: "Apprentissage", value: stats.counts.learning, icon: BookOpen, color: "text-orange-600" },
-                { label: "Révisions", value: stats.counts.reviewDue, icon: Target, color: "text-red-600" },
-                { label: "Maîtrisées", value: stats.counts.mature, icon: GraduationCap, color: "text-green-600" },
-              ].map((s) => (
-                <Card key={s.label}>
-                  <CardContent className="p-2 text-center">
-                    <s.icon className={`h-4 w-4 mx-auto mb-0.5 ${s.color}`} />
-                    <div className="text-xl font-bold">{s.value}</div>
-                    <div className="text-[10px] text-muted-foreground leading-tight">{s.label}</div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-
-            {/* Session goal + Start buttons — moved up */}
-            <Card>
+            {/* Session goal + Start buttons */}
+            <Card className="shadow-md border-2 border-primary/10">
               <CardContent className="p-4 space-y-3">
-                {/* Session goal picker */}
                 <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium">Objectif de session</span>
-                  <div className="flex gap-1">
+                  <span className="text-sm font-semibold">Objectif</span>
+                  <div className="flex gap-1.5">
                     {SESSION_GOALS.map((g) => (
-                      <Button
+                      <button
                         key={g.value}
-                        size="sm"
-                        variant={sessionGoal === g.value ? "default" : "outline"}
-                        className="h-7 px-2.5 text-xs"
+                        className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                          sessionGoal === g.value
+                            ? "bg-primary text-primary-foreground shadow-sm scale-105"
+                            : "bg-muted hover:bg-muted/80"
+                        }`}
                         onClick={() => setSessionGoal(g.value)}
                       >
-                        {g.label} {g.value > 0 ? `(${g.value})` : "∞"}
-                      </Button>
+                        {g.emoji} {g.value > 0 ? g.value : "\u221E"}
+                      </button>
                     ))}
                   </div>
                 </div>
 
-                {/* Start buttons */}
                 <Button
                   size="lg"
-                  className="w-full gap-2 text-base py-5"
+                  className="w-full gap-2 text-base py-5 shadow-md bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700"
                   onClick={() => startSession(false)}
                   disabled={loading || stats.counts.due === 0}
                 >
@@ -442,8 +467,8 @@ function FlashcardsContent() {
                     <Layers className="h-5 w-5" />
                   )}
                   {stats.counts.due > 0
-                    ? `Réviser (${stats.counts.reviewDue} rév.${Math.min(newLimit - stats.newCardsToday, stats.counts.new) > 0 ? ` + ${Math.min(newLimit - stats.newCardsToday, stats.counts.new)} nouv.` : ""})`
-                    : "Aucune carte à réviser"}
+                    ? `Commencer (${stats.counts.reviewDue} r\u00E9v.${Math.min(newLimit - stats.newCardsToday, stats.counts.new) > 0 ? ` + ${Math.min(newLimit - stats.newCardsToday, stats.counts.new)} nouv.` : ""})`
+                    : "Aucune carte \u00E0 r\u00E9viser"}
                 </Button>
                 {stats.counts.reviewDue > 0 && (
                   <Button
@@ -453,7 +478,7 @@ function FlashcardsContent() {
                     disabled={loading}
                   >
                     <RotateCcw className="h-4 w-4" />
-                    Révisions uniquement ({stats.counts.reviewDue})
+                    R\u00E9visions uniquement ({stats.counts.reviewDue})
                   </Button>
                 )}
               </CardContent>
@@ -464,61 +489,44 @@ function FlashcardsContent() {
             )}
 
             {/* Weakest section suggestion */}
-            {stats.weakestOrgan && stats.organStats[stats.weakestOrgan] && (
-              <Card className="border-orange-200 dark:border-orange-800 bg-orange-50/50 dark:bg-orange-950/20">
-                <CardContent className="p-3 flex items-center justify-between">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <Target className="h-4 w-4 text-orange-500 shrink-0" />
-                    <div className="text-sm truncate">
-                      <span className="font-medium">Point faible :</span>{" "}
-                      <span>{getOrganLabel(stats.weakestOrgan)}</span>
-                      <span className="text-muted-foreground ml-1">
-                        ({Math.round((stats.organStats[stats.weakestOrgan].mature / stats.organStats[stats.weakestOrgan].total) * 100)}% maîtrisé)
-                      </span>
+            {stats.weakestOrgan && stats.organStats[stats.weakestOrgan] && (() => {
+              const ws = stats.organStats[stats.weakestOrgan!];
+              const wPct = ws.total > 0 ? Math.round(ws.progressSum / ws.total) : 0;
+              return (
+                <button
+                  className="w-full text-left rounded-xl border-2 border-orange-200 dark:border-orange-800 bg-gradient-to-r from-orange-50 to-amber-50 dark:from-orange-950/30 dark:to-amber-950/30 p-3 flex items-center justify-between hover:shadow-md transition-shadow"
+                  onClick={() => startSession(false, stats.weakestOrgan!)}
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="w-8 h-8 rounded-full bg-orange-100 dark:bg-orange-900/50 flex items-center justify-center shrink-0">
+                      <Target className="h-4 w-4 text-orange-600" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-xs font-medium text-orange-600 dark:text-orange-400">Point faible</div>
+                      <div className="text-sm font-semibold truncate">{getOrganLabel(stats.weakestOrgan!)}</div>
                     </div>
                   </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-7 px-2 text-xs shrink-0 ml-2"
-                    onClick={() => startSession(false, stats.weakestOrgan!)}
-                  >
-                    Travailler
-                  </Button>
-                </CardContent>
-              </Card>
-            )}
-
-            {/* XP & Level — compact */}
-            {level && (
-              <Card>
-                <CardContent className="p-3">
-                  <div className="flex items-center justify-between mb-1.5">
-                    <div className="flex items-center gap-2">
-                      <Zap className="h-4 w-4 text-yellow-500" />
-                      <span className="text-sm font-semibold">{stats.xp.total.toLocaleString()} XP</span>
-                      <Badge variant="secondary" className="text-xs">Niv. {level.level}</Badge>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-xs text-muted-foreground">{wPct}%</span>
+                    <div className="bg-orange-200 dark:bg-orange-800 text-orange-700 dark:text-orange-200 text-xs font-medium px-2.5 py-1 rounded-full">
+                      Travailler \u2192
                     </div>
-                    <span className="text-xs text-muted-foreground">
-                      {level.currentXp}/{level.nextLevelXp}
-                    </span>
                   </div>
-                  <div className="w-full bg-muted rounded-full h-1.5">
-                    <div
-                      className="bg-yellow-500 rounded-full h-1.5 transition-all"
-                      style={{ width: `${Math.min(100, level.progress * 100)}%` }}
-                    />
-                  </div>
-                </CardContent>
-              </Card>
-            )}
+                </button>
+              );
+            })()}
 
             {/* 7-day review history chart */}
-            {stats.weeklyHistory && stats.weeklyHistory.length > 0 && (
-              <Card>
+            {stats.weeklyHistory && stats.weeklyHistory.some((d) => d.count > 0) && (
+              <Card className="shadow-sm">
                 <CardContent className="p-3">
-                  <div className="text-xs font-medium text-muted-foreground mb-2">7 derniers jours</div>
-                  <div className="flex items-end justify-between gap-1 h-16">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-semibold text-muted-foreground">7 derniers jours</span>
+                    <span className="text-xs text-muted-foreground">
+                      {stats.weeklyHistory.reduce((sum, d) => sum + d.count, 0)} r\u00E9visions
+                    </span>
+                  </div>
+                  <div className="flex items-end justify-between gap-1.5 h-20">
                     {stats.weeklyHistory.map((day, i) => {
                       const pct = maxHistoryBar > 0 ? (day.count / maxHistoryBar) * 100 : 0;
                       const dateObj = new Date(day.date.replace(/-/g, "/"));
@@ -527,15 +535,21 @@ function FlashcardsContent() {
                       return (
                         <div key={day.date} className="flex-1 flex flex-col items-center gap-0.5">
                           {day.count > 0 && (
-                            <span className="text-[9px] text-muted-foreground">{day.count}</span>
+                            <span className="text-[10px] font-medium text-muted-foreground">{day.count}</span>
                           )}
-                          <div className="w-full flex items-end" style={{ height: "40px" }}>
+                          <div className="w-full flex items-end" style={{ height: "48px" }}>
                             <div
-                              className={`w-full rounded-sm transition-all ${isToday ? "bg-primary" : "bg-primary/40"}`}
-                              style={{ height: `${Math.max(pct, day.count > 0 ? 8 : 2)}%` }}
+                              className={`w-full rounded-md transition-all ${
+                                isToday
+                                  ? "bg-gradient-to-t from-blue-600 to-blue-400"
+                                  : day.count > 0
+                                    ? "bg-gradient-to-t from-blue-400/60 to-blue-300/40"
+                                    : "bg-muted/50"
+                              }`}
+                              style={{ height: `${Math.max(pct, day.count > 0 ? 10 : 3)}%` }}
                             />
                           </div>
-                          <span className={`text-[9px] ${isToday ? "font-bold text-primary" : "text-muted-foreground"}`}>
+                          <span className={`text-[10px] ${isToday ? "font-bold text-blue-600" : "text-muted-foreground"}`}>
                             {dayLabel}
                           </span>
                         </div>
@@ -546,10 +560,35 @@ function FlashcardsContent() {
               </Card>
             )}
 
+            {/* XP progress — compact */}
+            {level && (
+              <Card className="shadow-sm">
+                <CardContent className="p-3">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <div className="flex items-center gap-2">
+                      <div className="w-6 h-6 rounded-full bg-yellow-100 dark:bg-yellow-900/30 flex items-center justify-center">
+                        <Zap className="h-3.5 w-3.5 text-yellow-600" />
+                      </div>
+                      <span className="text-sm font-semibold">{stats.xp.total.toLocaleString()} XP</span>
+                    </div>
+                    <span className="text-xs text-muted-foreground">
+                      {level.currentXp}/{level.nextLevelXp} \u2192 Niv. {level.level + 1}
+                    </span>
+                  </div>
+                  <div className="w-full bg-muted rounded-full h-2">
+                    <div
+                      className="bg-gradient-to-r from-yellow-400 to-yellow-500 rounded-full h-2 transition-all"
+                      style={{ width: `${Math.min(100, level.progress * 100)}%` }}
+                    />
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
             {/* System / Organ filter */}
-            <Card>
+            <Card className="shadow-sm">
               <CardContent className="p-3 space-y-2">
-                <div className="text-sm font-medium">Filtre</div>
+                <div className="text-sm font-semibold">Filtre par sp\u00E9cialit\u00E9</div>
                 <div className="flex flex-wrap gap-1.5">
                   <Button
                     size="sm"
@@ -600,8 +639,8 @@ function FlashcardsContent() {
               </CardContent>
             </Card>
 
-            {/* Daily new card limit — compact */}
-            <Card>
+            {/* Daily new card limit */}
+            <Card className="shadow-sm">
               <CardContent className="p-3">
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-xs font-medium">Nouvelles cartes / jour</span>
@@ -626,37 +665,45 @@ function FlashcardsContent() {
               </CardContent>
             </Card>
 
-            {/* Per-organ breakdown with mastery bars — clickable */}
+            {/* Per-organ breakdown with progress bars — clickable */}
             {Object.keys(stats.organStats).length > 0 && (
-              <Card>
+              <Card className="shadow-sm">
                 <CardContent className="p-3">
-                  <div className="text-sm font-medium mb-2">Par section</div>
-                  <div className="space-y-1.5">
+                  <div className="text-sm font-semibold mb-2">Progression par section</div>
+                  <div className="space-y-1">
                     {Object.entries(stats.organStats)
                       .sort(([, a], [, b]) => b.due - a.due)
                       .map(([organ, s]) => {
-                        const masteryPct = s.total > 0 ? Math.round((s.mature / s.total) * 100) : 0;
+                        const progressPct = s.total > 0 ? Math.round(s.progressSum / s.total) : 0;
+                        const startedPct = s.total > 0 ? Math.round((s.started / s.total) * 100) : 0;
                         const isWeak = organ === stats.weakestOrgan;
                         return (
                           <button
                             key={organ}
-                            className={`w-full text-left p-2 rounded-md hover:bg-muted/50 transition-colors ${isWeak ? "ring-1 ring-orange-300 dark:ring-orange-700" : ""}`}
+                            className={`w-full text-left px-2.5 py-2 rounded-lg hover:bg-muted/60 transition-all active:scale-[0.99] ${isWeak ? "ring-1 ring-orange-300 dark:ring-orange-700 bg-orange-50/30 dark:bg-orange-950/10" : ""}`}
                             onClick={() => startSession(false, organ)}
-                            title={`Réviser ${getOrganLabel(organ)}`}
+                            title={`R\u00E9viser ${getOrganLabel(organ)}`}
                           >
                             <div className="flex items-center justify-between text-sm mb-1">
                               <span className="font-medium truncate">{getOrganLabel(organ)}</span>
                               <div className="flex items-center gap-2 shrink-0">
                                 {s.due > 0 && (
-                                  <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{s.due} à rév.</Badge>
+                                  <span className="text-[10px] bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 px-1.5 py-0.5 rounded-full font-medium">{s.due}</span>
                                 )}
-                                <span className="text-xs text-muted-foreground w-10 text-right">{masteryPct}%</span>
+                                <span className="text-xs font-semibold text-muted-foreground w-10 text-right">
+                                  {progressPct > 0 ? `${progressPct}%` : `${startedPct}% vu`}
+                                </span>
                               </div>
                             </div>
-                            <div className="w-full bg-muted rounded-full h-1.5">
+                            <div className="w-full bg-muted rounded-full h-2">
                               <div
-                                className={`rounded-full h-1.5 transition-all ${masteryPct >= 80 ? "bg-green-500" : masteryPct >= 50 ? "bg-yellow-500" : "bg-orange-500"}`}
-                                style={{ width: `${masteryPct}%` }}
+                                className={`rounded-full h-2 transition-all ${
+                                  progressPct >= 75 ? "bg-gradient-to-r from-green-400 to-green-500"
+                                    : progressPct >= 40 ? "bg-gradient-to-r from-yellow-400 to-yellow-500"
+                                    : startedPct > 0 ? "bg-gradient-to-r from-blue-400 to-blue-500"
+                                    : "bg-muted-foreground/20"
+                                }`}
+                                style={{ width: `${Math.max(progressPct, startedPct > 0 ? 3 : 0)}%` }}
                               />
                             </div>
                           </button>

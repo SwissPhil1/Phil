@@ -15,6 +15,10 @@ export async function GET(request: Request) {
   if (chapterId) where.chapterId = parseInt(chapterId, 10);
   if (difficulty) where.difficulty = difficulty;
 
+  // Filter by category (e.g., image_quiz for image-based questions)
+  const category = searchParams.get("category");
+  if (category) where.category = category;
+
   // Filter by organ or system via the chapter relation
   if (organ) {
     where.chapter = { organ };

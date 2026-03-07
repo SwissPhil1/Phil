@@ -15,6 +15,7 @@ import {
   Layers,
   X,
   Plus,
+  Brain,
 } from "lucide-react";
 import {
   getAllSystems,
@@ -49,16 +50,62 @@ const IMAGE_TYPES = [
 
 export default function ImageCasesPage() {
   const [tab, setTab] = useState<PageTab>("upload");
+  const [generating, setGenerating] = useState(false);
+  const [genResult, setGenResult] = useState<string | null>(null);
+
+  const generateQuiz = async () => {
+    setGenerating(true);
+    setGenResult(null);
+    try {
+      const res = await fetch("/api/generate-image-quiz", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ limit: 10 }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Erreur");
+      setGenResult(data.message);
+    } catch (err) {
+      setGenResult(err instanceof Error ? err.message : "Erreur de génération");
+    } finally {
+      setGenerating(false);
+    }
+  };
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-3">
           <ScanEye className="h-7 w-7 text-primary" />
           <h1 className="text-3xl font-bold">Image Cases</h1>
         </div>
+        <Button
+          onClick={generateQuiz}
+          disabled={generating}
+          variant="outline"
+          size="sm"
+          className="gap-2"
+        >
+          {generating ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Brain className="h-4 w-4" />
+          )}
+          {generating ? "Génération..." : "Générer Quiz Images"}
+        </Button>
       </div>
+
+      {/* Quiz generation feedback */}
+      {genResult && (
+        <div className="flex items-center gap-2 text-sm px-3 py-2 rounded-lg bg-muted">
+          <CheckCircle className="h-4 w-4 text-green-600 shrink-0" />
+          <span>{genResult}</span>
+          <button onClick={() => setGenResult(null)} className="ml-auto">
+            <X className="h-3.5 w-3.5 text-muted-foreground" />
+          </button>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-2 border-b pb-2">

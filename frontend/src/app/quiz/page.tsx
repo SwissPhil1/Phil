@@ -11,6 +11,7 @@ import {
   ArrowRight,
   RotateCcw,
   Trophy,
+  ImageIcon,
 } from "lucide-react";
 import { useEffect, useState, useCallback, useMemo, Suspense } from "react";
 import {
@@ -50,6 +51,7 @@ function QuizContent() {
   const [score, setScore] = useState(0);
   const [finished, setFinished] = useState(false);
   const [difficulty, setDifficulty] = useState<string>("all");
+  const [imageOnly, setImageOnly] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // System/organ filter state
@@ -78,6 +80,7 @@ function QuizContent() {
     if (selectedOrgan) url += `&organ=${selectedOrgan}`;
     else if (selectedSystem) url += `&system=${selectedSystem}`;
     if (difficulty !== "all") url += `&difficulty=${difficulty}`;
+    if (imageOnly) url += `&category=image_quiz`;
 
     fetch(url)
       .then((r) => {
@@ -87,7 +90,7 @@ function QuizContent() {
       .then(setQuestions)
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load questions"))
       .finally(() => setLoading(false));
-  }, [chapterId, selectedOrgan, selectedSystem, difficulty]);
+  }, [chapterId, selectedOrgan, selectedSystem, difficulty, imageOnly]);
 
   useEffect(() => {
     loadQuestions();
@@ -298,6 +301,16 @@ function QuizContent() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <h1 className="text-3xl font-bold">Quiz</h1>
         <div className="flex items-center gap-3 flex-wrap">
+          {/* Image only toggle */}
+          <Button
+            variant={imageOnly ? "default" : "outline"}
+            size="sm"
+            onClick={() => setImageOnly(!imageOnly)}
+            className="gap-1.5 text-xs"
+          >
+            <ImageIcon className="h-3.5 w-3.5" />
+            Images
+          </Button>
           {/* Difficulty filter */}
           <div className="flex gap-1">
             {["all", "easy", "medium", "hard"].map((d) => (
@@ -407,7 +420,7 @@ function QuizContent() {
             <img
               src={question.imageUrl}
               alt="Radiological image"
-              className="rounded-lg border shadow-sm max-h-64 object-contain mb-4 mx-auto"
+              className="rounded-lg border shadow-sm max-h-96 object-contain mb-4 mx-auto w-full"
             />
           )}
 

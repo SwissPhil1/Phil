@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const book = searchParams.get("book");
+  const withStats = searchParams.get("stats") === "1";
 
   const where = book ? { bookSource: book } : {};
 
@@ -17,8 +18,50 @@ export async function GET(request: Request) {
           flashcards: true,
         },
       },
+      ...(withStats
+        ? {
+            questions: {
+              select: {
+                id: true,
+                attempts: {
+                  select: { isCorrect: true },
+                  orderBy: { attemptedAt: "desc" as const },
+                  take: 1, // latest attempt per question
+                },
+              },
+            },
+          }
+        : {}),
     },
   });
+
+  if (withStats) {
+    // Compute quiz accuracy per chapter from latest attempts
+    const enriched = chapters.map((ch) => {
+      const questions = (ch as typeof ch & { questions?: { id: number; attempts: { isCorrect: boolean }[] }[] }).questions;
+      let quizAccuracy: number | null = null;
+      let totalAttempted = 0;
+      let totalCorrect = 0;
+
+      if (questions) {
+        for (const q of questions) {
+          if (q.attempts.length > 0) {
+            totalAttempted++;
+            if (q.attempts[0].isCorrect) totalCorrect++;
+          }
+        }
+        if (totalAttempted > 0) {
+          quizAccuracy = Math.round((totalCorrect / totalAttempted) * 100);
+        }
+      }
+
+      // Strip verbose questions from response
+      const { questions: _q, ...rest } = ch as typeof ch & { questions?: unknown };
+      return { ...rest, quizAccuracy, questionsAttempted: totalAttempted };
+    });
+
+    return NextResponse.json(enriched);
+  }
 
   return NextResponse.json(chapters);
 }

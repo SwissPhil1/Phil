@@ -11,8 +11,14 @@ import {
   ArrowRight,
   RotateCcw,
   Trophy,
+  ImageIcon,
 } from "lucide-react";
-import { useEffect, useState, useCallback, Suspense } from "react";
+import { useEffect, useState, useCallback, useMemo, Suspense } from "react";
+import {
+  getAllSystems,
+  ORGAN_TO_SYSTEM,
+  type SystemInfo,
+} from "@/lib/taxonomy";
 
 interface Question {
   id: number;
@@ -27,12 +33,15 @@ interface Question {
     title: string;
     bookSource: string;
     number: number;
+    organ: string | null;
   };
 }
 
 function QuizContent() {
   const searchParams = useSearchParams();
-  const chapterId = searchParams.get("chapterId");
+  const paramChapterId = searchParams.get("chapterId");
+  const paramOrgan = searchParams.get("organ");
+  const paramSystem = searchParams.get("system");
 
   const [questions, setQuestions] = useState<Question[]>([]);
   const [loading, setLoading] = useState(true);
@@ -42,8 +51,20 @@ function QuizContent() {
   const [score, setScore] = useState(0);
   const [finished, setFinished] = useState(false);
   const [difficulty, setDifficulty] = useState<string>("all");
-
+  const [imageOnly, setImageOnly] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // System/organ filter state
+  const [selectedSystem, setSelectedSystem] = useState<string | null>(paramSystem);
+  const [selectedOrgan, setSelectedOrgan] = useState<string | null>(paramOrgan);
+  const chapterId = paramChapterId;
+
+  const systems: SystemInfo[] = useMemo(() => getAllSystems(), []);
+
+  const currentSystemOrgans = useMemo(() => {
+    if (!selectedSystem) return [];
+    return systems.find((s) => s.key === selectedSystem)?.organs ?? [];
+  }, [selectedSystem, systems]);
 
   const loadQuestions = useCallback(() => {
     setLoading(true);
@@ -56,7 +77,10 @@ function QuizContent() {
 
     let url = "/api/quiz?limit=10";
     if (chapterId) url += `&chapterId=${chapterId}`;
+    if (selectedOrgan) url += `&organ=${selectedOrgan}`;
+    else if (selectedSystem) url += `&system=${selectedSystem}`;
     if (difficulty !== "all") url += `&difficulty=${difficulty}`;
+    if (imageOnly) url += `&category=image_quiz`;
 
     fetch(url)
       .then((r) => {
@@ -66,7 +90,7 @@ function QuizContent() {
       .then(setQuestions)
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load questions"))
       .finally(() => setLoading(false));
-  }, [chapterId, difficulty]);
+  }, [chapterId, selectedOrgan, selectedSystem, difficulty, imageOnly]);
 
   useEffect(() => {
     loadQuestions();
@@ -80,7 +104,6 @@ function QuizContent() {
       const options: string[] = JSON.parse(question.options);
 
       if (!showResult) {
-        // A-D keys select answer (also supports 1-4)
         const letterMap: Record<string, number> = { a: 0, b: 1, c: 2, d: 3, "1": 0, "2": 1, "3": 2, "4": 3 };
         const idx = letterMap[e.key.toLowerCase()];
         if (idx !== undefined && idx < options.length) {
@@ -105,7 +128,6 @@ function QuizContent() {
     const isCorrect = answerIndex === question.correctAnswer;
     if (isCorrect) setScore((s) => s + 1);
 
-    // Record attempt
     await fetch("/api/quiz/attempt", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -125,6 +147,15 @@ function QuizContent() {
       setShowResult(false);
     }
   };
+
+  // ── Filter label for display ────────────────────────────────────
+  const filterLabel = chapterId
+    ? null // chapter name will show from loaded questions
+    : selectedOrgan
+    ? currentSystemOrgans.find((o) => o.key === selectedOrgan)?.label
+    : selectedSystem
+    ? systems.find((s) => s.key === selectedSystem)?.label
+    : null;
 
   if (loading) {
     return (
@@ -149,7 +180,7 @@ function QuizContent() {
             <p className="text-destructive font-medium">{error}</p>
             <Button onClick={loadQuestions} variant="outline" className="mt-4 gap-2">
               <RotateCcw className="h-4 w-4" />
-              Retry
+              Réessayer
             </Button>
           </CardContent>
         </Card>
@@ -161,14 +192,63 @@ function QuizContent() {
     return (
       <div className="space-y-6">
         <h1 className="text-3xl font-bold">Quiz</h1>
+
+        {/* System/organ filter even when no questions */}
+        {!chapterId && (
+          <div className="space-y-3">
+            <div className="flex gap-2 flex-wrap">
+              <Button
+                size="sm"
+                variant={!selectedSystem ? "default" : "outline"}
+                onClick={() => { setSelectedSystem(null); setSelectedOrgan(null); }}
+              >
+                Tout
+              </Button>
+              {systems.map((sys) => (
+                <Button
+                  key={sys.key}
+                  size="sm"
+                  variant={selectedSystem === sys.key ? "default" : "outline"}
+                  onClick={() => { setSelectedSystem(sys.key); setSelectedOrgan(null); }}
+                >
+                  {sys.label}
+                </Button>
+              ))}
+            </div>
+            {selectedSystem && currentSystemOrgans.length > 1 && (
+              <div className="flex gap-2 flex-wrap pl-2 border-l-2 border-primary/20">
+                <Button
+                  size="sm"
+                  variant={!selectedOrgan ? "default" : "outline"}
+                  onClick={() => setSelectedOrgan(null)}
+                >
+                  Tout
+                </Button>
+                {currentSystemOrgans.map((o) => (
+                  <Button
+                    key={o.key}
+                    size="sm"
+                    variant={selectedOrgan === o.key ? "default" : "outline"}
+                    onClick={() => setSelectedOrgan(o.key)}
+                  >
+                    {o.label}
+                  </Button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         <Card>
           <CardContent className="p-12 text-center">
             <Brain className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-            <h3 className="text-lg font-medium mb-2">No questions available</h3>
+            <h3 className="text-lg font-medium mb-2">Aucune question disponible</h3>
             <p className="text-muted-foreground">
               {chapterId
-                ? "No questions for this chapter yet. Run the ingestion pipeline to generate content."
-                : "Run the ingestion pipeline to generate quiz questions from your radiology textbooks."}
+                ? "Pas de questions pour ce chapitre. Lancez le pipeline d'ingestion pour générer du contenu."
+                : filterLabel
+                ? `Pas de questions pour ${filterLabel}. Essayez un autre filtre.`
+                : "Lancez le pipeline d'ingestion pour générer des questions de quiz."}
             </p>
           </CardContent>
         </Card>
@@ -180,7 +260,7 @@ function QuizContent() {
     const percentage = Math.round((score / questions.length) * 100);
     return (
       <div className="space-y-6">
-        <h1 className="text-3xl font-bold">Quiz Results</h1>
+        <h1 className="text-3xl font-bold">Résultats du Quiz</h1>
         <Card>
           <CardContent className="p-8 text-center">
             <Trophy
@@ -198,14 +278,14 @@ function QuizContent() {
             </p>
             <p className="text-sm text-muted-foreground mb-6">
               {percentage >= 80
-                ? "Excellent work! Keep it up!"
+                ? "Excellent ! Continue comme ça !"
                 : percentage >= 60
-                ? "Good progress. Review the topics you missed."
-                : "Keep studying. Focus on the chapters where you struggled."}
+                ? "Bon travail. Revois les sujets manqués."
+                : "Continue à étudier. Concentre-toi sur les chapitres difficiles."}
             </p>
             <Button onClick={loadQuestions} className="gap-2">
               <RotateCcw className="h-4 w-4" />
-              Try Again
+              Recommencer
             </Button>
           </CardContent>
         </Card>
@@ -218,9 +298,19 @@ function QuizContent() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <h1 className="text-3xl font-bold">Quiz</h1>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
+          {/* Image only toggle */}
+          <Button
+            variant={imageOnly ? "default" : "outline"}
+            size="sm"
+            onClick={() => setImageOnly(!imageOnly)}
+            className="gap-1.5 text-xs"
+          >
+            <ImageIcon className="h-3.5 w-3.5" />
+            Images
+          </Button>
           {/* Difficulty filter */}
           <div className="flex gap-1">
             {["all", "easy", "medium", "hard"].map((d) => (
@@ -231,12 +321,58 @@ function QuizContent() {
                 onClick={() => setDifficulty(d)}
                 className="text-xs capitalize"
               >
-                {d === "all" ? "All" : d}
+                {d === "all" ? "Tout" : d}
               </Button>
             ))}
           </div>
         </div>
       </div>
+
+      {/* System/organ filter (only when not locked to a chapter) */}
+      {!chapterId && (
+        <div className="space-y-3">
+          <div className="flex gap-2 flex-wrap">
+            <Button
+              size="sm"
+              variant={!selectedSystem ? "default" : "outline"}
+              onClick={() => { setSelectedSystem(null); setSelectedOrgan(null); }}
+            >
+              Tout
+            </Button>
+            {systems.map((sys) => (
+              <Button
+                key={sys.key}
+                size="sm"
+                variant={selectedSystem === sys.key ? "default" : "outline"}
+                onClick={() => { setSelectedSystem(sys.key); setSelectedOrgan(null); }}
+              >
+                {sys.label}
+              </Button>
+            ))}
+          </div>
+          {selectedSystem && currentSystemOrgans.length > 1 && (
+            <div className="flex gap-2 flex-wrap pl-2 border-l-2 border-primary/20">
+              <Button
+                size="sm"
+                variant={!selectedOrgan ? "default" : "outline"}
+                onClick={() => setSelectedOrgan(null)}
+              >
+                Tout
+              </Button>
+              {currentSystemOrgans.map((o) => (
+                <Button
+                  key={o.key}
+                  size="sm"
+                  variant={selectedOrgan === o.key ? "default" : "outline"}
+                  onClick={() => setSelectedOrgan(o.key)}
+                >
+                  {o.label}
+                </Button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Progress */}
       <div className="flex items-center gap-3">
@@ -272,6 +408,11 @@ function QuizContent() {
             >
               {question.difficulty}
             </Badge>
+            {filterLabel && (
+              <Badge variant="outline" className="text-xs">
+                {filterLabel}
+              </Badge>
+            )}
           </div>
 
           {question.imageUrl && (
@@ -279,7 +420,7 @@ function QuizContent() {
             <img
               src={question.imageUrl}
               alt="Radiological image"
-              className="rounded-lg border shadow-sm max-h-64 object-contain mb-4 mx-auto"
+              className="rounded-lg border shadow-sm max-h-96 object-contain mb-4 mx-auto w-full"
             />
           )}
 
@@ -333,7 +474,7 @@ function QuizContent() {
           {/* Explanation */}
           {showResult && (
             <div className="mt-6 p-4 bg-muted/50 rounded-lg">
-              <h4 className="font-semibold text-sm mb-1">Explanation</h4>
+              <h4 className="font-semibold text-sm mb-1">Explication</h4>
               <p className="text-sm text-muted-foreground">
                 {question.explanation}
               </p>
@@ -345,8 +486,8 @@ function QuizContent() {
             <div className="mt-4 flex justify-end">
               <Button onClick={nextQuestion} className="gap-2">
                 {currentIndex + 1 >= questions.length
-                  ? "See Results"
-                  : "Next Question"}
+                  ? "Voir les résultats"
+                  : "Question suivante"}
                 <ArrowRight className="h-4 w-4" />
               </Button>
             </div>
@@ -356,7 +497,7 @@ function QuizContent() {
 
       {/* Score */}
       <div className="text-center text-sm text-muted-foreground">
-        Current score: {score}/{currentIndex + (showResult ? 1 : 0)}
+        Score actuel : {score}/{currentIndex + (showResult ? 1 : 0)}
       </div>
     </div>
   );

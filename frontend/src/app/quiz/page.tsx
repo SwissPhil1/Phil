@@ -48,6 +48,8 @@ function QuizContent() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [selectedAnswer, setSelectedAnswer] = useState<number | null>(null);
   const [showResult, setShowResult] = useState(false);
+  const [awaitingConfidence, setAwaitingConfidence] = useState(false);
+  const [confidence, setConfidence] = useState<number | null>(null);
   const [score, setScore] = useState(0);
   const [finished, setFinished] = useState(false);
   const [difficulty, setDifficulty] = useState<string>("all");
@@ -96,14 +98,21 @@ function QuizContent() {
     loadQuestions();
   }, [loadQuestions]);
 
-  // Keyboard shortcuts: A-D to select answer, Enter/Space for next question
+  // Keyboard shortcuts: A-D to select answer, 1-5 for confidence, Enter/Space for next
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (loading || error || questions.length === 0 || finished) return;
       const question = questions[currentIndex];
       const options: string[] = JSON.parse(question.options);
 
-      if (!showResult) {
+      if (awaitingConfidence) {
+        // 1-5 keys for confidence rating
+        const num = parseInt(e.key);
+        if (num >= 1 && num <= 5) {
+          e.preventDefault();
+          submitWithConfidence(num);
+        }
+      } else if (!showResult) {
         const letterMap: Record<string, number> = { a: 0, b: 1, c: 2, d: 3, "1": 0, "2": 1, "3": 2, "4": 3 };
         const idx = letterMap[e.key.toLowerCase()];
         if (idx !== undefined && idx < options.length) {
@@ -119,13 +128,20 @@ function QuizContent() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   });
 
-  const handleAnswer = async (answerIndex: number) => {
-    if (showResult) return;
+  const handleAnswer = (answerIndex: number) => {
+    if (showResult || awaitingConfidence) return;
     setSelectedAnswer(answerIndex);
+    setAwaitingConfidence(true);
+  };
+
+  const submitWithConfidence = async (confidenceRating: number) => {
+    if (selectedAnswer === null) return;
+    setConfidence(confidenceRating);
+    setAwaitingConfidence(false);
     setShowResult(true);
 
     const question = questions[currentIndex];
-    const isCorrect = answerIndex === question.correctAnswer;
+    const isCorrect = selectedAnswer === question.correctAnswer;
     if (isCorrect) setScore((s) => s + 1);
 
     await fetch("/api/quiz/attempt", {
@@ -133,7 +149,8 @@ function QuizContent() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         questionId: question.id,
-        selectedAnswer: answerIndex,
+        selectedAnswer,
+        confidence: confidenceRating,
       }),
     }).catch(console.error);
   };
@@ -145,6 +162,8 @@ function QuizContent() {
       setCurrentIndex((i) => i + 1);
       setSelectedAnswer(null);
       setShowResult(false);
+      setAwaitingConfidence(false);
+      setConfidence(null);
     }
   };
 
@@ -449,7 +468,7 @@ function QuizContent() {
                 <button
                   key={i}
                   onClick={() => handleAnswer(i)}
-                  disabled={showResult}
+                  disabled={showResult || awaitingConfidence}
                   className={className}
                 >
                   <div className="flex items-center gap-3">
@@ -470,6 +489,43 @@ function QuizContent() {
               );
             })}
           </div>
+
+          {/* Confidence rating prompt */}
+          {awaitingConfidence && (
+            <div className="mt-6 p-4 bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 rounded-lg text-center">
+              <p className="text-sm font-medium text-blue-700 dark:text-blue-300 mb-3">
+                À quel point êtes-vous sûr(e) de votre réponse ?
+              </p>
+              <div className="flex gap-2 justify-center">
+                {[
+                  { val: 1, label: "Deviné", color: "border-red-300 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30" },
+                  { val: 2, label: "Incertain", color: "border-orange-300 text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-950/30" },
+                  { val: 3, label: "Moyen", color: "border-yellow-300 text-yellow-600 hover:bg-yellow-50 dark:hover:bg-yellow-950/30" },
+                  { val: 4, label: "Confiant", color: "border-blue-300 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/30" },
+                  { val: 5, label: "Certain", color: "border-green-300 text-green-600 hover:bg-green-50 dark:hover:bg-green-950/30" },
+                ].map(({ val, label, color }) => (
+                  <button
+                    key={val}
+                    onClick={() => submitWithConfidence(val)}
+                    className={`px-3 py-2 rounded-lg border-2 text-xs font-medium transition-colors ${color}`}
+                  >
+                    <span className="block text-lg font-bold">{val}</span>
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground mt-2">Raccourci: touches 1-5</p>
+            </div>
+          )}
+
+          {/* High-confidence error warning */}
+          {showResult && confidence !== null && confidence >= 4 && selectedAnswer !== questions[currentIndex]?.correctAnswer && (
+            <div className="mt-3 p-3 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800 rounded-lg">
+              <p className="text-sm font-medium text-red-700 dark:text-red-400">
+                Erreur à haute confiance — ce type d&apos;erreur est le plus dangereux pour l&apos;examen. Revoyez ce sujet en priorité.
+              </p>
+            </div>
+          )}
 
           {/* Explanation */}
           {showResult && (

@@ -53,24 +53,35 @@ function getBookLabel(bookSource: string): string {
   return bookSource;
 }
 
-/** Returns a recency status based on days since last study */
+/** Spaced review intervals (days) — exponential schedule for chapter-level review */
+const REVIEW_INTERVALS = [1, 3, 7, 14, 30, 60];
+
+/** Returns a recency status based on days since last study, with review-due awareness */
 function getRecencyStatus(lastStudiedAt: string | null): {
   label: string;
   color: string;
   bgColor: string;
   daysAgo: number | null;
+  reviewDue: boolean;
+  reviewLabel: string | null;
 } {
   if (!lastStudiedAt) {
-    return { label: "Jamais étudié", color: "text-muted-foreground", bgColor: "bg-muted", daysAgo: null };
+    return { label: "Jamais étudié", color: "text-muted-foreground", bgColor: "bg-muted", daysAgo: null, reviewDue: true, reviewLabel: "Nouveau" };
   }
   const days = Math.floor(
     (Date.now() - new Date(lastStudiedAt).getTime()) / (1000 * 60 * 60 * 24)
   );
-  if (days === 0) return { label: "Aujourd'hui", color: "text-green-700", bgColor: "bg-green-100 dark:bg-green-900/30", daysAgo: 0 };
-  if (days <= 3) return { label: `Il y a ${days}j`, color: "text-green-600", bgColor: "bg-green-50 dark:bg-green-900/20", daysAgo: days };
-  if (days <= 7) return { label: `Il y a ${days}j`, color: "text-yellow-600", bgColor: "bg-yellow-50 dark:bg-yellow-900/20", daysAgo: days };
-  if (days <= 14) return { label: `Il y a ${days}j`, color: "text-orange-600", bgColor: "bg-orange-50 dark:bg-orange-900/20", daysAgo: days };
-  return { label: `Il y a ${days}j`, color: "text-red-600", bgColor: "bg-red-50 dark:bg-red-900/20", daysAgo: days };
+
+  // Determine if review is due based on spaced intervals
+  // Find the smallest interval the user has exceeded
+  const reviewDue = REVIEW_INTERVALS.some(interval => days >= interval && days < interval * 2) || days >= 30;
+  const reviewLabel = days >= 30 ? "Révision urgente" : days >= 14 ? "Révision recommandée" : days >= 7 ? "À revoir bientôt" : null;
+
+  if (days === 0) return { label: "Aujourd'hui", color: "text-green-700", bgColor: "bg-green-100 dark:bg-green-900/30", daysAgo: 0, reviewDue: false, reviewLabel: null };
+  if (days <= 3) return { label: `Il y a ${days}j`, color: "text-green-600", bgColor: "bg-green-50 dark:bg-green-900/20", daysAgo: days, reviewDue, reviewLabel };
+  if (days <= 7) return { label: `Il y a ${days}j`, color: "text-yellow-600", bgColor: "bg-yellow-50 dark:bg-yellow-900/20", daysAgo: days, reviewDue, reviewLabel };
+  if (days <= 14) return { label: `Il y a ${days}j`, color: "text-orange-600", bgColor: "bg-orange-50 dark:bg-orange-900/20", daysAgo: days, reviewDue, reviewLabel };
+  return { label: `Il y a ${days}j`, color: "text-red-600", bgColor: "bg-red-50 dark:bg-red-900/20", daysAgo: days, reviewDue, reviewLabel };
 }
 
 // ── Two-level organ assigner: System → Organ ────────────────────────────────
@@ -470,6 +481,18 @@ function ChaptersContent() {
                     <Clock className="h-3 w-3 inline mr-1" />
                     {recency.label}
                   </span>
+                  {/* Review due badge */}
+                  {recency.reviewLabel && (
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                      recency.reviewLabel === "Révision urgente"
+                        ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
+                        : recency.reviewLabel === "Révision recommandée"
+                        ? "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400"
+                        : "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400"
+                    }`}>
+                      {recency.reviewLabel}
+                    </span>
+                  )}
 
                   {/* Quiz accuracy */}
                   {ch.quizAccuracy !== null && (

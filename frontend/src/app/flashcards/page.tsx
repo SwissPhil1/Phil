@@ -169,7 +169,7 @@ function FlashcardsContent() {
 
   // ── Start review session ────────────────────────────────────────────────
 
-  const startSession = useCallback((reviewOnly = false, organOverride?: string) => {
+  const startSession = useCallback((reviewOnly = false, organOverride?: string, mixedReview = false) => {
     setLoading(true);
     setError(null);
     setFlipped(false);
@@ -183,10 +183,13 @@ function FlashcardsContent() {
     const effectiveNewLimit = reviewOnly ? 0 : newLimit;
     const effectiveLimit = sessionGoal === 0 ? 999 : sessionGoal;
     let url = `/api/flashcards?mode=due&limit=${effectiveLimit}&newLimit=${effectiveNewLimit}`;
-    const organ = organOverride || selectedOrgan;
-    if (paramChapterId) url += `&chapterId=${paramChapterId}`;
-    else if (organ) url += `&organ=${organ}`;
-    else if (selectedSystem) url += `&system=${selectedSystem}`;
+    // Mixed review: skip all organ/system filters to interleave across topics
+    if (!mixedReview) {
+      const organ = organOverride || selectedOrgan;
+      if (paramChapterId) url += `&chapterId=${paramChapterId}`;
+      else if (organ) url += `&organ=${organ}`;
+      else if (selectedSystem) url += `&system=${selectedSystem}`;
+    }
 
     fetch(url)
       .then((r) => {
@@ -482,6 +485,15 @@ function FlashcardsContent() {
                     R\u00E9visions uniquement ({stats.counts.reviewDue})
                   </Button>
                 )}
+                <Button
+                  variant="outline"
+                  className="w-full gap-2 border-purple-200 text-purple-700 hover:bg-purple-50 dark:border-purple-800 dark:text-purple-300 dark:hover:bg-purple-950/30"
+                  onClick={() => startSession(false, undefined, true)}
+                  disabled={loading}
+                >
+                  <Zap className="h-4 w-4" />
+                  Mixed Review (interleaved, tous les organes)
+                </Button>
               </CardContent>
             </Card>
 

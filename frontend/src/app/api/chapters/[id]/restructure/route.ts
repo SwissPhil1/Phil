@@ -136,14 +136,21 @@ export async function POST(
             organ: chapter.organ,
             studyGuide: restructuredGuide,
             summary: chapter.summary,
+            sourceChapterId: chapterId,
           },
         });
+
+        // Word count delta warning
+        const wordDelta = outputWords / inputWords;
+        const warning = wordDelta < 0.85
+          ? ` ⚠️ Output is ${Math.round((1 - wordDelta) * 100)}% shorter — consider running Reconcile to check for missing facts.`
+          : "";
 
         send({
           success: true,
           newChapterId: newChapter.id,
           originalChapterId: chapterId,
-          message: `Study guide restructured! ${inputWords.toLocaleString()} → ${outputWords.toLocaleString()} words. New chapter: "${newChapter.title}"`,
+          message: `Study guide restructured! ${inputWords.toLocaleString()} → ${outputWords.toLocaleString()} words. New chapter: "${newChapter.title}"${warning}`,
         });
       } catch (err) {
         console.error("Restructure error:", err);

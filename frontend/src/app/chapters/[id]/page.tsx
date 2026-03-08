@@ -31,6 +31,7 @@ import {
   Printer,
   FilePlus,
   Wand2,
+  CheckCircle,
 } from "lucide-react";
 import React, { useEffect, useState, useCallback, useRef } from "react";
 import ReactMarkdown, { Components } from "react-markdown";
@@ -59,6 +60,7 @@ interface ChapterDetail {
   bookSource: string;
   number: number;
   title: string;
+  organ: string | null;
   summary: string | null;
   keyPoints: string | null;
   highYield: string | null;
@@ -66,6 +68,8 @@ interface ChapterDetail {
   studyGuide: string | null;
   pdfChunkCount: number;
   estimatedPages: number;
+  sourceChapterId: number | null;
+  sourceChapter: { id: number; title: string; studyGuide: string | null } | null;
   relatedChapters: RelatedChapter[];
   questions: Array<{
     id: number;
@@ -404,6 +408,11 @@ export default function ChapterDetailPage() {
   // Restructure state
   const [restructuring, setRestructuring] = useState(false);
   const [restructureMessage, setRestructureMessage] = useState("");
+  const [restructuredChapterId, setRestructuredChapterId] = useState<number | null>(null);
+
+  // Reconcile state
+  const [reconciling, setReconciling] = useState(false);
+  const [reconcileMessage, setReconcileMessage] = useState("");
 
   // Parse study guide sections for the position selector
   const guideSections = React.useMemo(() => {
@@ -792,11 +801,8 @@ export default function ChapterDetailPage() {
         return;
       }
 
-      setRestructureMessage("Restructure complete! Redirecting...");
+      setRestructuredChapterId(newChapterId);
       setRestructuring(false);
-      setTimeout(() => {
-        window.location.href = `/chapters/${newChapterId}`;
-      }, 1500);
     } catch (err) {
       if (controller.signal.aborted) {
         setRestructureMessage("Restructure timed out after 15 minutes. Try again or split into smaller chapters.");
@@ -813,6 +819,60 @@ export default function ChapterDetailPage() {
       clearTimeout(timeout);
     }
   }, [chapter]);
+
+  // Reconcile: verify fact completeness against a reference (source chapter or current chapter's original)
+  const reconcileStudyGuide = useCallback(async (targetChapterId: number, referenceStudyGuide: string) => {
+    setReconciling(true);
+    setReconcileMessage("Starting reconcile...");
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20 * 60 * 1000);
+
+    try {
+      const res = await fetch(`/api/chapters/${targetChapterId}/reconcile`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ referenceText: referenceStudyGuide, language: "fr", polish: true, saveInPlace: true }),
+        signal: controller.signal,
+      });
+
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("No response stream");
+      const decoder = new TextDecoder();
+      let buf = "";
+
+      while (!controller.signal.aborted) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (data.error) throw new Error(data.error);
+            if (data.message) setReconcileMessage(data.message);
+            if (data.success) {
+              setReconcileMessage(data.message || "Reconcile complete!");
+            }
+          } catch (e) {
+            if (e instanceof Error && e.message !== line.slice(6)) throw e;
+          }
+        }
+      }
+    } catch (err) {
+      if (controller.signal.aborted) {
+        setReconcileMessage("Reconcile timed out. Try again.");
+      } else {
+        const raw = err instanceof Error ? err.message : "Reconcile failed";
+        setReconcileMessage(`Error: ${raw}`);
+      }
+    } finally {
+      clearTimeout(timeout);
+      setReconciling(false);
+    }
+  }, []);
 
   // Auto-generate study guide
   useEffect(() => {
@@ -1048,6 +1108,11 @@ export default function ChapterDetailPage() {
           <span className="text-sm text-muted-foreground">Chapter {chapter.number}</span>
         </div>
         <h1 className="text-3xl font-bold">{chapter.title}</h1>
+        {chapter.sourceChapter && (
+          <p className="text-sm text-muted-foreground mt-1">
+            Restructured from: <Link href={`/chapters/${chapter.sourceChapter.id}`} className="underline hover:text-foreground">{chapter.sourceChapter.title}</Link>
+          </p>
+        )}
       </div>
 
       {hasPdfChunks && (
@@ -1151,6 +1216,17 @@ export default function ChapterDetailPage() {
                         <Button size="sm" variant="outline" className="gap-1.5 border-purple-300 text-purple-700 hover:bg-purple-50 dark:border-purple-700 dark:text-purple-300 dark:hover:bg-purple-950/30" onClick={restructureStudyGuide} disabled={isGenerating || restructuring}>
                           {restructuring ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}Restructure
                         </Button>
+                        {chapter?.sourceChapter?.studyGuide && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="gap-1.5 border-blue-300 text-blue-700 hover:bg-blue-50 dark:border-blue-700 dark:text-blue-300 dark:hover:bg-blue-950/30"
+                            onClick={() => reconcileStudyGuide(chapter.id, chapter.sourceChapter!.studyGuide!)}
+                            disabled={isGenerating || reconciling}
+                          >
+                            {reconciling ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle className="h-3.5 w-3.5" />}Reconcile
+                          </Button>
+                        )}
                         {!isImported && (
                           <Button size="sm" variant="outline" className="gap-1.5" onClick={mergeStudyGuide} disabled={isGenerating}>
                             <Merge className="h-3.5 w-3.5" />Merge
@@ -1224,31 +1300,65 @@ export default function ChapterDetailPage() {
                   )}
 
                   {/* Restructure status message */}
-                  {restructureMessage && (
+                  {(restructureMessage || restructuredChapterId) && (
                     <div className={`rounded-lg px-4 py-3 mb-6 flex items-start gap-2 ${
                       restructureMessage.startsWith("Error")
                         ? "bg-red-50 border border-red-200 dark:bg-red-950/20 dark:border-red-800"
-                        : restructureMessage.includes("complete") || restructureMessage.includes("restructured")
+                        : restructuredChapterId
                           ? "bg-emerald-50 border border-emerald-200 dark:bg-emerald-950/20 dark:border-emerald-800"
                           : "bg-purple-50 border border-purple-200 dark:bg-purple-950/20 dark:border-purple-800"
                     }`}>
                       {restructuring && <Loader2 className="h-4 w-4 animate-spin text-purple-600 dark:text-purple-400 mt-0.5 flex-shrink-0" />}
                       {!restructuring && !restructureMessage.startsWith("Error") && <Wand2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400 mt-0.5 flex-shrink-0" />}
                       {restructureMessage.startsWith("Error") && <AlertCircle className="h-4 w-4 text-red-500 mt-0.5 flex-shrink-0" />}
-                      <div>
+                      <div className="flex-1">
                         <p className={`text-sm ${
                           restructureMessage.startsWith("Error")
                             ? "text-red-600 dark:text-red-400"
-                            : restructureMessage.includes("complete") || restructureMessage.includes("restructured")
+                            : restructuredChapterId
                               ? "text-emerald-600 dark:text-emerald-400"
                               : "text-purple-600 dark:text-purple-400"
                         }`}>
                           {restructureMessage}
                         </p>
-                        {(restructureMessage.includes("restructured") || restructureMessage.includes("Redirecting")) && (
-                          <p className="text-xs text-muted-foreground mt-1">Redirecting to the new chapter...</p>
+                        {restructuredChapterId && (
+                          <div className="flex gap-2 mt-2">
+                            <Button size="sm" className="gap-1.5" onClick={() => window.location.href = `/chapters/${restructuredChapterId}`}>
+                              <Wand2 className="h-3.5 w-3.5" />View Restructured Chapter
+                            </Button>
+                            <Button size="sm" variant="outline" className="gap-1.5" onClick={() => window.open(`/chapters/${restructuredChapterId}`, "_blank")}>
+                              <ExternalLink className="h-3.5 w-3.5" />Open in New Tab
+                            </Button>
+                            <Button size="sm" variant="ghost" className="gap-1.5 text-muted-foreground" onClick={() => { setRestructuredChapterId(null); setRestructureMessage(""); }}>
+                              <X className="h-3.5 w-3.5" />Dismiss
+                            </Button>
+                          </div>
                         )}
                       </div>
+                    </div>
+                  )}
+
+                  {/* Reconcile status message */}
+                  {reconcileMessage && (
+                    <div className={`rounded-lg px-4 py-3 mb-6 flex items-start gap-2 ${
+                      reconcileMessage.startsWith("Error")
+                        ? "bg-red-50 border border-red-200 dark:bg-red-950/20 dark:border-red-800"
+                        : reconcileMessage.includes("complete")
+                          ? "bg-emerald-50 border border-emerald-200 dark:bg-emerald-950/20 dark:border-emerald-800"
+                          : "bg-blue-50 border border-blue-200 dark:bg-blue-950/20 dark:border-blue-800"
+                    }`}>
+                      {reconciling && <Loader2 className="h-4 w-4 animate-spin text-blue-600 dark:text-blue-400 mt-0.5 flex-shrink-0" />}
+                      {!reconciling && reconcileMessage.includes("complete") && <Wand2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400 mt-0.5 flex-shrink-0" />}
+                      {reconcileMessage.startsWith("Error") && <AlertCircle className="h-4 w-4 text-red-500 mt-0.5 flex-shrink-0" />}
+                      <p className={`text-sm ${
+                        reconcileMessage.startsWith("Error")
+                          ? "text-red-600 dark:text-red-400"
+                          : reconcileMessage.includes("complete")
+                            ? "text-emerald-600 dark:text-emerald-400"
+                            : "text-blue-600 dark:text-blue-400"
+                      }`}>
+                        {reconcileMessage}
+                      </p>
                     </div>
                   )}
 

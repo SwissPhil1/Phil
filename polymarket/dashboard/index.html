@@ -484,8 +484,11 @@ async function loadData() {
             ...(scores[w.address] || {}),
         }));
 
-        // Sort by rank (or CLV if no rank)
-        wallets.sort((a, b) => (a.rank || 9999) - (b.rank || 9999));
+        // Sort by rank if available, otherwise by CLV descending
+        wallets.sort((a, b) => {
+            if (a.rank && b.rank) return a.rank - b.rank;
+            return (parseFloat(b.clv) || 0) - (parseFloat(a.clv) || 0);
+        });
 
         alerts = alertsData;
 

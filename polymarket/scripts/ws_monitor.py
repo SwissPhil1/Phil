@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 SUPABASE_URL = os.environ["SUPABASE_URL"]
-SUPABASE_KEY = os.environ["SUPABASE_ANON_KEY"]
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ["SUPABASE_ANON_KEY"]
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
@@ -251,55 +251,55 @@ async def monitor_trades():
 
 async def poll_trades():
     """
-    Fallback: poll the CLOB REST API for recent trades instead of WebSocket.
-    Use this if the WebSocket endpoint requires authentication or changes.
+    Poll the Polymarket data API for recent trades by tracked wallets.
     """
     print("\n" + "=" * 60)
-    print("POLYMARKET TRADE POLLER (REST FALLBACK)")
+    print("POLYMARKET TRADE POLLER (DATA API)")
     print("=" * 60)
 
     if not tracked_wallets:
         load_tracked_wallets()
         if not tracked_wallets:
-            print("\nNo tracked wallets found. Run seed_data.py first.")
+            print("\nNo tracked wallets found. Run wallet_analyzer.py first.")
             return
 
     print(f"\nPolling trades for {len(tracked_wallets)} wallets...")
     print("Press Ctrl+C to stop\n")
 
     seen_trades = set()
+    DATA_API = "https://data-api.polymarket.com"
 
     while running:
         for addr in list(tracked_wallets.keys()):
             if not running:
                 break
             try:
-                # Fetch recent trades for this wallet
                 r = requests.get(
-                    f"{CLOB_URL}/trades",
-                    params={"maker_address": addr, "limit": 10},
-                    timeout=10
+                    f"{DATA_API}/trades",
+                    params={"user": addr, "limit": 20},
+                    timeout=10,
                 )
                 if r.ok:
                     trades = r.json()
-                    if isinstance(trades, dict):
-                        trades = trades.get("data", trades.get("trades", []))
                     if not isinstance(trades, list):
                         trades = []
 
                     for trade in trades:
-                        trade_id = trade.get("id") or f"{addr}_{trade.get('timestamp', '')}"
-                        if trade_id not in seen_trades:
+                        trade_id = trade.get("transactionHash", "") + trade.get("asset", "")
+                        if trade_id and trade_id not in seen_trades:
                             seen_trades.add(trade_id)
-                            condition_id = trade.get("condition_id") or trade.get("asset_id", "")
-                            market_info = get_market_info(condition_id)
+                            market_info = {
+                                "slug": trade.get("slug", ""),
+                                "title": trade.get("title", ""),
+                                "category": categorize_market(trade.get("title", "")),
+                            }
                             wallet = tracked_wallets[addr]
                             create_alert(wallet, trade, market_info)
 
             except Exception as e:
                 print(f"  Poll error for {addr[:10]}: {e}")
 
-            await asyncio.sleep(0.5)  # rate limit between wallets
+            await asyncio.sleep(0.5)
 
         # Cap seen_trades size
         if len(seen_trades) > 10000:

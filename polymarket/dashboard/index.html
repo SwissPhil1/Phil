@@ -364,7 +364,11 @@
         <div class="panel">
             <div class="panel-header">
                 <span>RANKED WALLETS</span>
-                <span id="walletCount">-</span>
+                <span style="display:flex;align-items:center;gap:10px">
+                    <button id="rescoreBtn" onclick="startRescore()" style="background:var(--cyan);color:var(--bg1);border:none;padding:3px 10px;border-radius:3px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;letter-spacing:1px">RE-SCORE</button>
+                    <span id="rescoreStatus" style="font-size:11px;color:var(--cyan);display:none"></span>
+                    <span id="walletCount">-</span>
+                </span>
             </div>
             <div class="col-header wallet-col-header">
                 <span>#</span>
@@ -768,6 +772,75 @@ function subscribeToAlerts() {
             }
         }
     }, 10000);
+}
+
+// ── Re-score functionality ──
+let rescoring = false;
+
+async function startRescore() {
+    if (rescoring) return;
+    rescoring = true;
+    const btn = document.getElementById('rescoreBtn');
+    const status = document.getElementById('rescoreStatus');
+    btn.disabled = true;
+    btn.style.opacity = '0.5';
+    status.style.display = 'inline';
+
+    try {
+        // Get list of wallets to score
+        status.textContent = 'Loading wallets...';
+        const resp = await fetch('/api/rescore');
+        const data = await resp.json();
+        const walletList = data.wallets || [];
+
+        if (!walletList.length) {
+            status.textContent = 'No wallets found';
+            return;
+        }
+
+        let scored = 0;
+        let failed = 0;
+        const total = walletList.length;
+
+        for (const w of walletList) {
+            status.textContent = `Scoring ${scored + 1}/${total}...`;
+            try {
+                const r = await fetch('/api/rescore', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ address: w.address, label: w.label }),
+                });
+                const result = await r.json();
+                if (result.ok) {
+                    scored++;
+                } else {
+                    failed++;
+                }
+            } catch (e) {
+                failed++;
+            }
+            // Small delay to avoid hammering Polymarket APIs
+            await new Promise(r => setTimeout(r, 300));
+        }
+
+        status.textContent = `Done! ${scored} scored, ${failed} failed`;
+        status.style.color = 'var(--green)';
+
+        // Reload dashboard data
+        await loadData();
+
+    } catch (e) {
+        status.textContent = `Error: ${e.message}`;
+        status.style.color = 'var(--red)';
+    } finally {
+        rescoring = false;
+        btn.disabled = false;
+        btn.style.opacity = '1';
+        setTimeout(() => {
+            status.style.display = 'none';
+            status.style.color = 'var(--cyan)';
+        }, 5000);
+    }
 }
 
 // ── Init ──

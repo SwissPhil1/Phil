@@ -20,6 +20,10 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
+# Import shared categorization
+sys.path.insert(0, str(Path(__file__).parent))
+from scoring import categorize_market as _shared_categorize
+
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ["SUPABASE_ANON_KEY"]
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -91,15 +95,8 @@ def get_market_info(condition_id):
 
 
 def categorize_market(title):
-    """Quick market categorization."""
-    t = (title or "").lower()
-    if any(w in t for w in ["trump", "biden", "election", "congress", "president", "democrat", "republican"]):
-        return "politics"
-    if any(w in t for w in ["bitcoin", "btc", "ethereum", "eth", "crypto", "solana"]):
-        return "crypto"
-    if any(w in t for w in ["nfl", "nba", "mlb", "soccer", "football", "ufc", "sports"]):
-        return "sports"
-    return "other"
+    """Delegate to shared scoring module."""
+    return _shared_categorize(title)
 
 
 def create_alert(wallet, trade, market_info):

@@ -787,51 +787,49 @@ async function startRescore() {
     status.style.display = 'inline';
 
     try {
-        // Get list of wallets to score
-        status.textContent = 'Loading wallets...';
-        const resp = await fetch('/api/rescore');
+        // Create a rescore job (instant — Railway processes it in background)
+        status.textContent = 'Submitting job...';
+        const resp = await fetch('/api/rescore', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'rescore_all' }),
+        });
         if (!resp.ok) {
             const text = await resp.text();
             throw new Error(`API ${resp.status}: ${text.slice(0, 120)}`);
         }
         const data = await resp.json();
-        if (data.error) throw new Error(data.error);
-        const walletList = data.wallets || [];
+        if (!data.ok) throw new Error(data.error || 'Failed to create job');
 
-        if (!walletList.length) {
-            status.textContent = 'No wallets found';
-            return;
-        }
+        const jobId = data.job_id;
+        status.textContent = 'Job queued — waiting for processor...';
 
-        let scored = 0;
-        let failed = 0;
-        const total = walletList.length;
-        const BATCH_SIZE = 5; // Score 5 wallets in parallel
+        // Poll job progress every 3 seconds
+        let done = false;
+        while (!done) {
+            await new Promise(r => setTimeout(r, 3000));
+            try {
+                const jr = await fetch(`/api/rescore?job_id=${jobId}`);
+                const jd = await jr.json();
+                const job = jd.job;
+                if (!job) { done = true; break; }
 
-        for (let i = 0; i < walletList.length; i += BATCH_SIZE) {
-            const batch = walletList.slice(i, i + BATCH_SIZE);
-            status.textContent = `Scoring ${i + 1}-${Math.min(i + BATCH_SIZE, total)}/${total}...`;
-
-            const results = await Promise.allSettled(batch.map(w =>
-                fetch('/api/rescore', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ address: w.address, label: w.label }),
-                }).then(r => r.json())
-            ));
-
-            for (const r of results) {
-                if (r.status === 'fulfilled' && r.value.ok) scored++;
-                else failed++;
-            }
-            // Small delay between batches to avoid rate limits
-            if (i + BATCH_SIZE < walletList.length) {
-                await new Promise(r => setTimeout(r, 200));
+                if (job.status === 'running') {
+                    const pct = job.total > 0 ? `${job.progress}/${job.total}` : '...';
+                    status.textContent = `Scoring ${pct} wallets...`;
+                } else if (job.status === 'completed') {
+                    status.textContent = `Done! ${job.progress}/${job.total} scored`;
+                    status.style.color = 'var(--green)';
+                    done = true;
+                } else if (job.status === 'failed') {
+                    throw new Error(job.error || 'Job failed');
+                } else if (job.status === 'pending') {
+                    status.textContent = 'Waiting for processor...';
+                }
+            } catch (pollErr) {
+                throw pollErr;
             }
         }
-
-        status.textContent = `Done! ${scored} scored, ${failed} failed`;
-        status.style.color = 'var(--green)';
 
         // Reload dashboard data
         await loadData();
@@ -846,7 +844,7 @@ async function startRescore() {
         setTimeout(() => {
             status.style.display = 'none';
             status.style.color = 'var(--cyan)';
-        }, 5000);
+        }, 8000);
     }
 }
 

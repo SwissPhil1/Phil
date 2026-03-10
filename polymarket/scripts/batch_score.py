@@ -1,6 +1,6 @@
 """
 Batch wallet scorer — discover active traders from Polymarket data API
-and score them using wallet_analyzer.py logic.
+and score them using the shared scoring module.
 
 Usage:
     python batch_score.py              # discover + score top 30 traders
@@ -9,38 +9,31 @@ Usage:
 import os
 import sys
 import time
-import json
 from pathlib import Path
 from collections import defaultdict
 
 # Ensure imports work
 sys.path.insert(0, str(Path(__file__).parent))
-from wallet_analyzer import (
-    fetch_user_trades, fetch_user_positions, categorize_market,
-    compute_clv, compute_calibration, assign_tier, save_to_supabase,
-    get_supabase, SUPABASE_URL, SUPABASE_KEY, GAMMA_URL,
-)
+from scoring import score_wallet, save_scores_to_supabase, resolve_username, GAMMA_URL
 
 import requests
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
+SUPABASE_URL = os.environ["SUPABASE_URL"]
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ["SUPABASE_ANON_KEY"]
 DATA_API = "https://data-api.polymarket.com"
 
+# Lazy-init Supabase client
+_supabase = None
 
-def resolve_username(address):
-    """Try to resolve a Polymarket username for a given wallet address."""
-    try:
-        r = requests.get(f"{GAMMA_URL}/profiles/{address}", timeout=10)
-        if r.ok:
-            profile = r.json()
-            name = profile.get("username") or profile.get("name")
-            if name:
-                return name
-    except Exception:
-        pass
-    return None
+def get_supabase():
+    global _supabase
+    if _supabase is None:
+        from supabase import create_client
+        _supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    return _supabase
 
 
 def get_existing_labels():
@@ -96,133 +89,6 @@ def discover_active_traders(min_trades=5, pages=8):
     return results
 
 
-def quick_score(address, username=None):
-    """Score a wallet — lighter version of analyze_wallet for batch use."""
-    trades = fetch_user_trades(address, limit=500)
-    if not trades or len(trades) < 3:
-        return None
-
-    positions = fetch_user_positions(address)
-    position_pnl = {}
-    for p in positions:
-        cid = p.get("conditionId", "")
-        position_pnl[cid] = {
-            "cashPnl": float(p.get("cashPnl", 0) or 0),
-            "percentPnl": float(p.get("percentPnl", 0) or 0),
-            "curPrice": float(p.get("curPrice", 0) or 0),
-            "avgPrice": float(p.get("avgPrice", 0) or 0),
-            "initialValue": float(p.get("initialValue", 0) or 0),
-        }
-
-    bets = []
-    by_cat = defaultdict(list)
-    for t in trades:
-        price = float(t.get("price", 0) or 0)
-        size = float(t.get("size", 0) or 0)
-        side = t.get("side", "BUY")
-        title = t.get("title", "")
-        condition_id = t.get("conditionId", "")
-        category = categorize_market(title)
-        pos = position_pnl.get(condition_id, {})
-        closing_price = pos.get("curPrice") if pos else None
-        won = None
-        if pos and pos.get("percentPnl", 0) != 0:
-            won = pos["cashPnl"] > 0
-
-        clv = compute_clv(price, closing_price, side) if closing_price else None
-        amount_usd = round(price * size, 2)
-
-        bet = {
-            "address": address,
-            "market_slug": t.get("slug", t.get("eventSlug", ""))[:200],
-            "market_title": title[:500],
-            "category": category,
-            "outcome": t.get("outcome", "Yes"),
-            "side": side,
-            "price": price,
-            "size": size,
-            "amount_usd": amount_usd,
-            "timestamp": t.get("timestamp"),
-            "resolved": closing_price is not None and closing_price in (0, 1),
-            "won": won,
-            "closing_price": closing_price,
-            "clv": clv,
-        }
-        bets.append(bet)
-        by_cat[category].append(bet)
-
-    resolved = [b for b in bets if b["resolved"] and b["won"] is not None]
-    wins = sum(1 for b in resolved if b["won"])
-    win_rate = wins / max(len(resolved), 1) if resolved else 0
-    clvs = [b["clv"] for b in bets if b["clv"] is not None]
-    avg_clv = sum(clvs) / max(len(clvs), 1) if clvs else 0
-    total_wagered = sum(b["amount_usd"] for b in bets if b["amount_usd"])
-    total_pnl_val = sum(
-        (1 - b["price"]) * b["size"] if b["won"] else -b["price"] * b["size"]
-        for b in resolved if b["won"] is not None
-    )
-    roi = total_pnl_val / max(total_wagered, 1) if total_wagered else 0
-
-    # Realized ROI = from resolved bets only
-    realized_roi = roi
-
-    # Unrealized PnL from open positions
-    total_pos_pnl = sum(p.get("cashPnl", 0) for p in position_pnl.values())
-
-    # Current ROI = realized PnL + unrealized position PnL, over total wagered
-    current_roi = (total_pnl_val + total_pos_pnl) / max(total_wagered, 1)
-
-    cal_data = [(b["price"], b["won"]) for b in resolved if b["won"] is not None and b["price"] > 0]
-    calibration = compute_calibration(cal_data)
-    avg_edge = avg_clv * 0.7 + (win_rate - 0.5) * 0.3
-    sharpe = realized_roi / max(0.01, calibration) if calibration > 0 else 0
-    kelly = max(0, (win_rate * (1 + avg_clv) - 1) / max(avg_clv, 0.01))
-    tier = assign_tier(avg_clv, win_rate, len(bets))
-
-    cat_scores = {}
-    for cat, cat_bets in by_cat.items():
-        cat_resolved = [b for b in cat_bets if b["resolved"] and b["won"] is not None]
-        cat_wins = sum(1 for b in cat_resolved if b["won"])
-        cat_wr = cat_wins / max(len(cat_resolved), 1) if cat_resolved else 0
-        cat_clvs = [b["clv"] for b in cat_bets if b["clv"] is not None]
-        cat_avg_clv = sum(cat_clvs) / max(len(cat_clvs), 1) if cat_clvs else 0
-        cat_wagered = sum(b["amount_usd"] for b in cat_bets)
-        cat_pnl = sum(
-            (1 - b["price"]) * b["size"] if b["won"] else -b["price"] * b["size"]
-            for b in cat_resolved if b["won"] is not None
-        )
-        cat_roi = cat_pnl / max(cat_wagered, 1)
-        cat_scores[cat] = {
-            "category": cat,
-            "total_bets": len(cat_bets),
-            "win_rate": round(cat_wr, 4),
-            "clv": round(cat_avg_clv, 4),
-            "roi": round(cat_roi, 4),
-        }
-
-    return {
-        "address": address,
-        "username": username,
-        "total_bets": len(bets),
-        "total_volume": round(total_wagered, 2),
-        "resolved_bets": len(resolved),
-        "wins": wins,
-        "win_rate": round(win_rate, 4),
-        "clv": round(avg_clv, 4),
-        "roi": round(realized_roi, 4),
-        "current_roi": round(current_roi, 4),
-        "calibration": round(calibration, 4),
-        "avg_edge": round(avg_edge, 4),
-        "sharpe_ratio": round(sharpe, 4),
-        "kelly_fraction": round(kelly, 4),
-        "tier": tier,
-        "categories": cat_scores,
-        "top_markets": [],
-        "open_positions": len(positions),
-        "bets": bets,
-    }
-
-
 def main():
     limit = 30
     if "--limit" in sys.argv:
@@ -257,16 +123,16 @@ def main():
         try:
             # Preserve existing label or try to resolve username
             existing = existing_labels.get(addr)
-            if existing and not existing.startswith(("elite_", "sharp_", "moderate_", "noise_")):
+            if existing and not existing.startswith(("elite_", "sharp_", "moderate_", "noise_", "unknown_")):
                 username = existing
             else:
                 username = resolve_username(addr)
                 if username:
                     print(f"    Resolved username: {username}")
 
-            report = quick_score(addr, username=username)
+            report = score_wallet(addr, existing_label=username)
             if report and report["total_bets"] >= 3:
-                save_to_supabase(report)
+                save_scores_to_supabase(report, SUPABASE_URL, SUPABASE_KEY)
                 print(f"    -> {report['tier'].upper()} | CLV={report['clv']:+.4f} | WR={report['win_rate']:.1%} | ROI={report['roi']:+.1%} | {report['total_bets']} bets")
                 scored += 1
             else:

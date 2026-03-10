@@ -19,6 +19,10 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
+# Import shared scoring functions
+sys.path.insert(0, str(Path(__file__).parent))
+from scoring import categorize_market, compute_clv, compute_calibration, assign_tier
+
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ["SUPABASE_ANON_KEY"]
 GAMMA_URL = "https://gamma-api.polymarket.com"
@@ -64,75 +68,8 @@ def fetch_market_trades(condition_id, limit=500):
     return []
 
 
-def categorize_market(title, tags=None):
-    """Categorize a market based on title and tags."""
-    title_lower = (title or "").lower()
-    tags_str = " ".join(tags or []).lower()
-    combined = title_lower + " " + tags_str
-
-    if any(w in combined for w in ["trump", "biden", "election", "congress", "senate", "democrat", "republican", "vote", "president", "governor", "political"]):
-        return "politics"
-    if any(w in combined for w in ["bitcoin", "btc", "ethereum", "eth", "crypto", "solana", "sol", "token", "defi"]):
-        return "crypto"
-    if any(w in combined for w in ["nfl", "nba", "mlb", "soccer", "football", "basketball", "tennis", "sports", "ufc", "fight", "match", "game", "super bowl", "championship"]):
-        return "sports"
-    if any(w in combined for w in ["movie", "oscar", "grammy", "celebrity", "tv", "netflix", "music", "entertainment", "award"]):
-        return "entertainment"
-    if any(w in combined for w in ["ai", "openai", "gpt", "climate", "nasa", "science", "technology", "spacex"]):
-        return "science"
-    return "other"
-
-
-# ── Sharpness analysis ──────────────────────────────────────
-
-def compute_clv(entry_price, closing_price, side):
-    """
-    Closing Line Value: how much better was your entry vs the close.
-    Positive = sharp (you bought before the line moved in your favor).
-    """
-    if closing_price is None or entry_price is None:
-        return 0
-    if side == "BUY":
-        return float(closing_price - entry_price)
-    else:
-        return float(entry_price - closing_price)
-
-
-def compute_calibration(bets_with_prices):
-    """
-    Calibration: group bets by decile of entry price,
-    check if actual win rate matches implied probability.
-    Lower = better calibrated.
-    """
-    if not bets_with_prices:
-        return 0.5  # no data
-    buckets = defaultdict(list)
-    for price, won in bets_with_prices:
-        bucket = min(9, int(price * 10))
-        buckets[bucket].append(1 if won else 0)
-
-    total_error = 0
-    count = 0
-    for bucket, outcomes in buckets.items():
-        implied_prob = (bucket + 0.5) / 10
-        actual_rate = sum(outcomes) / len(outcomes)
-        total_error += abs(actual_rate - implied_prob)
-        count += 1
-
-    return round(total_error / max(count, 1), 4) if count > 0 else 0.5
-
-
-def assign_tier(clv, win_rate, total_bets):
-    """Assign tier based on CLV + win rate + sample size."""
-    if total_bets < 5:
-        return "unknown"
-    if clv > 0.05 and win_rate > 0.55:
-        return "elite"
-    if clv > 0.02 and win_rate > 0.52:
-        return "sharp"
-    if clv > 0 and win_rate > 0.48:
-        return "moderate"
-    return "noise"
+# categorize_market, compute_clv, compute_calibration, assign_tier
+# are imported from scoring.py (shared module)
 
 
 # ── Main pipeline ───────────────────────────────────────────

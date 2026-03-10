@@ -806,26 +806,28 @@ async function startRescore() {
         let scored = 0;
         let failed = 0;
         const total = walletList.length;
+        const BATCH_SIZE = 5; // Score 5 wallets in parallel
 
-        for (const w of walletList) {
-            status.textContent = `Scoring ${scored + 1}/${total}...`;
-            try {
-                const r = await fetch('/api/rescore', {
+        for (let i = 0; i < walletList.length; i += BATCH_SIZE) {
+            const batch = walletList.slice(i, i + BATCH_SIZE);
+            status.textContent = `Scoring ${i + 1}-${Math.min(i + BATCH_SIZE, total)}/${total}...`;
+
+            const results = await Promise.allSettled(batch.map(w =>
+                fetch('/api/rescore', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ address: w.address, label: w.label }),
-                });
-                const result = await r.json();
-                if (result.ok) {
-                    scored++;
-                } else {
-                    failed++;
-                }
-            } catch (e) {
-                failed++;
+                }).then(r => r.json())
+            ));
+
+            for (const r of results) {
+                if (r.status === 'fulfilled' && r.value.ok) scored++;
+                else failed++;
             }
-            // Small delay to avoid hammering Polymarket APIs
-            await new Promise(r => setTimeout(r, 300));
+            // Small delay between batches to avoid rate limits
+            if (i + BATCH_SIZE < walletList.length) {
+                await new Promise(r => setTimeout(r, 200));
+            }
         }
 
         status.textContent = `Done! ${scored} scored, ${failed} failed`;

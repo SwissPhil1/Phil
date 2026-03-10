@@ -420,11 +420,15 @@ def analyze_wallet(address, profile=None):
 
     top_markets = sorted(market_summary.items(), key=lambda x: x[1]["volume"], reverse=True)[:10]
 
-    # Use position-level PnL if available
+    # Realized ROI = from resolved bets only
+    realized_roi = roi
+
+    # Unrealized PnL from open positions
     total_position_pnl = sum(p.get("cashPnl", 0) for p in position_pnl.values())
     total_position_value = sum(abs(p.get("initialValue", 0)) for p in position_pnl.values())
-    if total_position_value > 0:
-        roi = total_position_pnl / total_position_value
+
+    # Current ROI = realized PnL + unrealized position PnL, over total wagered
+    current_roi = (total_pnl + total_position_pnl) / max(total_wagered, 1)
 
     # Fetch profile-level aggregate stats (more accurate than trade-level)
     print("  Fetching profile-level stats...")
@@ -443,7 +447,8 @@ def analyze_wallet(address, profile=None):
                         total_wagered = float(qd.get("amount", total_wagered) or total_wagered)
                         profile_pnl = float(qd.get("pnl", 0) or 0)
                         if total_wagered > 0:
-                            roi = profile_pnl / total_wagered
+                            realized_roi = profile_pnl / total_wagered
+                            current_roi = (profile_pnl + total_position_pnl) / total_wagered
                     if "/api/profile/marketsTraded" in qk:
                         total = int(qd.get("traded", total) or total)
                     if "user-stats" in qk:
@@ -452,14 +457,8 @@ def analyze_wallet(address, profile=None):
     except Exception as e:
         print(f"  Warning: profile stats fetch failed: {e}")
 
-    # Re-evaluate tier with better data
+    # Re-evaluate tier with better data (CLV + win rate only, not ROI)
     tier = assign_tier(avg_clv, win_rate, total)
-    # Override tier for profitable high-volume traders
-    if roi > 0.02 and total_wagered > 100000:
-        if roi > 0.05:
-            tier = "elite"
-        elif roi > 0.02:
-            tier = "sharp"
 
     # Build report
     report = {
@@ -471,7 +470,8 @@ def analyze_wallet(address, profile=None):
         "wins": wins,
         "win_rate": round(win_rate, 4),
         "clv": round(avg_clv, 4),
-        "roi": round(roi, 4),
+        "roi": round(realized_roi, 4),
+        "current_roi": round(current_roi, 4),
         "calibration": round(calibration, 4),
         "avg_edge": round(avg_edge, 4),
         "sharpe_ratio": round(sharpe, 4),
@@ -511,7 +511,9 @@ def print_report(r):
     roi_sign = "+" if r["roi"] > 0 else ""
     print(f"  Win Rate:        {r['win_rate'] * 100:.1f}%")
     print(f"  CLV:             {clv_sign}{r['clv'] * 100:.2f}%")
-    print(f"  ROI:             {roi_sign}{r['roi'] * 100:.1f}%")
+    print(f"  ROI (realized):  {roi_sign}{r['roi'] * 100:.1f}%")
+    current_roi_sign = "+" if r.get("current_roi", 0) > 0 else ""
+    print(f"  ROI (current):   {current_roi_sign}{r.get('current_roi', 0) * 100:.1f}%")
     print(f"  Calibration:     {r['calibration']:.4f}")
     print(f"  Avg Edge:        {r['avg_edge'] * 100:.2f}%")
     print(f"  Sharpe Ratio:    {r['sharpe_ratio']:.2f}")
@@ -567,6 +569,7 @@ def save_to_supabase(report):
         "win_rate": report["win_rate"],
         "clv": report["clv"],
         "roi": report["roi"],
+        "current_roi": report.get("current_roi", report["roi"]),
         "calibration": report["calibration"],
         "avg_edge": report["avg_edge"],
         "kelly_fraction": report["kelly_fraction"],
@@ -578,7 +581,16 @@ def save_to_supabase(report):
         sb.table("wallet_scores").upsert(score_row, on_conflict="address").execute()
         print(f"  Scores saved")
     except Exception as e:
-        print(f"  Warning: scores upsert failed: {e}")
+        # If current_roi column doesn't exist yet, retry without it
+        if "current_roi" in str(e):
+            score_row.pop("current_roi", None)
+            try:
+                sb.table("wallet_scores").upsert(score_row, on_conflict="address").execute()
+                print(f"  Scores saved (without current_roi — add column to Supabase)")
+            except Exception as e2:
+                print(f"  Warning: scores upsert failed: {e2}")
+        else:
+            print(f"  Warning: scores upsert failed: {e}")
 
     # 3. Upsert category scores
     for cat, cs in report.get("categories", {}).items():

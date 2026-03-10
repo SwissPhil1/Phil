@@ -566,6 +566,7 @@ function renderWalletList() {
         const clv = (w.clv || 0);
         const wr = (w.win_rate || 0);
         const roi = (w.roi || 0);
+        const currentRoi = (w.current_roi || roi);
         const tier = w.tier || 'unknown';
 
         return `<div class="wallet-row ${selectedWallet === addr ? 'selected' : ''}" data-addr="${addr}">
@@ -604,6 +605,7 @@ function renderWalletDetail(addr) {
     const clv = w.clv || 0;
     const wr = w.win_rate || 0;
     const roi = w.roi || 0;
+    const currentRoi = w.current_roi || roi;
     const cal = w.calibration || 0;
     const sharpe = w.sharpe_ratio || 0;
     const kelly = w.kelly_fraction || 0;
@@ -627,8 +629,8 @@ function renderWalletDetail(addr) {
                 <div class="dm-value" style="color: ${roi > 0 ? 'var(--green)' : 'var(--red)'}">${roi > 0 ? '+' : ''}${(roi * 100).toFixed(1)}%</div>
             </div>
             <div class="detail-metric">
-                <div class="dm-label">SHARPE</div>
-                <div class="dm-value" style="color: ${sharpe > 1 ? 'var(--green)' : 'var(--white)'}">${sharpe.toFixed(2)}</div>
+                <div class="dm-label">CURRENT ROI</div>
+                <div class="dm-value" style="color: ${currentRoi > 0 ? 'var(--green)' : 'var(--red)'}">${currentRoi > 0 ? '+' : ''}${(currentRoi * 100).toFixed(1)}%</div>
             </div>
         </div>
         <div class="detail-metrics">
@@ -645,8 +647,8 @@ function renderWalletDetail(addr) {
                 <div class="dm-value" style="color: var(--white)">${kelly.toFixed(3)}</div>
             </div>
             <div class="detail-metric">
-                <div class="dm-label">RANK</div>
-                <div class="dm-value" style="color: ${(w.rank || 999) <= 3 ? 'var(--green)' : 'var(--white)'}">#${w.rank || '—'}</div>
+                <div class="dm-label">SHARPE</div>
+                <div class="dm-value" style="color: ${sharpe > 1 ? 'var(--green)' : 'var(--white)'}">${sharpe.toFixed(2)}</div>
             </div>
         </div>
         <div class="category-breakdown">

@@ -139,23 +139,21 @@ def quick_score(address):
     )
     roi = total_pnl_val / max(total_wagered, 1) if total_wagered else 0
 
-    # Position-level PnL override
+    # Realized ROI = from resolved bets only
+    realized_roi = roi
+
+    # Unrealized PnL from open positions
     total_pos_pnl = sum(p.get("cashPnl", 0) for p in position_pnl.values())
-    total_pos_value = sum(abs(p.get("initialValue", 0)) for p in position_pnl.values())
-    if total_pos_value > 0:
-        roi = total_pos_pnl / total_pos_value
+
+    # Current ROI = realized PnL + unrealized position PnL, over total wagered
+    current_roi = (total_pnl_val + total_pos_pnl) / max(total_wagered, 1)
 
     cal_data = [(b["price"], b["won"]) for b in resolved if b["won"] is not None and b["price"] > 0]
     calibration = compute_calibration(cal_data)
     avg_edge = avg_clv * 0.7 + (win_rate - 0.5) * 0.3
-    sharpe = roi / max(0.01, calibration) if calibration > 0 else 0
+    sharpe = realized_roi / max(0.01, calibration) if calibration > 0 else 0
     kelly = max(0, (win_rate * (1 + avg_clv) - 1) / max(avg_clv, 0.01))
     tier = assign_tier(avg_clv, win_rate, len(bets))
-
-    if roi > 0.05 and total_wagered > 100000:
-        tier = "elite"
-    elif roi > 0.02 and total_wagered > 100000:
-        tier = "sharp"
 
     cat_scores = {}
     for cat, cat_bets in by_cat.items():
@@ -187,7 +185,8 @@ def quick_score(address):
         "wins": wins,
         "win_rate": round(win_rate, 4),
         "clv": round(avg_clv, 4),
-        "roi": round(roi, 4),
+        "roi": round(realized_roi, 4),
+        "current_roi": round(current_roi, 4),
         "calibration": round(calibration, 4),
         "avg_edge": round(avg_edge, 4),
         "sharpe_ratio": round(sharpe, 4),

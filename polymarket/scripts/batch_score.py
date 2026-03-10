@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from wallet_analyzer import (
     fetch_user_trades, fetch_user_positions, categorize_market,
     compute_clv, compute_calibration, assign_tier, save_to_supabase,
-    get_supabase, SUPABASE_URL, SUPABASE_KEY,
+    get_supabase, SUPABASE_URL, SUPABASE_KEY, GAMMA_URL,
 )
 
 import requests
@@ -27,6 +27,30 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 DATA_API = "https://data-api.polymarket.com"
+
+
+def resolve_username(address):
+    """Try to resolve a Polymarket username for a given wallet address."""
+    try:
+        r = requests.get(f"{GAMMA_URL}/profiles/{address}", timeout=10)
+        if r.ok:
+            profile = r.json()
+            name = profile.get("username") or profile.get("name")
+            if name:
+                return name
+    except Exception:
+        pass
+    return None
+
+
+def get_existing_labels():
+    """Fetch existing wallet labels from Supabase so we don't overwrite them."""
+    sb = get_supabase()
+    try:
+        resp = sb.table("wallets").select("address,label").execute()
+        return {row["address"]: row["label"] for row in (resp.data or []) if row.get("label")}
+    except Exception:
+        return {}
 
 
 def discover_active_traders(min_trades=5, pages=8):
@@ -72,7 +96,7 @@ def discover_active_traders(min_trades=5, pages=8):
     return results
 
 
-def quick_score(address):
+def quick_score(address, username=None):
     """Score a wallet — lighter version of analyze_wallet for batch use."""
     trades = fetch_user_trades(address, limit=500)
     if not trades or len(trades) < 3:
@@ -178,7 +202,7 @@ def quick_score(address):
 
     return {
         "address": address,
-        "username": None,
+        "username": username,
         "total_bets": len(bets),
         "total_volume": round(total_wagered, 2),
         "resolved_bets": len(resolved),
@@ -214,6 +238,11 @@ def main():
     candidates = discover_active_traders(min_trades=5, pages=8)
     print(f"  Found {len(candidates)} candidates with 5+ trades")
 
+    # Step 1b: Load existing labels so we don't overwrite Polymarket names
+    print("\n  Loading existing wallet labels...")
+    existing_labels = get_existing_labels()
+    print(f"  Found {len(existing_labels)} existing labels")
+
     # Step 2: Score each one
     print(f"\n[2] Scoring top {limit} wallets...")
     scored = 0
@@ -226,7 +255,16 @@ def main():
         print(f"\n  [{scored + 1}/{limit}] {addr[:16]}... ({c['trades']} trades, ${c['volume']:.0f} vol)")
 
         try:
-            report = quick_score(addr)
+            # Preserve existing label or try to resolve username
+            existing = existing_labels.get(addr)
+            if existing and not existing.startswith(("elite_", "sharp_", "moderate_", "noise_")):
+                username = existing
+            else:
+                username = resolve_username(addr)
+                if username:
+                    print(f"    Resolved username: {username}")
+
+            report = quick_score(addr, username=username)
             if report and report["total_bets"] >= 3:
                 save_to_supabase(report)
                 print(f"    -> {report['tier'].upper()} | CLV={report['clv']:+.4f} | WR={report['win_rate']:.1%} | ROI={report['roi']:+.1%} | {report['total_bets']} bets")

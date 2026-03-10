@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS wallet_scores (
     total_bets      INTEGER DEFAULT 0,
     win_rate        NUMERIC(5,4) DEFAULT 0,        -- 0.0000 to 1.0000
     clv             NUMERIC(8,4) DEFAULT 0,        -- Closing Line Value (positive = sharp)
-    roi             NUMERIC(8,4) DEFAULT 0,        -- Return on investment
+    roi             NUMERIC(8,4) DEFAULT 0,        -- Return on investment (resolved bets only)
+    current_roi     NUMERIC(8,4) DEFAULT 0,        -- Current ROI including open positions
     calibration     NUMERIC(5,4) DEFAULT 0,        -- how well-calibrated are their odds
     avg_edge        NUMERIC(8,4) DEFAULT 0,        -- average edge at time of bet
     kelly_fraction  NUMERIC(5,4) DEFAULT 0,        -- implied Kelly sizing

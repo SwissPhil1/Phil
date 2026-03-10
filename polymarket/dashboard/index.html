@@ -790,7 +790,12 @@ async function startRescore() {
         // Get list of wallets to score
         status.textContent = 'Loading wallets...';
         const resp = await fetch('/api/rescore');
+        if (!resp.ok) {
+            const text = await resp.text();
+            throw new Error(`API ${resp.status}: ${text.slice(0, 120)}`);
+        }
         const data = await resp.json();
+        if (data.error) throw new Error(data.error);
         const walletList = data.wallets || [];
 
         if (!walletList.length) {

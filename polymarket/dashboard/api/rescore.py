@@ -12,8 +12,14 @@ from datetime import datetime, timezone
 
 import requests
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
+def _clean_env(name: str) -> str:
+    """Strip curly/smart quotes and whitespace that iPad paste may introduce."""
+    val = os.environ.get(name, "")
+    # Remove surrounding straight and curly quotes, then strip whitespace
+    return val.strip().strip("\"'\u201c\u201d\u2018\u2019").strip()
+
+SUPABASE_URL = _clean_env("SUPABASE_URL")
+SUPABASE_KEY = _clean_env("SUPABASE_SERVICE_KEY")
 GAMMA_URL = "https://gamma-api.polymarket.com"
 DATA_API = "https://data-api.polymarket.com"
 CLOB_URL = "https://clob.polymarket.com"
@@ -319,6 +325,9 @@ class handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         """Return list of wallet addresses to re-score."""
+        if not SUPABASE_URL or not SUPABASE_KEY:
+            self._json(500, {"error": f"Missing env vars: URL={'set' if SUPABASE_URL else 'empty'}, KEY={'set' if SUPABASE_KEY else 'empty'}"})
+            return
         wallets = sb_query("wallets", "select=address,label&order=created_at.desc&limit=500")
         self._json(200, {"wallets": wallets})
 

@@ -57,6 +57,8 @@ model Question {
   difficulty    String   @default("medium") // easy, medium, hard
   category      String?
   imageUrl      String?
+  questionType  String   @default("mcq") // "mcq" or "case"
+  caseContext   String?  // Clinical vignette for case-based questions
   createdAt     DateTime @default(now())
 
   attempts QuestionAttempt[]

@@ -32,6 +32,7 @@ import {
   FilePlus,
   Wand2,
   CheckCircle,
+  Target,
 } from "lucide-react";
 import React, { useEffect, useState, useCallback, useRef } from "react";
 import ReactMarkdown, { Components } from "react-markdown";
@@ -413,6 +414,20 @@ export default function ChapterDetailPage() {
   // Reconcile state
   const [reconciling, setReconciling] = useState(false);
   const [reconcileMessage, setReconcileMessage] = useState("");
+
+  // Diagnostic pre-quiz state
+  const [diagnosticLoading, setDiagnosticLoading] = useState(false);
+  const [diagnosticQuestions, setDiagnosticQuestions] = useState<Array<{
+    questionText: string; options: string[]; correctAnswer: number; explanation: string; difficulty: string;
+  }> | null>(null);
+  const [diagIndex, setDiagIndex] = useState(0);
+  const [diagSelected, setDiagSelected] = useState<number | null>(null);
+  const [diagRevealed, setDiagRevealed] = useState(false);
+  const [diagScore, setDiagScore] = useState(0);
+
+  // Case-based question generation state
+  const [generatingCases, setGeneratingCases] = useState(false);
+  const [caseGenMessage, setCaseGenMessage] = useState("");
 
   // Parse study guide sections for the position selector
   const guideSections = React.useMemo(() => {
@@ -874,6 +889,70 @@ export default function ChapterDetailPage() {
     }
   }, []);
 
+  // ── Diagnostic Pre-Quiz ────────────────────────────────────────────
+  const launchDiagnostic = useCallback(async () => {
+    if (!chapter) return;
+    setDiagnosticLoading(true);
+    setDiagnosticQuestions(null);
+    setDiagIndex(0);
+    setDiagSelected(null);
+    setDiagRevealed(false);
+    setDiagScore(0);
+    try {
+      const res = await fetch(`/api/chapters/${chapter.id}/diagnostic`, { method: "POST" });
+      if (!res.ok) throw new Error(`Error ${res.status}`);
+      const data = await res.json();
+      setDiagnosticQuestions(data.questions);
+    } catch (err) {
+      console.error("Diagnostic quiz error:", err);
+    } finally {
+      setDiagnosticLoading(false);
+    }
+  }, [chapter]);
+
+  // ── Generate Case-Based Questions ─────────────────────────────────
+  const generateCaseQuestions = useCallback(async () => {
+    if (!chapter) return;
+    setGeneratingCases(true);
+    setCaseGenMessage("Generating case-based questions...");
+    try {
+      const res = await fetch("/api/generate-case-questions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chapterId: chapter.id }),
+      });
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("No stream");
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (data.message) setCaseGenMessage(data.message);
+            if (data.success) {
+              setCaseGenMessage(`✓ ${data.message}`);
+              // Refresh chapter data to get new question count
+              const refreshRes = await fetch(`/api/chapters/${chapter.id}`);
+              if (refreshRes.ok) setChapter(await refreshRes.json());
+            }
+            if (data.error) setCaseGenMessage(`Error: ${data.error}`);
+          } catch { /* skip */ }
+        }
+      }
+    } catch (err) {
+      setCaseGenMessage(`Error: ${err instanceof Error ? err.message : "Failed"}`);
+    } finally {
+      setGeneratingCases(false);
+    }
+  }, [chapter]);
+
   // Auto-generate study guide
   useEffect(() => {
     if (chapter && !chapter.studyGuide && !isGenerating && !guideError && !autoGenerateTriggered.current && activeTab === "guide" && (chapter.questions.length > 0 || chapter.summary) && hasPdfChunks) {
@@ -1131,6 +1210,11 @@ export default function ChapterDetailPage() {
       <div className="flex gap-3 flex-wrap">
         <Link href={`/quiz?chapterId=${chapter.id}`}><Button size="sm" className="gap-2"><Brain className="h-4 w-4" />Quiz ({chapter.questions.length})</Button></Link>
         <Link href={`/flashcards?chapterId=${chapter.id}`}><Button size="sm" variant="outline" className="gap-2"><Layers className="h-4 w-4" />Flashcards ({chapter.flashcards.length})</Button></Link>
+        {chapter.studyGuide && (
+          <Button size="sm" variant="outline" className="gap-2 border-teal-300 text-teal-700 hover:bg-teal-50 dark:border-teal-700 dark:text-teal-300 dark:hover:bg-teal-950/30" onClick={launchDiagnostic} disabled={diagnosticLoading}>
+            {diagnosticLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Target className="h-4 w-4" />}Diagnostic
+          </Button>
+        )}
         {chapter.studyGuide && chapter.flashcards.length === 0 && !generatingFlashcards && (
           <Button size="sm" variant="outline" className="gap-2 border-amber-300 text-amber-700 hover:bg-amber-50" onClick={generateFlashcardsOnly}>
             <Sparkles className="h-4 w-4" />Generate Flashcards
@@ -1147,16 +1231,88 @@ export default function ChapterDetailPage() {
             <Sparkles className="h-4 w-4" />Generate Questions
           </Button>
         )}
+        {chapter.studyGuide && !generatingCases && (
+          <Button size="sm" variant="outline" className="gap-2 border-orange-300 text-orange-700 hover:bg-orange-50 dark:border-orange-700 dark:text-orange-300 dark:hover:bg-orange-950/30" onClick={generateCaseQuestions} disabled={generatingCases}>
+            <GraduationCap className="h-4 w-4" />Generate Cases
+          </Button>
+        )}
         {generatingQuestions && (
           <span className="text-xs text-muted-foreground flex items-center gap-1.5">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
             {questionGenMessage}
           </span>
         )}
+        {generatingCases && (
+          <span className="text-xs text-muted-foreground flex items-center gap-1.5">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            {caseGenMessage}
+          </span>
+        )}
         {hasPdfChunks && (
           <Button size="sm" variant="ghost" className="gap-2 text-muted-foreground" onClick={generateContent}><RefreshCw className="h-4 w-4" />Regenerate All</Button>
         )}
       </div>
+
+      {/* Diagnostic Pre-Quiz */}
+      {diagnosticQuestions && diagnosticQuestions.length > 0 && (
+        <Card className="border-2 border-teal-200 dark:border-teal-800">
+          <CardContent className="p-5">
+            {diagIndex < diagnosticQuestions.length ? (
+              <>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline" className="border-teal-300 text-teal-700 dark:text-teal-300">Diagnostic</Badge>
+                    <span className="text-xs text-muted-foreground">{diagIndex + 1}/{diagnosticQuestions.length}</span>
+                  </div>
+                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => setDiagnosticQuestions(null)}>
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+                <p className="text-sm font-medium mb-3">{diagnosticQuestions[diagIndex].questionText}</p>
+                <div className="space-y-2">
+                  {diagnosticQuestions[diagIndex].options.map((opt: string, i: number) => {
+                    let cls = "w-full text-left p-3 rounded-lg border text-xs transition-colors ";
+                    if (diagRevealed) {
+                      if (i === diagnosticQuestions[diagIndex].correctAnswer) cls += "border-green-400 bg-green-50 dark:bg-green-950/20 text-green-700 dark:text-green-300";
+                      else if (i === diagSelected) cls += "border-red-400 bg-red-50 dark:bg-red-950/20 text-red-700 dark:text-red-300";
+                      else cls += "border-muted text-muted-foreground";
+                    } else {
+                      cls += diagSelected === i ? "border-teal-400 bg-teal-50 dark:bg-teal-950/20" : "border-border hover:border-teal-300";
+                    }
+                    return (
+                      <button key={i} className={cls} disabled={diagRevealed} onClick={() => { setDiagSelected(i); setDiagRevealed(true); if (i === diagnosticQuestions[diagIndex].correctAnswer) setDiagScore(s => s + 1); }}>
+                        {opt}
+                      </button>
+                    );
+                  })}
+                </div>
+                {diagRevealed && (
+                  <>
+                    <p className="text-xs text-muted-foreground mt-3 p-2 bg-muted/50 rounded">{diagnosticQuestions[diagIndex].explanation}</p>
+                    <Button size="sm" className="mt-3 gap-1" onClick={() => { setDiagIndex(i => i + 1); setDiagSelected(null); setDiagRevealed(false); }}>
+                      {diagIndex + 1 >= diagnosticQuestions.length ? "Voir résultats" : "Suivante"}
+                    </Button>
+                  </>
+                )}
+              </>
+            ) : (
+              <div className="text-center py-4">
+                <p className="text-2xl font-bold mb-1">{Math.round((diagScore / diagnosticQuestions.length) * 100)}%</p>
+                <p className="text-sm text-muted-foreground mb-1">{diagScore}/{diagnosticQuestions.length} correct</p>
+                <p className="text-xs text-muted-foreground mb-3">
+                  {diagScore / diagnosticQuestions.length >= 0.75
+                    ? "Bonne base ! Le guide renforcera vos connaissances."
+                    : "Des lacunes identifiées — concentrez-vous sur ces sujets en lisant le guide."}
+                </p>
+                <div className="flex gap-2 justify-center">
+                  <Button size="sm" variant="outline" onClick={() => setDiagnosticQuestions(null)}>Fermer</Button>
+                  <Button size="sm" onClick={launchDiagnostic}>Recommencer</Button>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-1 border-b overflow-x-auto">

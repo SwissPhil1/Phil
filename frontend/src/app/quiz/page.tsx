@@ -29,6 +29,8 @@ interface Question {
   difficulty: string;
   category: string | null;
   imageUrl: string | null;
+  questionType: string;
+  caseContext: string | null;
   chapter: {
     title: string;
     bookSource: string;
@@ -433,6 +435,14 @@ function QuizContent() {
               </Badge>
             )}
           </div>
+
+          {/* Case-based vignette */}
+          {question.questionType === "case" && question.caseContext && (
+            <div className="mb-4 p-4 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-lg">
+              <p className="text-xs font-semibold text-amber-700 dark:text-amber-400 mb-1">Cas clinique</p>
+              <p className="text-sm text-amber-900 dark:text-amber-200 leading-relaxed">{question.caseContext}</p>
+            </div>
+          )}
 
           {question.imageUrl && (
             // eslint-disable-next-line @next/next/no-img-element

@@ -160,11 +160,23 @@ export default function ImportNotesPage() {
         }),
       });
 
+      if (!res.ok && res.headers.get("content-type")?.includes("application/json")) {
+        const errBody = await res.json();
+        setStatus({ phase: "error", message: errBody.error || `Server error ${res.status}` });
+        return;
+      }
+
+      if (!res.ok) {
+        setStatus({ phase: "error", message: `Server error ${res.status}: ${res.statusText}` });
+        return;
+      }
+
       let streamCompleted = false;
+      let streamError: string | null = null;
 
       await readSSEStream(res, (data) => {
         if (data.error) {
-          setStatus({ phase: "error", message: data.error as string });
+          streamError = data.error as string;
           return;
         }
         if (data.success) {
@@ -176,6 +188,11 @@ export default function ImportNotesPage() {
           setStatus({ phase: "saving", message: (data.message as string) || "Saving..." });
         }
       });
+
+      if (streamError) {
+        setStatus({ phase: "error", message: streamError });
+        return;
+      }
 
       if (!streamCompleted || !savedChapterId) {
         setStatus({

@@ -189,6 +189,7 @@ async function handleTransform(body: { organ: string; title: string; text: strin
         send({ status: "transforming", message: "Claude is transforming your summary into Q/A format..." });
 
         const client = getClaudeClient();
+        console.log(`[import-notes] Starting transform: organ=${organ}, title="${title}", inputWords=${text.split(/\s+/).length}`);
         // Scale max_tokens based on input size — large combined summaries need more room
         const inputWords = text.split(/\s+/).length;
         const dynamicMaxTokens = inputWords > 5000 ? 64000 : 32000;
@@ -206,6 +207,7 @@ async function handleTransform(body: { organ: string; title: string; text: strin
           },
         );
 
+        console.log(`[import-notes] Transform complete: ${studyGuide.length} chars`);
         send({ status: "saving", message: "Saving study guide..." });
 
         // Step 2: Find next chapter number for notebook_import
@@ -237,9 +239,12 @@ async function handleTransform(body: { organ: string; title: string; text: strin
           flashcardsCreated: 0,
           message: "Study guide saved. Flashcards will be generated next.",
         });
-      } catch (err) {
-        console.error("Transform error:", err);
-        send({ error: err instanceof Error ? err.message : "Transform failed" });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message
+          : typeof err === "string" ? err
+          : JSON.stringify(err) || "Transform failed (unknown error)";
+        console.error("Transform error:", msg, err);
+        send({ error: msg });
       } finally {
         clearInterval(heartbeat);
         controller.close();

@@ -1,6 +1,21 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
-import { ORGAN_TO_SYSTEM } from "@/lib/taxonomy";
+import { ORGAN_TO_SYSTEM as FALLBACK_ORGAN_TO_SYSTEM } from "@/lib/taxonomy";
+
+/** Get organ→system map from DB, falling back to hardcoded */
+async function getOrganToSystem(): Promise<Record<string, string>> {
+  try {
+    const organs = await prisma.organCategory.findMany({
+      include: { system: { select: { key: true } } },
+    });
+    if (organs.length > 0) {
+      const map: Record<string, string> = {};
+      for (const o of organs) map[o.key] = o.system.key;
+      return map;
+    }
+  } catch { /* table may not exist yet */ }
+  return FALLBACK_ORGAN_TO_SYSTEM;
+}
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -23,8 +38,8 @@ export async function GET(request: Request) {
   if (organ) {
     where.chapter = { organ };
   } else if (system) {
-    // Find all organs belonging to this system
-    const organsInSystem = Object.entries(ORGAN_TO_SYSTEM)
+    const organToSystem = await getOrganToSystem();
+    const organsInSystem = Object.entries(organToSystem)
       .filter(([, sys]) => sys === system)
       .map(([org]) => org);
     where.chapter = { organ: { in: organsInSystem } };

@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState, useCallback, Suspense, useMemo } from "react";
 import { previewIntervals, formatInterval, xpForQuality, levelFromXp } from "@/lib/sm2";
-import { getAllSystems, getOrganLabel, getSystemLabel, ORGAN_TO_SYSTEM } from "@/lib/taxonomy";
+import { getAllSystems as getFallbackSystems, getOrganLabel as fallbackOrganLabel, getSystemLabel as fallbackSystemLabel, type DbSystem, buildTaxonomyFromDb } from "@/lib/taxonomy";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -146,11 +146,29 @@ function FlashcardsContent() {
   const [editBack, setEditBack] = useState("");
   const [editSaving, setEditSaving] = useState(false);
 
-  const systems = useMemo(() => getAllSystems(), []);
+  // Dynamic taxonomy from DB
+  const [dbSystems, setDbSystems] = useState<DbSystem[] | null>(null);
+  const taxonomy = useMemo(() => {
+    if (dbSystems) return buildTaxonomyFromDb(dbSystems);
+    const fallback = getFallbackSystems();
+    return {
+      systems: fallback,
+      organToSystem: {} as Record<string, string>,
+      organLabels: {} as Record<string, string>,
+      systemLabels: {} as Record<string, string>,
+    };
+  }, [dbSystems]);
+  const systems = taxonomy.systems;
+  const getOrganLabel = (organ: string) => taxonomy.organLabels[organ] || fallbackOrganLabel(organ);
+  const getSystemLabel = (system: string) => taxonomy.systemLabels[system] || fallbackSystemLabel(system);
 
   // Load stored new card limit
   useEffect(() => {
     setNewLimit(getStoredNewLimit());
+    fetch("/api/taxonomy")
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => { if (data && Array.isArray(data)) setDbSystems(data); })
+      .catch(() => {});
   }, []);
 
   // ── Load stats ──────────────────────────────────────────────────────────

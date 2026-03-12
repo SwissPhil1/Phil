@@ -1,7 +1,22 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
-import { ORGAN_TO_SYSTEM } from "@/lib/taxonomy";
+import { ORGAN_TO_SYSTEM as FALLBACK_ORGAN_TO_SYSTEM } from "@/lib/taxonomy";
 import { xpForQuality } from "@/lib/sm2";
+
+/** Get organ→system map from DB, falling back to hardcoded */
+async function getOrganToSystem(): Promise<Record<string, string>> {
+  try {
+    const organs = await prisma.organCategory.findMany({
+      include: { system: { select: { key: true } } },
+    });
+    if (organs.length > 0) {
+      const map: Record<string, string> = {};
+      for (const o of organs) map[o.key] = o.system.key;
+      return map;
+    }
+  } catch { /* table may not exist yet */ }
+  return FALLBACK_ORGAN_TO_SYSTEM;
+}
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -13,13 +28,14 @@ export async function GET(request: Request) {
   const organ = searchParams.get("organ");   // e.g. "pancreas", "liver"
 
   // Build chapter filter from system/organ/chapterId
+  const organToSystem = await getOrganToSystem();
   const chapterWhere: Record<string, unknown> = {};
   if (chapterId) {
     chapterWhere.id = parseInt(chapterId, 10);
   } else if (organ) {
     chapterWhere.organ = organ;
   } else if (system) {
-    const organsInSystem = Object.entries(ORGAN_TO_SYSTEM)
+    const organsInSystem = Object.entries(organToSystem)
       .filter(([, sys]) => sys === system)
       .map(([o]) => o);
     chapterWhere.organ = { in: organsInSystem };
@@ -272,7 +288,7 @@ export async function GET(request: Request) {
     const result = combined.map((card) => ({
       ...card,
       isNew: newIds.has(card.id),
-      system: card.chapter.organ ? ORGAN_TO_SYSTEM[card.chapter.organ] ?? null : null,
+      system: card.chapter.organ ? organToSystem[card.chapter.organ] ?? null : null,
     }));
 
     return NextResponse.json(result);

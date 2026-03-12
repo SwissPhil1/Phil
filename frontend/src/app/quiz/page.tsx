@@ -15,9 +15,10 @@ import {
 } from "lucide-react";
 import { useEffect, useState, useCallback, useMemo, Suspense } from "react";
 import {
-  getAllSystems,
-  ORGAN_TO_SYSTEM,
+  getAllSystems as getFallbackSystems,
   type SystemInfo,
+  type DbSystem,
+  buildTaxonomyFromDb,
 } from "@/lib/taxonomy";
 
 interface Question {
@@ -63,7 +64,18 @@ function QuizContent() {
   const [selectedOrgan, setSelectedOrgan] = useState<string | null>(paramOrgan);
   const chapterId = paramChapterId;
 
-  const systems: SystemInfo[] = useMemo(() => getAllSystems(), []);
+  const [dbSystems, setDbSystems] = useState<DbSystem[] | null>(null);
+  const systems: SystemInfo[] = useMemo(() => {
+    if (dbSystems) return buildTaxonomyFromDb(dbSystems).systems;
+    return getFallbackSystems();
+  }, [dbSystems]);
+
+  useEffect(() => {
+    fetch("/api/taxonomy")
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => { if (data && Array.isArray(data)) setDbSystems(data); })
+      .catch(() => {});
+  }, []);
 
   const currentSystemOrgans = useMemo(() => {
     if (!selectedSystem) return [];

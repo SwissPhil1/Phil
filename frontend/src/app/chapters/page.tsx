@@ -22,12 +22,11 @@ import {
 } from "lucide-react";
 import { useEffect, useState, useCallback, useMemo, Suspense } from "react";
 import {
-  ORGAN_LABELS,
-  ORGAN_TO_SYSTEM,
-  getAllSystems,
-  getSystemLabel,
-  getOrganLabel,
+  ORGAN_TO_SYSTEM as FALLBACK_ORGAN_TO_SYSTEM,
+  getAllSystems as getFallbackSystems,
   type SystemInfo,
+  type DbSystem,
+  buildTaxonomyFromDb,
 } from "@/lib/taxonomy";
 
 interface Chapter {
@@ -90,23 +89,71 @@ function OrganAssigner({
   currentOrgan,
   title,
   systems,
+  organToSystem,
+  dbSystems,
   onAssign,
   onCancel,
+  onTaxonomyChanged,
 }: {
   currentOrgan: string | null;
   title: string;
   systems: SystemInfo[];
+  organToSystem: Record<string, string>;
+  dbSystems: import("@/lib/taxonomy").DbSystem[] | null;
   onAssign: (organ: string) => void;
   onCancel: () => void;
+  onTaxonomyChanged: () => void;
 }) {
   const [pickedSystem, setPickedSystem] = useState<string | null>(
-    currentOrgan ? ORGAN_TO_SYSTEM[currentOrgan] ?? null : null
+    currentOrgan ? organToSystem[currentOrgan] ?? null : null
   );
+  const [addingSystem, setAddingSystem] = useState(false);
+  const [newSysLabel, setNewSysLabel] = useState("");
+  const [addingOrgan, setAddingOrgan] = useState(false);
+  const [newOrgLabel, setNewOrgLabel] = useState("");
 
   const currentSystemOrgans = useMemo(() => {
     if (!pickedSystem) return [];
     return systems.find((s) => s.key === pickedSystem)?.organs ?? [];
   }, [pickedSystem, systems]);
+
+  const handleAddSystem = async () => {
+    const label = newSysLabel.trim();
+    if (!label) return;
+    const key = label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+    try {
+      await fetch("/api/taxonomy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "add_system", key, label }),
+      });
+      onTaxonomyChanged();
+      setAddingSystem(false);
+      setNewSysLabel("");
+      // Auto-select the new system after a brief delay for re-render
+      setTimeout(() => setPickedSystem(key), 100);
+    } catch (e) { console.error(e); }
+  };
+
+  const handleAddOrgan = async () => {
+    const label = newOrgLabel.trim();
+    if (!label || !pickedSystem) return;
+    const key = label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+    const dbSys = dbSystems?.find((s) => s.key === pickedSystem);
+    if (!dbSys) return;
+    try {
+      await fetch("/api/taxonomy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "add_organ", systemId: dbSys.id, key, label }),
+      });
+      onTaxonomyChanged();
+      setAddingOrgan(false);
+      setNewOrgLabel("");
+      // Auto-assign the new organ
+      setTimeout(() => onAssign(key), 100);
+    } catch (e) { console.error(e); }
+  };
 
   return (
     <div className="space-y-3">
@@ -120,7 +167,7 @@ function OrganAssigner({
           {systems.map((sys) => (
             <button
               key={sys.key}
-              onClick={() => setPickedSystem(sys.key)}
+              onClick={() => { setPickedSystem(sys.key); setAddingOrgan(false); }}
               className={`px-2.5 py-1 rounded-md border text-xs font-medium transition-colors ${
                 pickedSystem === sys.key
                   ? "bg-primary text-primary-foreground border-primary"
@@ -130,10 +177,35 @@ function OrganAssigner({
               {sys.label}
             </button>
           ))}
+          {!addingSystem ? (
+            <button
+              onClick={() => setAddingSystem(true)}
+              className="px-2.5 py-1 rounded-md border border-dashed border-primary/40 text-xs font-medium text-primary hover:bg-primary/5 transition-colors"
+            >
+              + Nouveau système
+            </button>
+          ) : (
+            <div className="flex items-center gap-1">
+              <input
+                autoFocus
+                value={newSysLabel}
+                onChange={(e) => setNewSysLabel(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") handleAddSystem(); if (e.key === "Escape") setAddingSystem(false); }}
+                placeholder="Nom du système..."
+                className="px-2 py-1 text-xs border rounded-md bg-background w-36"
+              />
+              <button onClick={handleAddSystem} className="px-1.5 py-1 text-xs text-primary hover:bg-primary/10 rounded">
+                <Check className="h-3.5 w-3.5" />
+              </button>
+              <button onClick={() => setAddingSystem(false)} className="px-1.5 py-1 text-xs text-muted-foreground hover:bg-muted rounded">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
-      {pickedSystem && currentSystemOrgans.length > 0 && (
+      {pickedSystem && (
         <div>
           <p className="text-xs text-muted-foreground mb-1.5">Section :</p>
           <div className="flex flex-wrap gap-1.5 pl-2 border-l-2 border-primary/20">
@@ -150,6 +222,31 @@ function OrganAssigner({
                 {o.label}
               </button>
             ))}
+            {!addingOrgan ? (
+              <button
+                onClick={() => setAddingOrgan(true)}
+                className="px-2.5 py-1 rounded-md border border-dashed border-primary/40 text-xs font-medium text-primary hover:bg-primary/5 transition-colors"
+              >
+                + Nouvelle section
+              </button>
+            ) : (
+              <div className="flex items-center gap-1">
+                <input
+                  autoFocus
+                  value={newOrgLabel}
+                  onChange={(e) => setNewOrgLabel(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") handleAddOrgan(); if (e.key === "Escape") setAddingOrgan(false); }}
+                  placeholder="Nom de la section..."
+                  className="px-2 py-1 text-xs border rounded-md bg-background w-36"
+                />
+                <button onClick={handleAddOrgan} className="px-1.5 py-1 text-xs text-primary hover:bg-primary/10 rounded">
+                  <Check className="h-3.5 w-3.5" />
+                </button>
+                <button onClick={() => setAddingOrgan(false)} className="px-1.5 py-1 text-xs text-muted-foreground hover:bg-muted rounded">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -172,9 +269,28 @@ function ChaptersContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Dynamic taxonomy from DB
+  const [dbSystems, setDbSystems] = useState<DbSystem[] | null>(null);
+  const taxonomy = useMemo(() => {
+    if (dbSystems) return buildTaxonomyFromDb(dbSystems);
+    // Fallback to hardcoded
+    const fallback = getFallbackSystems();
+    return {
+      systems: fallback,
+      organToSystem: FALLBACK_ORGAN_TO_SYSTEM,
+      organLabels: {} as Record<string, string>,
+      systemLabels: {} as Record<string, string>,
+    };
+  }, [dbSystems]);
+
+  const systems = taxonomy.systems;
+  const ORGAN_TO_SYSTEM = taxonomy.organToSystem;
+  const getOrganLabel = (organ: string) => taxonomy.organLabels[organ] || organ;
+  const getSystemLabel = (system: string) => taxonomy.systemLabels[system] || system;
+
   // Filters
   const [selectedSystem, setSelectedSystem] = useState<string | null>(
-    paramSystem || (paramOrgan ? ORGAN_TO_SYSTEM[paramOrgan] ?? null : null)
+    paramSystem || (paramOrgan ? FALLBACK_ORGAN_TO_SYSTEM[paramOrgan] ?? null : null)
   );
   const [selectedOrgan, setSelectedOrgan] = useState<string | null>(paramOrgan);
   const [bookFilter, setBookFilter] = useState<string>("all");
@@ -188,7 +304,18 @@ function ChaptersContent() {
   const [assigningOrganId, setAssigningOrganId] = useState<number | null>(null);
   const [markingStudied, setMarkingStudied] = useState<Set<number>>(new Set());
 
-  const systems = useMemo(() => getAllSystems(), []);
+  // Adding new system/organ inline
+  const [addingNewSystem, setAddingNewSystem] = useState(false);
+  const [newSystemLabel, setNewSystemLabel] = useState("");
+  const [addingNewOrgan, setAddingNewOrgan] = useState<number | null>(null); // systemId
+  const [newOrganLabel, setNewOrganLabel] = useState("");
+
+  const loadTaxonomy = useCallback(() => {
+    fetch("/api/taxonomy")
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => { if (data && Array.isArray(data)) setDbSystems(data); })
+      .catch(() => {});
+  }, []);
 
   const loadChapters = useCallback(() => {
     setLoading(true);
@@ -203,7 +330,7 @@ function ChaptersContent() {
       .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => { loadChapters(); }, [loadChapters]);
+  useEffect(() => { loadTaxonomy(); loadChapters(); }, [loadTaxonomy, loadChapters]);
 
   const markAsStudied = async (id: number) => {
     setMarkingStudied((s) => new Set(s).add(id));
@@ -273,6 +400,11 @@ function ChaptersContent() {
     );
   }, [chapters, systems]);
 
+  // Count chapters with no organ or organ not in taxonomy
+  const unclassifiedCount = useMemo(() => {
+    return chapters.filter((ch) => !ch.organ || !ORGAN_TO_SYSTEM[ch.organ]).length;
+  }, [chapters]);
+
   const organsWithChapters = useMemo(() => {
     if (!selectedSystem) return [];
     const organSet = new Set(chapters.map((ch) => ch.organ).filter(Boolean) as string[]);
@@ -288,7 +420,10 @@ function ChaptersContent() {
   // Apply filters + sort
   const filteredChapters = useMemo(() => {
     let result = chapters.filter((ch) => {
-      if (selectedSystem) {
+      if (selectedSystem === "_unclassified") {
+        if (ch.organ && ORGAN_TO_SYSTEM[ch.organ]) return false;
+        // Show only unclassified chapters
+      } else if (selectedSystem) {
         const chSystem = ch.organ ? ORGAN_TO_SYSTEM[ch.organ] : null;
         if (chSystem !== selectedSystem) return false;
       }
@@ -399,8 +534,11 @@ function ChaptersContent() {
               currentOrgan={ch.organ}
               title={ch.title}
               systems={systems}
+              organToSystem={ORGAN_TO_SYSTEM}
+              dbSystems={dbSystems}
               onAssign={(organ) => assignOrgan(ch.id, organ)}
               onCancel={() => setAssigningOrganId(null)}
+              onTaxonomyChanged={loadTaxonomy}
             />
           ) : deletingId === ch.id ? (
             <div className="flex items-center justify-between">
@@ -438,7 +576,7 @@ function ChaptersContent() {
                   </Badge>
                   {ch.organ && !selectedOrgan && (
                     <Badge variant="outline" className="text-xs">
-                      {ORGAN_LABELS[ch.organ] || ch.organ}
+                      {getOrganLabel(ch.organ)}
                     </Badge>
                   )}
                   <span className="text-xs text-muted-foreground">
@@ -651,6 +789,19 @@ function ChaptersContent() {
             </Badge>
           </Button>
         ))}
+        {unclassifiedCount > 0 && (
+          <Button
+            size="sm"
+            variant={selectedSystem === "_unclassified" ? "default" : "outline"}
+            className="border-dashed"
+            onClick={() => { setSelectedSystem("_unclassified"); setSelectedOrgan(null); }}
+          >
+            Non classé
+            <Badge variant="secondary" className="ml-1.5 text-[10px] px-1.5 py-0">
+              {unclassifiedCount}
+            </Badge>
+          </Button>
+        )}
       </div>
 
       {/* Organ sub-filter when system is selected */}

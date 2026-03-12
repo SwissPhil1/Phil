@@ -31,8 +31,13 @@ model Chapter {
   pdfBlobUrls String? // JSON array of Vercel Blob URLs for stored PDF chunks
   mindMap       String?  // JSON for mind map nodes/edges
   lastStudiedAt DateTime? // When the user last studied this chapter
+  sourceChapterId Int?  // Links restructured chapter back to its original
+  factList   String?  // Cached fact extraction for reconcile reuse
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+
+  sourceChapter  Chapter?  @relation("ChapterVersions", fields: [sourceChapterId], references: [id])
+  derivedChapters Chapter[] @relation("ChapterVersions")
 
   questions  Question[]
   flashcards Flashcard[]
@@ -52,6 +57,8 @@ model Question {
   difficulty    String   @default("medium") // easy, medium, hard
   category      String?
   imageUrl      String?
+  questionType  String   @default("mcq") // "mcq" or "case"
+  caseContext   String?  // Clinical vignette for case-based questions
   createdAt     DateTime @default(now())
 
   attempts QuestionAttempt[]
@@ -90,6 +97,7 @@ model QuestionAttempt {
   selectedAnswer Int
   isCorrect      Boolean
   timeSpent      Int?     // seconds
+  confidence     Int?     // 1-5 pre-answer confidence rating
   attemptedAt    DateTime @default(now())
 }
 

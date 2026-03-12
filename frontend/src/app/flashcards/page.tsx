@@ -135,6 +135,11 @@ function FlashcardsContent() {
   const [againIntervals, setAgainIntervals] = useState<number[]>([]);
   const [hardIntervals, setHardIntervals] = useState<number[]>([]);
 
+  // Free recall mode
+  const [freeRecallMode, setFreeRecallMode] = useState(false);
+  const [recallInput, setRecallInput] = useState("");
+  const [recallSubmitted, setRecallSubmitted] = useState(false);
+
   // Edit state
   const [editingCard, setEditingCard] = useState(false);
   const [editFront, setEditFront] = useState("");
@@ -169,7 +174,7 @@ function FlashcardsContent() {
 
   // ── Start review session ────────────────────────────────────────────────
 
-  const startSession = useCallback((reviewOnly = false, organOverride?: string) => {
+  const startSession = useCallback((reviewOnly = false, organOverride?: string, mixedReview = false) => {
     setLoading(true);
     setError(null);
     setFlipped(false);
@@ -183,10 +188,13 @@ function FlashcardsContent() {
     const effectiveNewLimit = reviewOnly ? 0 : newLimit;
     const effectiveLimit = sessionGoal === 0 ? 999 : sessionGoal;
     let url = `/api/flashcards?mode=due&limit=${effectiveLimit}&newLimit=${effectiveNewLimit}`;
-    const organ = organOverride || selectedOrgan;
-    if (paramChapterId) url += `&chapterId=${paramChapterId}`;
-    else if (organ) url += `&organ=${organ}`;
-    else if (selectedSystem) url += `&system=${selectedSystem}`;
+    // Mixed review: skip all organ/system filters to interleave across topics
+    if (!mixedReview) {
+      const organ = organOverride || selectedOrgan;
+      if (paramChapterId) url += `&chapterId=${paramChapterId}`;
+      else if (organ) url += `&organ=${organ}`;
+      else if (selectedSystem) url += `&system=${selectedSystem}`;
+    }
 
     fetch(url)
       .then((r) => {
@@ -266,6 +274,8 @@ function FlashcardsContent() {
     } else {
       setCurrentIndex((i) => i + 1);
       setFlipped(false);
+      setRecallInput("");
+      setRecallSubmitted(false);
     }
   }, [queue, currentIndex]);
 
@@ -281,7 +291,9 @@ function FlashcardsContent() {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (pageState !== "review" || loading || error || queue.length === 0) return;
-      if (e.key === " " && !flipped) {
+      // In free recall mode, don't intercept keys while typing
+      if (freeRecallMode && !recallSubmitted && !flipped) return;
+      if (e.key === " " && !flipped && !freeRecallMode) {
         e.preventDefault();
         setFlipped(true);
       }
@@ -295,7 +307,7 @@ function FlashcardsContent() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [flipped, pageState, loading, error, queue.length, handleRate]);
+  }, [flipped, pageState, loading, error, queue.length, handleRate, freeRecallMode, recallSubmitted]);
 
   // ── Edit flashcard ─────────────────────────────────────────────────────
 
@@ -482,6 +494,28 @@ function FlashcardsContent() {
                     R\u00E9visions uniquement ({stats.counts.reviewDue})
                   </Button>
                 )}
+                <Button
+                  variant="outline"
+                  className="w-full gap-2 border-purple-200 text-purple-700 hover:bg-purple-50 dark:border-purple-800 dark:text-purple-300 dark:hover:bg-purple-950/30"
+                  onClick={() => startSession(false, undefined, true)}
+                  disabled={loading}
+                >
+                  <Zap className="h-4 w-4" />
+                  Mixed Review (interleaved, tous les organes)
+                </Button>
+                {/* Free recall toggle */}
+                <button
+                  onClick={() => setFreeRecallMode(!freeRecallMode)}
+                  className={`w-full flex items-center justify-between px-3 py-2 rounded-lg border text-sm transition-colors ${freeRecallMode ? "border-emerald-300 bg-emerald-50 dark:border-emerald-700 dark:bg-emerald-950/20" : "border-border hover:border-muted-foreground/30"}`}
+                >
+                  <span className="flex items-center gap-2">
+                    <Pencil className="h-3.5 w-3.5" />
+                    <span>Free Recall (taper la réponse)</span>
+                  </span>
+                  <span className={`w-8 h-4 rounded-full transition-colors relative ${freeRecallMode ? "bg-emerald-500" : "bg-muted"}`}>
+                    <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-transform ${freeRecallMode ? "translate-x-4" : "translate-x-0.5"}`} />
+                  </span>
+                </button>
               </CardContent>
             </Card>
 
@@ -787,49 +821,114 @@ function FlashcardsContent() {
         </div>
 
         {/* Flashcard */}
-        <div className="perspective">
-          <div
-            role="button"
-            tabIndex={0}
-            aria-label={flipped ? "Réponse affichée. Appuyez sur Espace pour retourner." : "Question. Appuyez sur Espace pour révéler la réponse."}
-            className={`flip-card-inner relative min-h-[300px] cursor-pointer ${flipped ? "flipped" : ""}`}
-            onClick={() => setFlipped(!flipped)}
-            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setFlipped(!flipped); } }}
-          >
-            {/* Front */}
-            <Card className="flip-card-front absolute inset-0">
-              <CardContent className="p-8 flex flex-col items-center justify-center min-h-[300px]">
-                <div className="flex items-center gap-2 mb-4">
-                  <Badge variant="secondary" className="text-xs">{card.chapter.title}</Badge>
-                  {card.category && <Badge variant="outline" className="text-xs">{card.category}</Badge>}
-                </div>
-                {card.imageUrl && (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={card.imageUrl} alt="Image radiologique" className="rounded-lg border shadow-sm max-h-40 object-contain mb-4" />
-                )}
-                <p className="text-lg text-center leading-relaxed">{card.front}</p>
-                <p className="text-xs text-muted-foreground mt-6">Appuyez pour révéler la réponse</p>
-              </CardContent>
-            </Card>
+        {freeRecallMode ? (
+          /* ── Free Recall Mode ─────────────────────────────────── */
+          <Card>
+            <CardContent className="p-8 space-y-4">
+              <div className="flex items-center gap-2 mb-2">
+                <Badge variant="secondary" className="text-xs">{card.chapter.title}</Badge>
+                {card.category && <Badge variant="outline" className="text-xs">{card.category}</Badge>}
+                <Badge variant="outline" className="text-xs border-emerald-300 text-emerald-700 dark:text-emerald-300">Free Recall</Badge>
+              </div>
+              {card.imageUrl && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={card.imageUrl} alt="Image radiologique" className="rounded-lg border shadow-sm max-h-40 object-contain mx-auto" />
+              )}
+              <p className="text-lg text-center leading-relaxed font-medium">{card.front}</p>
 
-            {/* Back */}
-            <Card className="flip-card-back absolute inset-0">
-              <CardContent className="p-8 flex flex-col items-center justify-center min-h-[300px]">
-                {card.backImageUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={card.backImageUrl} alt="Image réponse" className="rounded-lg border shadow-sm max-h-40 object-contain mb-4" />
-                ) : card.imageUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={card.imageUrl} alt="Image radiologique" className="rounded-lg border shadow-sm max-h-32 object-contain mb-4 opacity-60" />
-                ) : null}
-                <p className="text-lg text-center leading-relaxed">{card.back}</p>
-              </CardContent>
-            </Card>
+              {!recallSubmitted ? (
+                <>
+                  <textarea
+                    value={recallInput}
+                    onChange={(e) => setRecallInput(e.target.value)}
+                    placeholder="Tapez votre réponse de mémoire..."
+                    rows={3}
+                    className="w-full p-3 border rounded-lg text-sm bg-background resize-y"
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                        e.preventDefault();
+                        setRecallSubmitted(true);
+                        setFlipped(true);
+                      }
+                    }}
+                  />
+                  <div className="flex justify-center gap-2">
+                    <Button size="sm" onClick={() => { setRecallSubmitted(true); setFlipped(true); }} className="gap-1.5">
+                      Vérifier (⌘↵)
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => { setRecallSubmitted(true); setFlipped(true); }}>
+                      Je ne sais pas
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  {/* Show user's answer vs actual */}
+                  {recallInput.trim() && (
+                    <div className="rounded-lg border p-3 bg-muted/30">
+                      <p className="text-xs font-medium text-muted-foreground mb-1">Votre réponse :</p>
+                      <p className="text-sm">{recallInput}</p>
+                    </div>
+                  )}
+                  <div className="rounded-lg border-2 border-emerald-200 dark:border-emerald-800 p-3 bg-emerald-50/50 dark:bg-emerald-950/20">
+                    <p className="text-xs font-medium text-emerald-700 dark:text-emerald-300 mb-1">Réponse correcte :</p>
+                    {card.backImageUrl && (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={card.backImageUrl} alt="Image réponse" className="rounded-lg border shadow-sm max-h-32 object-contain mb-2" />
+                    )}
+                    <p className="text-sm">{card.back}</p>
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        ) : (
+          /* ── Standard Flip Mode ─────────────────────────────────── */
+          <div className="perspective">
+            <div
+              role="button"
+              tabIndex={0}
+              aria-label={flipped ? "Réponse affichée. Appuyez sur Espace pour retourner." : "Question. Appuyez sur Espace pour révéler la réponse."}
+              className={`flip-card-inner relative min-h-[300px] cursor-pointer ${flipped ? "flipped" : ""}`}
+              onClick={() => setFlipped(!flipped)}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setFlipped(!flipped); } }}
+            >
+              {/* Front */}
+              <Card className="flip-card-front absolute inset-0">
+                <CardContent className="p-8 flex flex-col items-center justify-center min-h-[300px]">
+                  <div className="flex items-center gap-2 mb-4">
+                    <Badge variant="secondary" className="text-xs">{card.chapter.title}</Badge>
+                    {card.category && <Badge variant="outline" className="text-xs">{card.category}</Badge>}
+                  </div>
+                  {card.imageUrl && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={card.imageUrl} alt="Image radiologique" className="rounded-lg border shadow-sm max-h-40 object-contain mb-4" />
+                  )}
+                  <p className="text-lg text-center leading-relaxed">{card.front}</p>
+                  <p className="text-xs text-muted-foreground mt-6">Appuyez pour révéler la réponse</p>
+                </CardContent>
+              </Card>
+
+              {/* Back */}
+              <Card className="flip-card-back absolute inset-0">
+                <CardContent className="p-8 flex flex-col items-center justify-center min-h-[300px]">
+                  {card.backImageUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={card.backImageUrl} alt="Image réponse" className="rounded-lg border shadow-sm max-h-40 object-contain mb-4" />
+                  ) : card.imageUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={card.imageUrl} alt="Image radiologique" className="rounded-lg border shadow-sm max-h-32 object-contain mb-4 opacity-60" />
+                  ) : null}
+                  <p className="text-lg text-center leading-relaxed">{card.back}</p>
+                </CardContent>
+              </Card>
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Rating buttons with interval preview */}
-        {flipped && (
+        {(flipped || (freeRecallMode && recallSubmitted)) && (
           <div className="space-y-2">
             <div className="flex justify-center gap-3">
               {RATING_BUTTONS.map((btn, i) => (
@@ -851,7 +950,7 @@ function FlashcardsContent() {
           </div>
         )}
 
-        {!flipped && (
+        {!flipped && !freeRecallMode && (
           <div className="text-center">
             <Button variant="outline" onClick={() => setFlipped(true)}>
               Voir la réponse

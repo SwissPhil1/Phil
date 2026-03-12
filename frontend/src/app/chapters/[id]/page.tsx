@@ -31,6 +31,8 @@ import {
   Printer,
   FilePlus,
   Wand2,
+  CheckCircle,
+  Target,
 } from "lucide-react";
 import React, { useEffect, useState, useCallback, useRef } from "react";
 import ReactMarkdown, { Components } from "react-markdown";
@@ -59,6 +61,7 @@ interface ChapterDetail {
   bookSource: string;
   number: number;
   title: string;
+  organ: string | null;
   summary: string | null;
   keyPoints: string | null;
   highYield: string | null;
@@ -66,6 +69,8 @@ interface ChapterDetail {
   studyGuide: string | null;
   pdfChunkCount: number;
   estimatedPages: number;
+  sourceChapterId: number | null;
+  sourceChapter: { id: number; title: string; studyGuide: string | null } | null;
   relatedChapters: RelatedChapter[];
   questions: Array<{
     id: number;
@@ -404,6 +409,25 @@ export default function ChapterDetailPage() {
   // Restructure state
   const [restructuring, setRestructuring] = useState(false);
   const [restructureMessage, setRestructureMessage] = useState("");
+  const [restructuredChapterId, setRestructuredChapterId] = useState<number | null>(null);
+
+  // Reconcile state
+  const [reconciling, setReconciling] = useState(false);
+  const [reconcileMessage, setReconcileMessage] = useState("");
+
+  // Diagnostic pre-quiz state
+  const [diagnosticLoading, setDiagnosticLoading] = useState(false);
+  const [diagnosticQuestions, setDiagnosticQuestions] = useState<Array<{
+    questionText: string; options: string[]; correctAnswer: number; explanation: string; difficulty: string;
+  }> | null>(null);
+  const [diagIndex, setDiagIndex] = useState(0);
+  const [diagSelected, setDiagSelected] = useState<number | null>(null);
+  const [diagRevealed, setDiagRevealed] = useState(false);
+  const [diagScore, setDiagScore] = useState(0);
+
+  // Case-based question generation state
+  const [generatingCases, setGeneratingCases] = useState(false);
+  const [caseGenMessage, setCaseGenMessage] = useState("");
 
   // Parse study guide sections for the position selector
   const guideSections = React.useMemo(() => {
@@ -792,11 +816,8 @@ export default function ChapterDetailPage() {
         return;
       }
 
-      setRestructureMessage("Restructure complete! Redirecting...");
+      setRestructuredChapterId(newChapterId);
       setRestructuring(false);
-      setTimeout(() => {
-        window.location.href = `/chapters/${newChapterId}`;
-      }, 1500);
     } catch (err) {
       if (controller.signal.aborted) {
         setRestructureMessage("Restructure timed out after 15 minutes. Try again or split into smaller chapters.");
@@ -811,6 +832,124 @@ export default function ChapterDetailPage() {
       setRestructuring(false);
     } finally {
       clearTimeout(timeout);
+    }
+  }, [chapter]);
+
+  // Reconcile: verify fact completeness against a reference (source chapter or current chapter's original)
+  const reconcileStudyGuide = useCallback(async (targetChapterId: number, referenceStudyGuide: string) => {
+    setReconciling(true);
+    setReconcileMessage("Starting reconcile...");
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20 * 60 * 1000);
+
+    try {
+      const res = await fetch(`/api/chapters/${targetChapterId}/reconcile`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ referenceText: referenceStudyGuide, language: "fr", polish: true, saveInPlace: true }),
+        signal: controller.signal,
+      });
+
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("No response stream");
+      const decoder = new TextDecoder();
+      let buf = "";
+
+      while (!controller.signal.aborted) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (data.error) throw new Error(data.error);
+            if (data.message) setReconcileMessage(data.message);
+            if (data.success) {
+              setReconcileMessage(data.message || "Reconcile complete!");
+            }
+          } catch (e) {
+            if (e instanceof Error && e.message !== line.slice(6)) throw e;
+          }
+        }
+      }
+    } catch (err) {
+      if (controller.signal.aborted) {
+        setReconcileMessage("Reconcile timed out. Try again.");
+      } else {
+        const raw = err instanceof Error ? err.message : "Reconcile failed";
+        setReconcileMessage(`Error: ${raw}`);
+      }
+    } finally {
+      clearTimeout(timeout);
+      setReconciling(false);
+    }
+  }, []);
+
+  // ── Diagnostic Pre-Quiz ────────────────────────────────────────────
+  const launchDiagnostic = useCallback(async () => {
+    if (!chapter) return;
+    setDiagnosticLoading(true);
+    setDiagnosticQuestions(null);
+    setDiagIndex(0);
+    setDiagSelected(null);
+    setDiagRevealed(false);
+    setDiagScore(0);
+    try {
+      const res = await fetch(`/api/chapters/${chapter.id}/diagnostic`, { method: "POST" });
+      if (!res.ok) throw new Error(`Error ${res.status}`);
+      const data = await res.json();
+      setDiagnosticQuestions(data.questions);
+    } catch (err) {
+      console.error("Diagnostic quiz error:", err);
+    } finally {
+      setDiagnosticLoading(false);
+    }
+  }, [chapter]);
+
+  // ── Generate Case-Based Questions ─────────────────────────────────
+  const generateCaseQuestions = useCallback(async () => {
+    if (!chapter) return;
+    setGeneratingCases(true);
+    setCaseGenMessage("Generating case-based questions...");
+    try {
+      const res = await fetch("/api/generate-case-questions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chapterId: chapter.id }),
+      });
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("No stream");
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (data.message) setCaseGenMessage(data.message);
+            if (data.success) {
+              setCaseGenMessage(`✓ ${data.message}`);
+              // Refresh chapter data to get new question count
+              const refreshRes = await fetch(`/api/chapters/${chapter.id}`);
+              if (refreshRes.ok) setChapter(await refreshRes.json());
+            }
+            if (data.error) setCaseGenMessage(`Error: ${data.error}`);
+          } catch { /* skip */ }
+        }
+      }
+    } catch (err) {
+      setCaseGenMessage(`Error: ${err instanceof Error ? err.message : "Failed"}`);
+    } finally {
+      setGeneratingCases(false);
     }
   }, [chapter]);
 
@@ -1048,6 +1187,11 @@ export default function ChapterDetailPage() {
           <span className="text-sm text-muted-foreground">Chapter {chapter.number}</span>
         </div>
         <h1 className="text-3xl font-bold">{chapter.title}</h1>
+        {chapter.sourceChapter && (
+          <p className="text-sm text-muted-foreground mt-1">
+            Restructured from: <Link href={`/chapters/${chapter.sourceChapter.id}`} className="underline hover:text-foreground">{chapter.sourceChapter.title}</Link>
+          </p>
+        )}
       </div>
 
       {hasPdfChunks && (
@@ -1066,6 +1210,11 @@ export default function ChapterDetailPage() {
       <div className="flex gap-3 flex-wrap">
         <Link href={`/quiz?chapterId=${chapter.id}`}><Button size="sm" className="gap-2"><Brain className="h-4 w-4" />Quiz ({chapter.questions.length})</Button></Link>
         <Link href={`/flashcards?chapterId=${chapter.id}`}><Button size="sm" variant="outline" className="gap-2"><Layers className="h-4 w-4" />Flashcards ({chapter.flashcards.length})</Button></Link>
+        {chapter.studyGuide && (
+          <Button size="sm" variant="outline" className="gap-2 border-teal-300 text-teal-700 hover:bg-teal-50 dark:border-teal-700 dark:text-teal-300 dark:hover:bg-teal-950/30" onClick={launchDiagnostic} disabled={diagnosticLoading}>
+            {diagnosticLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Target className="h-4 w-4" />}Diagnostic
+          </Button>
+        )}
         {chapter.studyGuide && chapter.flashcards.length === 0 && !generatingFlashcards && (
           <Button size="sm" variant="outline" className="gap-2 border-amber-300 text-amber-700 hover:bg-amber-50" onClick={generateFlashcardsOnly}>
             <Sparkles className="h-4 w-4" />Generate Flashcards
@@ -1082,16 +1231,88 @@ export default function ChapterDetailPage() {
             <Sparkles className="h-4 w-4" />Generate Questions
           </Button>
         )}
+        {chapter.studyGuide && !generatingCases && (
+          <Button size="sm" variant="outline" className="gap-2 border-orange-300 text-orange-700 hover:bg-orange-50 dark:border-orange-700 dark:text-orange-300 dark:hover:bg-orange-950/30" onClick={generateCaseQuestions} disabled={generatingCases}>
+            <GraduationCap className="h-4 w-4" />Generate Cases
+          </Button>
+        )}
         {generatingQuestions && (
           <span className="text-xs text-muted-foreground flex items-center gap-1.5">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
             {questionGenMessage}
           </span>
         )}
+        {generatingCases && (
+          <span className="text-xs text-muted-foreground flex items-center gap-1.5">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            {caseGenMessage}
+          </span>
+        )}
         {hasPdfChunks && (
           <Button size="sm" variant="ghost" className="gap-2 text-muted-foreground" onClick={generateContent}><RefreshCw className="h-4 w-4" />Regenerate All</Button>
         )}
       </div>
+
+      {/* Diagnostic Pre-Quiz */}
+      {diagnosticQuestions && diagnosticQuestions.length > 0 && (
+        <Card className="border-2 border-teal-200 dark:border-teal-800">
+          <CardContent className="p-5">
+            {diagIndex < diagnosticQuestions.length ? (
+              <>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline" className="border-teal-300 text-teal-700 dark:text-teal-300">Diagnostic</Badge>
+                    <span className="text-xs text-muted-foreground">{diagIndex + 1}/{diagnosticQuestions.length}</span>
+                  </div>
+                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => setDiagnosticQuestions(null)}>
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+                <p className="text-sm font-medium mb-3">{diagnosticQuestions[diagIndex].questionText}</p>
+                <div className="space-y-2">
+                  {diagnosticQuestions[diagIndex].options.map((opt: string, i: number) => {
+                    let cls = "w-full text-left p-3 rounded-lg border text-xs transition-colors ";
+                    if (diagRevealed) {
+                      if (i === diagnosticQuestions[diagIndex].correctAnswer) cls += "border-green-400 bg-green-50 dark:bg-green-950/20 text-green-700 dark:text-green-300";
+                      else if (i === diagSelected) cls += "border-red-400 bg-red-50 dark:bg-red-950/20 text-red-700 dark:text-red-300";
+                      else cls += "border-muted text-muted-foreground";
+                    } else {
+                      cls += diagSelected === i ? "border-teal-400 bg-teal-50 dark:bg-teal-950/20" : "border-border hover:border-teal-300";
+                    }
+                    return (
+                      <button key={i} className={cls} disabled={diagRevealed} onClick={() => { setDiagSelected(i); setDiagRevealed(true); if (i === diagnosticQuestions[diagIndex].correctAnswer) setDiagScore(s => s + 1); }}>
+                        {opt}
+                      </button>
+                    );
+                  })}
+                </div>
+                {diagRevealed && (
+                  <>
+                    <p className="text-xs text-muted-foreground mt-3 p-2 bg-muted/50 rounded">{diagnosticQuestions[diagIndex].explanation}</p>
+                    <Button size="sm" className="mt-3 gap-1" onClick={() => { setDiagIndex(i => i + 1); setDiagSelected(null); setDiagRevealed(false); }}>
+                      {diagIndex + 1 >= diagnosticQuestions.length ? "Voir résultats" : "Suivante"}
+                    </Button>
+                  </>
+                )}
+              </>
+            ) : (
+              <div className="text-center py-4">
+                <p className="text-2xl font-bold mb-1">{Math.round((diagScore / diagnosticQuestions.length) * 100)}%</p>
+                <p className="text-sm text-muted-foreground mb-1">{diagScore}/{diagnosticQuestions.length} correct</p>
+                <p className="text-xs text-muted-foreground mb-3">
+                  {diagScore / diagnosticQuestions.length >= 0.75
+                    ? "Bonne base ! Le guide renforcera vos connaissances."
+                    : "Des lacunes identifiées — concentrez-vous sur ces sujets en lisant le guide."}
+                </p>
+                <div className="flex gap-2 justify-center">
+                  <Button size="sm" variant="outline" onClick={() => setDiagnosticQuestions(null)}>Fermer</Button>
+                  <Button size="sm" onClick={launchDiagnostic}>Recommencer</Button>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-1 border-b overflow-x-auto">
@@ -1151,6 +1372,17 @@ export default function ChapterDetailPage() {
                         <Button size="sm" variant="outline" className="gap-1.5 border-purple-300 text-purple-700 hover:bg-purple-50 dark:border-purple-700 dark:text-purple-300 dark:hover:bg-purple-950/30" onClick={restructureStudyGuide} disabled={isGenerating || restructuring}>
                           {restructuring ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}Restructure
                         </Button>
+                        {chapter?.sourceChapter?.studyGuide && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="gap-1.5 border-blue-300 text-blue-700 hover:bg-blue-50 dark:border-blue-700 dark:text-blue-300 dark:hover:bg-blue-950/30"
+                            onClick={() => reconcileStudyGuide(chapter.id, chapter.sourceChapter!.studyGuide!)}
+                            disabled={isGenerating || reconciling}
+                          >
+                            {reconciling ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle className="h-3.5 w-3.5" />}Reconcile
+                          </Button>
+                        )}
                         {!isImported && (
                           <Button size="sm" variant="outline" className="gap-1.5" onClick={mergeStudyGuide} disabled={isGenerating}>
                             <Merge className="h-3.5 w-3.5" />Merge
@@ -1224,31 +1456,65 @@ export default function ChapterDetailPage() {
                   )}
 
                   {/* Restructure status message */}
-                  {restructureMessage && (
+                  {(restructureMessage || restructuredChapterId) && (
                     <div className={`rounded-lg px-4 py-3 mb-6 flex items-start gap-2 ${
                       restructureMessage.startsWith("Error")
                         ? "bg-red-50 border border-red-200 dark:bg-red-950/20 dark:border-red-800"
-                        : restructureMessage.includes("complete") || restructureMessage.includes("restructured")
+                        : restructuredChapterId
                           ? "bg-emerald-50 border border-emerald-200 dark:bg-emerald-950/20 dark:border-emerald-800"
                           : "bg-purple-50 border border-purple-200 dark:bg-purple-950/20 dark:border-purple-800"
                     }`}>
                       {restructuring && <Loader2 className="h-4 w-4 animate-spin text-purple-600 dark:text-purple-400 mt-0.5 flex-shrink-0" />}
                       {!restructuring && !restructureMessage.startsWith("Error") && <Wand2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400 mt-0.5 flex-shrink-0" />}
                       {restructureMessage.startsWith("Error") && <AlertCircle className="h-4 w-4 text-red-500 mt-0.5 flex-shrink-0" />}
-                      <div>
+                      <div className="flex-1">
                         <p className={`text-sm ${
                           restructureMessage.startsWith("Error")
                             ? "text-red-600 dark:text-red-400"
-                            : restructureMessage.includes("complete") || restructureMessage.includes("restructured")
+                            : restructuredChapterId
                               ? "text-emerald-600 dark:text-emerald-400"
                               : "text-purple-600 dark:text-purple-400"
                         }`}>
                           {restructureMessage}
                         </p>
-                        {(restructureMessage.includes("restructured") || restructureMessage.includes("Redirecting")) && (
-                          <p className="text-xs text-muted-foreground mt-1">Redirecting to the new chapter...</p>
+                        {restructuredChapterId && (
+                          <div className="flex gap-2 mt-2">
+                            <Button size="sm" className="gap-1.5" onClick={() => window.location.href = `/chapters/${restructuredChapterId}`}>
+                              <Wand2 className="h-3.5 w-3.5" />View Restructured Chapter
+                            </Button>
+                            <Button size="sm" variant="outline" className="gap-1.5" onClick={() => window.open(`/chapters/${restructuredChapterId}`, "_blank")}>
+                              <ExternalLink className="h-3.5 w-3.5" />Open in New Tab
+                            </Button>
+                            <Button size="sm" variant="ghost" className="gap-1.5 text-muted-foreground" onClick={() => { setRestructuredChapterId(null); setRestructureMessage(""); }}>
+                              <X className="h-3.5 w-3.5" />Dismiss
+                            </Button>
+                          </div>
                         )}
                       </div>
+                    </div>
+                  )}
+
+                  {/* Reconcile status message */}
+                  {reconcileMessage && (
+                    <div className={`rounded-lg px-4 py-3 mb-6 flex items-start gap-2 ${
+                      reconcileMessage.startsWith("Error")
+                        ? "bg-red-50 border border-red-200 dark:bg-red-950/20 dark:border-red-800"
+                        : reconcileMessage.includes("complete")
+                          ? "bg-emerald-50 border border-emerald-200 dark:bg-emerald-950/20 dark:border-emerald-800"
+                          : "bg-blue-50 border border-blue-200 dark:bg-blue-950/20 dark:border-blue-800"
+                    }`}>
+                      {reconciling && <Loader2 className="h-4 w-4 animate-spin text-blue-600 dark:text-blue-400 mt-0.5 flex-shrink-0" />}
+                      {!reconciling && reconcileMessage.includes("complete") && <Wand2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400 mt-0.5 flex-shrink-0" />}
+                      {reconcileMessage.startsWith("Error") && <AlertCircle className="h-4 w-4 text-red-500 mt-0.5 flex-shrink-0" />}
+                      <p className={`text-sm ${
+                        reconcileMessage.startsWith("Error")
+                          ? "text-red-600 dark:text-red-400"
+                          : reconcileMessage.includes("complete")
+                            ? "text-emerald-600 dark:text-emerald-400"
+                            : "text-blue-600 dark:text-blue-400"
+                      }`}>
+                        {reconcileMessage}
+                      </p>
                     </div>
                   )}
 

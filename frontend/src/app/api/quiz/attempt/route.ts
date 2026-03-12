@@ -9,7 +9,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { questionId, selectedAnswer, timeSpent } = body;
+  const { questionId, selectedAnswer, timeSpent, confidence } = body;
 
   if (questionId === undefined || selectedAnswer === undefined) {
     return NextResponse.json(
@@ -60,6 +60,7 @@ export async function POST(request: Request) {
       selectedAnswer,
       isCorrect,
       timeSpent: timeSpent || null,
+      confidence: typeof confidence === "number" && confidence >= 1 && confidence <= 5 ? confidence : null,
     },
   });
 

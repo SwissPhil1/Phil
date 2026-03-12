@@ -13,7 +13,7 @@ import {
   countFactLines,
   parseMissingFacts,
   applyPatches,
-} from "@/lib/restructure-prompts";
+} from "@/lib/reconcile-prompts";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 800;

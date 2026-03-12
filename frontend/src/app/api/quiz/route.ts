@@ -32,7 +32,17 @@ export async function GET(request: Request) {
 
   const allQuestions = await prisma.question.findMany({
     where,
-    include: {
+    select: {
+      id: true,
+      questionText: true,
+      options: true,
+      correctAnswer: true,
+      explanation: true,
+      difficulty: true,
+      category: true,
+      imageUrl: true,
+      questionType: true,
+      caseContext: true,
       chapter: {
         select: { title: true, bookSource: true, number: true, organ: true },
       },

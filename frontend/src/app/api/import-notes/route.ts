@@ -240,9 +240,25 @@ async function handleTransform(body: { organ: string; title: string; text: strin
           message: "Study guide saved. Flashcards will be generated next.",
         });
       } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message
-          : typeof err === "string" ? err
-          : JSON.stringify(err) || "Transform failed (unknown error)";
+        // Extract a human-readable message from Anthropic API errors
+        let msg = "Transform failed (unknown error)";
+        if (err instanceof Error) {
+          msg = err.message;
+        } else if (typeof err === "string") {
+          msg = err;
+        } else {
+          msg = JSON.stringify(err) || msg;
+        }
+        // Try to extract the nested error message from Anthropic's error format
+        // e.g. {status: 400, error: {type: "invalid_request_error", message: "Your credit balance..."}}
+        try {
+          const errObj = err as { status?: number; error?: { message?: string }; message?: string };
+          if (errObj.error?.message) {
+            msg = `${errObj.status || "Error"}: ${errObj.error.message}`;
+          } else if (errObj.message) {
+            msg = errObj.message;
+          }
+        } catch { /* ignore parsing errors */ }
         console.error("Transform error:", msg, err);
         send({ error: msg });
       } finally {

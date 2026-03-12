@@ -163,3 +163,106 @@ ${studyGuide}
 
 Restructure the guide above following the 5 rules. Preserve every fact — especially orphan facts that lack Q/A anchors and STOP & THINK questions. Each concept in max 2 zones. Output raw markdown only — no preamble, no code fences.`;
 }
+
+// ── Chunking utilities for large guides ─────────────────────────────────────
+
+/** Split a study guide into sections by `## ` headings */
+export function splitIntoSections(studyGuide: string): { heading: string; body: string }[] {
+  const lines = studyGuide.split('\n');
+  const sections: { heading: string; body: string }[] = [];
+  let currentHeading = '';
+  let currentLines: string[] = [];
+
+  for (const line of lines) {
+    if (line.startsWith('## ')) {
+      if (currentHeading || currentLines.length > 0) {
+        sections.push({ heading: currentHeading, body: currentLines.join('\n') });
+      }
+      currentHeading = line;
+      currentLines = [];
+    } else {
+      currentLines.push(line);
+    }
+  }
+  if (currentHeading || currentLines.length > 0) {
+    sections.push({ heading: currentHeading, body: currentLines.join('\n') });
+  }
+  return sections;
+}
+
+/** Group sections into chunks of roughly `targetWords` words */
+export function groupSectionsIntoChunks(
+  sections: { heading: string; body: string }[],
+  targetWords = 15000
+): { heading: string; body: string }[][] {
+  const chunks: { heading: string; body: string }[][] = [];
+  let current: { heading: string; body: string }[] = [];
+  let currentWordCount = 0;
+
+  for (const section of sections) {
+    const sectionWords = section.body.split(/\s+/).length;
+    // If adding this section exceeds target AND we already have content, start new chunk
+    if (currentWordCount > 0 && currentWordCount + sectionWords > targetWords) {
+      chunks.push(current);
+      current = [section];
+      currentWordCount = sectionWords;
+    } else {
+      current.push(section);
+      currentWordCount += sectionWords;
+    }
+  }
+  if (current.length > 0) {
+    chunks.push(current);
+  }
+  return chunks;
+}
+
+/** Build a prompt for restructuring a single chunk of a larger guide */
+export function buildChunkRestructurePrompt(
+  chunkText: string,
+  chunkIndex: number,
+  totalChunks: number,
+  sectionHeadings: string[],
+  allHeadings: string[],
+  language: string,
+): string {
+  const wordCount = chunkText.split(/\s+/).length;
+
+  const langInstruction = language === "fr"
+    ? `Write ENTIRELY in French. Keep medical terminology in both languages where helpful.
+Callout labels stay as-is: PEARL, TRAP/PITFALL, HIGH YIELD, MNEMONIC.`
+    : "";
+
+  const contextNote = totalChunks > 1
+    ? `
+This is chunk ${chunkIndex + 1} of ${totalChunks}. The full guide has these sections:
+${allHeadings.map(h => `  ${sectionHeadings.includes(h) ? '→' : ' '} ${h}`).join('\n')}
+
+Sections marked with → are in THIS chunk. Restructure ONLY the content provided below.
+Do NOT generate content for sections not in this chunk.
+Do NOT add Overview, Cheat Sheet, Rapid-Fire, or Checklist sections — those will be handled in other chunks.
+`
+    : "";
+
+  return `You are a SENIOR RADIOLOGIST PROFESSOR restructuring a study guide for optimal retention.
+${langInstruction}
+${contextNote}
+RULES:
+1. ZERO FACT LOSS — preserve every fact, number, sign, mnemonic, link, callout
+2. Merge duplicate Q/As into one rich Q/A (keep the richest version)
+3. Preserve format: ### Q: / **A:**, callouts with > prefix, markdown tables
+4. Correct factual errors. Add missing FMH2-testable facts where obvious.
+5. Do NOT convert Q/A to narrative text
+6. Do NOT wrap output in code fences
+7. Do NOT write a preamble — start directly with the content
+
+═══════════════════════════════════════════════════════
+CONTENT TO RESTRUCTURE (~${wordCount.toLocaleString()} words)
+═══════════════════════════════════════════════════════
+
+${chunkText}
+
+═══════════════════════════════════════════════════════
+
+Restructure the content above. Preserve every fact. Output raw markdown only.`;
+}

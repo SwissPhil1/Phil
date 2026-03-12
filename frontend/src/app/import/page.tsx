@@ -13,15 +13,15 @@ import {
   ArrowRight,
 } from "lucide-react";
 
-import { getAllSystems } from "@/lib/taxonomy";
+import { getAllSystems as getFallbackSystems, type DbSystem, buildTaxonomyFromDb } from "@/lib/taxonomy";
 
 interface OrganOption {
   key: string;
   label: string;
 }
 
-// Build flat list from taxonomy for backward compatibility
-const PRESET_ORGANS: OrganOption[] = getAllSystems().flatMap((sys) =>
+// Fallback preset — overridden by dynamic taxonomy in component
+const PRESET_ORGANS: OrganOption[] = getFallbackSystems().flatMap((sys) =>
   sys.organs.map((o) => ({ key: o.key, label: o.label }))
 );
 
@@ -41,6 +41,20 @@ export default function ImportNotesPage() {
   const [language, setLanguage] = useState<"fr" | "en">("fr");
   const [status, setStatus] = useState<TransformStatus>(null);
   const [existingOrgans, setExistingOrgans] = useState<string[]>([]);
+  const [organOptions, setOrganOptions] = useState<OrganOption[]>(PRESET_ORGANS);
+
+  // Load dynamic taxonomy
+  useEffect(() => {
+    fetch("/api/taxonomy")
+      .then((r) => r.ok ? r.json() : null)
+      .then((data: DbSystem[] | null) => {
+        if (data && Array.isArray(data) && data.length > 0) {
+          const tax = buildTaxonomyFromDb(data);
+          setOrganOptions(tax.systems.flatMap((sys) => sys.organs.map((o) => ({ key: o.key, label: o.label }))));
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // Load existing organs
   useEffect(() => {
@@ -222,7 +236,7 @@ export default function ImportNotesPage() {
                 href={`/chapters?organ=${o}`}
                 className="px-3 py-1.5 rounded-full text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
               >
-                {PRESET_ORGANS.find((p) => p.key === o)?.label || o}
+                {organOptions.find((p) => p.key === o)?.label || o}
               </Link>
             ))}
           </div>
@@ -335,7 +349,7 @@ export default function ImportNotesPage() {
           <div className="rounded-lg border bg-card p-6 space-y-4">
             <h2 className="font-semibold">1. Select Organ / Topic</h2>
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-              {PRESET_ORGANS.map((o) => (
+              {organOptions.map((o) => (
                 <button
                   key={o.key}
                   onClick={() => setOrgan(o.key)}

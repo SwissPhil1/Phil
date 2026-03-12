@@ -133,3 +133,23 @@ model StudySession {
   startedAt     DateTime  @default(now())
   endedAt       DateTime?
 }
+
+model SystemCategory {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique  // e.g. "gi", "vascular"
+  label     String            // e.g. "Gastro-intestinal", "Vasculaire"
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  organs OrganCategory[]
+}
+
+model OrganCategory {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique  // e.g. "liver", "aorta"
+  label     String            // e.g. "Foie", "Aorte"
+  systemId  Int
+  system    SystemCategory @relation(fields: [systemId], references: [id])
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+}

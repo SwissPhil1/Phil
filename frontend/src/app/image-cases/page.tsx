@@ -18,8 +18,10 @@ import {
   Brain,
 } from "lucide-react";
 import {
-  getAllSystems,
-  getOrganLabel,
+  getAllSystems as getFallbackSystems,
+  getOrganLabel as fallbackOrganLabel,
+  type DbSystem,
+  buildTaxonomyFromDb,
 } from "@/lib/taxonomy";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -139,7 +141,11 @@ export default function ImageCasesPage() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function UploadTab() {
-  const systems = useMemo(() => getAllSystems(), []);
+  const [dbSystems, setDbSystems] = useState<DbSystem[] | null>(null);
+  const systems = useMemo(() => dbSystems ? buildTaxonomyFromDb(dbSystems).systems : getFallbackSystems(), [dbSystems]);
+  useEffect(() => {
+    fetch("/api/taxonomy").then((r) => r.ok ? r.json() : null).then((d) => { if (d && Array.isArray(d)) setDbSystems(d); }).catch(() => {});
+  }, []);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const backFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -528,7 +534,13 @@ function UploadTab() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function GalleryTab() {
-  const systems = useMemo(() => getAllSystems(), []);
+  const [dbSystems2, setDbSystems2] = useState<DbSystem[] | null>(null);
+  const taxonomy = useMemo(() => dbSystems2 ? buildTaxonomyFromDb(dbSystems2) : { systems: getFallbackSystems(), organLabels: {} as Record<string, string> }, [dbSystems2]);
+  const systems = taxonomy.systems;
+  const getOrganLabel = (organ: string) => taxonomy.organLabels[organ] || fallbackOrganLabel(organ);
+  useEffect(() => {
+    fetch("/api/taxonomy").then((r) => r.ok ? r.json() : null).then((d) => { if (d && Array.isArray(d)) setDbSystems2(d); }).catch(() => {});
+  }, []);
   const [cards, setCards] = useState<GalleryCard[]>([]);
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);

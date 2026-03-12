@@ -17,6 +17,7 @@ export const ORGAN_TO_SYSTEM: Record<string, string> = {
   biliary: "gi",
   pancreas: "gi",
   spleen: "gi",
+  peritoneum: "gi",
   kidney: "genito_urinary",
   bladder: "genito_urinary",
   uterus: "genito_urinary",
@@ -24,7 +25,13 @@ export const ORGAN_TO_SYSTEM: Record<string, string> = {
   adrenal: "genito_urinary",
   chest: "thorax",
   heart: "thorax",
+  mediastinum: "thorax",
+  aorta: "vascular",
+  mesenteric_vessels: "vascular",
+  venous: "vascular",
+  peripheral_vascular: "vascular",
   brain: "neuro",
+  spine: "neuro",
   msk: "msk",
   breast: "breast",
   head_neck: "head_neck",
@@ -39,6 +46,7 @@ export const SYSTEM_LABELS: Record<string, string> = {
   gi: "Gastro-intestinal",
   genito_urinary: "Génito-urinaire",
   thorax: "Thorax",
+  vascular: "Vasculaire",
   neuro: "Neuro",
   msk: "Musculosquelettique",
   breast: "Sénologie",
@@ -59,14 +67,21 @@ export const ORGAN_LABELS: Record<string, string> = {
   biliary: "Voies biliaires",
   pancreas: "Pancréas",
   spleen: "Rate",
+  peritoneum: "Péritoine & Mésentère",
   kidney: "Reins",
   bladder: "Vessie & Prostate",
   uterus: "Utérus & Ovaires",
   retroperitoneum: "Rétropéritoine",
   adrenal: "Surrénales",
   chest: "Poumons",
-  heart: "Cœur & Vaisseaux",
-  brain: "Cerveau & Rachis",
+  heart: "Cœur",
+  mediastinum: "Médiastin",
+  aorta: "Aorte",
+  mesenteric_vessels: "Vaisseaux mésentériques",
+  venous: "Système veineux",
+  peripheral_vascular: "Vascularisation périphérique",
+  brain: "Cerveau",
+  spine: "Rachis",
   msk: "MSK",
   breast: "Sein",
   head_neck: "Tête & Cou",
@@ -81,6 +96,7 @@ export const SYSTEM_ORDER = [
   "gi",
   "genito_urinary",
   "thorax",
+  "vascular",
   "neuro",
   "msk",
   "breast",
@@ -125,4 +141,49 @@ export function getAllSystems(): SystemInfo[] {
       label: ORGAN_LABELS[o] ?? o,
     })),
   }));
+}
+
+// ── Dynamic taxonomy from DB ────────────────────────────────────────────────
+
+export interface DbOrgan {
+  id: number;
+  key: string;
+  label: string;
+  systemId: number;
+  sortOrder: number;
+}
+
+export interface DbSystem {
+  id: number;
+  key: string;
+  label: string;
+  sortOrder: number;
+  organs: DbOrgan[];
+}
+
+/** Build SystemInfo[] + lookup maps from DB taxonomy response */
+export function buildTaxonomyFromDb(dbSystems: DbSystem[]): {
+  systems: SystemInfo[];
+  organToSystem: Record<string, string>;
+  organLabels: Record<string, string>;
+  systemLabels: Record<string, string>;
+} {
+  const organToSystem: Record<string, string> = {};
+  const organLabels: Record<string, string> = {};
+  const systemLabels: Record<string, string> = {};
+
+  const systems: SystemInfo[] = dbSystems.map((sys) => {
+    systemLabels[sys.key] = sys.label;
+    return {
+      key: sys.key,
+      label: sys.label,
+      organs: sys.organs.map((o) => {
+        organToSystem[o.key] = sys.key;
+        organLabels[o.key] = o.label;
+        return { key: o.key, label: o.label };
+      }),
+    };
+  });
+
+  return { systems, organToSystem, organLabels, systemLabels };
 }

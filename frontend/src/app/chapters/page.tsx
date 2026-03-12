@@ -27,6 +27,8 @@ import {
   type SystemInfo,
   type DbSystem,
   buildTaxonomyFromDb,
+  resolveOrganSystem,
+  resolveOrganLabel,
 } from "@/lib/taxonomy";
 
 interface Chapter {
@@ -285,8 +287,10 @@ function ChaptersContent() {
 
   const systems = taxonomy.systems;
   const ORGAN_TO_SYSTEM = taxonomy.organToSystem;
-  const getOrganLabel = (organ: string) => taxonomy.organLabels[organ] || organ;
+  const getOrganLabelResolved = useCallback((organ: string) => resolveOrganLabel(organ, taxonomy.organLabels), [taxonomy.organLabels]);
   const getSystemLabel = (system: string) => taxonomy.systemLabels[system] || system;
+  /** Resolve an organ value (key, label, or system-name) to its system key */
+  const getSystemForOrgan = useCallback((organ: string) => resolveOrganSystem(organ, ORGAN_TO_SYSTEM), [ORGAN_TO_SYSTEM]);
 
   // Filters
   const [selectedSystem, setSelectedSystem] = useState<string | null>(
@@ -392,25 +396,35 @@ function ChaptersContent() {
     } catch (e) { console.error(e); }
   };
 
-  // Only show systems that have at least one chapter
+  // Only show systems that have at least one chapter (using resolver for non-key organ values)
   const systemsWithChapters = useMemo(() => {
-    const organSet = new Set(chapters.map((ch) => ch.organ).filter(Boolean) as string[]);
-    return systems.filter((sys) =>
-      sys.organs.some((o) => organSet.has(o.key))
-    );
-  }, [chapters, systems]);
+    const systemSet = new Set<string>();
+    for (const ch of chapters) {
+      if (ch.organ) {
+        const sys = getSystemForOrgan(ch.organ);
+        if (sys) systemSet.add(sys);
+      }
+    }
+    return systems.filter((sys) => systemSet.has(sys.key));
+  }, [chapters, systems, getSystemForOrgan]);
 
   // Count chapters with no organ or organ not in taxonomy
   const unclassifiedCount = useMemo(() => {
-    return chapters.filter((ch) => !ch.organ || !ORGAN_TO_SYSTEM[ch.organ]).length;
-  }, [chapters]);
+    return chapters.filter((ch) => !ch.organ || !getSystemForOrgan(ch.organ)).length;
+  }, [chapters, getSystemForOrgan]);
 
   const organsWithChapters = useMemo(() => {
     if (!selectedSystem) return [];
-    const organSet = new Set(chapters.map((ch) => ch.organ).filter(Boolean) as string[]);
+    // Collect all organ keys that resolve to the selected system
+    const organKeysInSystem = new Set<string>();
+    for (const ch of chapters) {
+      if (ch.organ && getSystemForOrgan(ch.organ) === selectedSystem) {
+        organKeysInSystem.add(ch.organ);
+      }
+    }
     const sys = systems.find((s) => s.key === selectedSystem);
-    return sys?.organs.filter((o) => organSet.has(o.key)) ?? [];
-  }, [chapters, systems, selectedSystem]);
+    return sys?.organs.filter((o) => organKeysInSystem.has(o.key)) ?? [];
+  }, [chapters, systems, selectedSystem, getSystemForOrgan]);
 
   const bookSources = useMemo(() => {
     const sources = [...new Set(chapters.map((ch) => ch.bookSource))];
@@ -421,10 +435,10 @@ function ChaptersContent() {
   const filteredChapters = useMemo(() => {
     let result = chapters.filter((ch) => {
       if (selectedSystem === "_unclassified") {
-        if (ch.organ && ORGAN_TO_SYSTEM[ch.organ]) return false;
+        if (ch.organ && getSystemForOrgan(ch.organ)) return false;
         // Show only unclassified chapters
       } else if (selectedSystem) {
-        const chSystem = ch.organ ? ORGAN_TO_SYSTEM[ch.organ] : null;
+        const chSystem = ch.organ ? getSystemForOrgan(ch.organ) : null;
         if (chSystem !== selectedSystem) return false;
       }
       if (selectedOrgan) {
@@ -458,11 +472,12 @@ function ChaptersContent() {
     }
 
     return result;
-  }, [chapters, selectedSystem, selectedOrgan, bookFilter, sortMode]);
+  }, [chapters, selectedSystem, selectedOrgan, bookFilter, sortMode, getSystemForOrgan]);
 
   // Group chapters by organ for display when a system is selected
   const groupedChapters = useMemo(() => {
     if (!selectedSystem || selectedOrgan) return null;
+    if (selectedSystem === "_unclassified") return null; // Flat list for unclassified
     if (sortMode !== "default") return null; // Don't group when sorting
 
     const groups: { organ: string; label: string; chapters: Chapter[] }[] = [];
@@ -496,12 +511,12 @@ function ChaptersContent() {
     const counts: Record<string, number> = {};
     for (const ch of chapters) {
       if (ch.organ) {
-        const sys = ORGAN_TO_SYSTEM[ch.organ];
+        const sys = getSystemForOrgan(ch.organ);
         if (sys) counts[sys] = (counts[sys] || 0) + 1;
       }
     }
     return counts;
-  }, [chapters]);
+  }, [chapters, getSystemForOrgan]);
 
   // Study stats
   const studyStats = useMemo(() => {
@@ -576,7 +591,7 @@ function ChaptersContent() {
                   </Badge>
                   {ch.organ && !selectedOrgan && (
                     <Badge variant="outline" className="text-xs">
-                      {getOrganLabel(ch.organ)}
+                      {getOrganLabelResolved(ch.organ)}
                     </Badge>
                   )}
                   <span className="text-xs text-muted-foreground">
@@ -913,7 +928,7 @@ function ChaptersContent() {
             <h3 className="text-lg font-medium mb-2">Aucun chapitre</h3>
             <p className="text-muted-foreground">
               {selectedSystem
-                ? `Aucun chapitre pour ${getSystemLabel(selectedSystem)}${selectedOrgan ? ` / ${getOrganLabel(selectedOrgan)}` : ""}.`
+                ? `Aucun chapitre pour ${getSystemLabel(selectedSystem)}${selectedOrgan ? ` / ${getOrganLabelResolved(selectedOrgan)}` : ""}.`
                 : "Importez des notes ou lancez le pipeline d'ingestion."}
             </p>
           </CardContent>

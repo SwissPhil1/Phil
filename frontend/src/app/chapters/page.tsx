@@ -30,6 +30,7 @@ import {
   resolveOrganSystem,
   resolveOrganLabel,
 } from "@/lib/taxonomy";
+import { offlineFetch } from "@/lib/offline-fetch";
 
 interface Chapter {
   id: number;
@@ -324,7 +325,7 @@ function ChaptersContent() {
   const loadChapters = useCallback(() => {
     setLoading(true);
     setError(null);
-    fetch("/api/chapters?stats=1")
+    offlineFetch("/api/chapters?stats=1")
       .then((r) => {
         if (!r.ok) throw new Error(`Failed to load chapters (${r.status})`);
         return r.json();

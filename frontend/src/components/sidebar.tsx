@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
+import { OfflineDownloadButton } from "@/components/offline-download";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -87,7 +88,8 @@ export function Sidebar() {
           })}
         </nav>
 
-        <div className="absolute bottom-4 left-0 right-0 px-4">
+        <div className="absolute bottom-4 left-0 right-0 px-4 space-y-3">
+          <OfflineDownloadButton />
           <div className="rounded-lg bg-muted p-3 text-xs text-muted-foreground">
             <p className="font-medium text-foreground mb-1">FMH2 Radiology</p>
             <p>Core Radiology + Crack the Core</p>

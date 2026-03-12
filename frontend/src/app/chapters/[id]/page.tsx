@@ -35,6 +35,7 @@ import {
   Target,
 } from "lucide-react";
 import React, { useEffect, useState, useCallback, useRef } from "react";
+import { offlineFetch } from "@/lib/offline-fetch";
 import ReactMarkdown, { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkBreaks from "remark-breaks";
@@ -460,7 +461,7 @@ export default function ChapterDetailPage() {
 
   useEffect(() => {
     if (params.id) {
-      fetch(`/api/chapters/${params.id}`)
+      offlineFetch(`/api/chapters/${params.id}`)
         .then((r) => r.json())
         .then(setChapter)
         .catch(console.error)

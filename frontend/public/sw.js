@@ -1,5 +1,5 @@
 // RadioRevise Service Worker — Offline Support
-const CACHE_NAME = "radiorevise-v1";
+const CACHE_NAME = "radiorevise-v2";
 
 // App shell pages to cache on install
 const APP_SHELL = [
@@ -95,6 +95,40 @@ self.addEventListener("fetch", (event) => {
             }
             // Fall back to root page
             return caches.match("/");
+          });
+        })
+    );
+    return;
+  }
+
+  // Chapter detail routes (RSC payloads for client-side navigation)
+  // Since /chapters/[id] is a client component, the RSC payload is the same
+  // structure for all chapters — only the data differs (loaded from IndexedDB).
+  // So we can reuse any cached chapter response for all chapter IDs.
+  if (url.pathname.match(/^\/chapters\/\d+/)) {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          if (response.ok) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          }
+          return response;
+        })
+        .catch(() => {
+          return caches.match(event.request).then((exact) => {
+            if (exact) return exact;
+            // Find ANY cached /chapters/:id response to reuse
+            return caches.open(CACHE_NAME).then((cache) =>
+              cache.keys().then((keys) => {
+                const chapterKey = keys.find((k) => {
+                  const u = new URL(k.url);
+                  return u.pathname.match(/^\/chapters\/\d+$/) && k.headers.get("RSC") === event.request.headers.get("RSC");
+                });
+                if (chapterKey) return cache.match(chapterKey);
+                return caches.match("/chapters").then((parent) => parent || caches.match("/"));
+              })
+            );
           });
         })
     );

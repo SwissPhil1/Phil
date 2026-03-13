@@ -11,6 +11,7 @@ import {
 import { useEffect, useState, useCallback, Suspense, useMemo } from "react";
 import { previewIntervals, formatInterval, xpForQuality, levelFromXp } from "@/lib/sm2";
 import { getAllSystems as getFallbackSystems, getOrganLabel as fallbackOrganLabel, getSystemLabel as fallbackSystemLabel, type DbSystem, buildTaxonomyFromDb } from "@/lib/taxonomy";
+import { offlineFetch } from "@/lib/offline-fetch";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -179,7 +180,7 @@ function FlashcardsContent() {
     if (selectedSystem) url += `&system=${selectedSystem}`;
     if (selectedOrgan) url += `&organ=${selectedOrgan}`;
 
-    fetch(url)
+    offlineFetch(url)
       .then((r) => r.json())
       .then(setStats)
       .catch(() => {})
@@ -214,7 +215,7 @@ function FlashcardsContent() {
       else if (selectedSystem) url += `&system=${selectedSystem}`;
     }
 
-    fetch(url)
+    offlineFetch(url)
       .then((r) => {
         if (!r.ok) throw new Error(`Erreur ${r.status}`);
         return r.json();
@@ -243,14 +244,25 @@ function FlashcardsContent() {
     const card = queue[currentIndex];
     if (!card) return;
 
-    // Save to API
+    // Save to API (or queue offline)
     try {
-      await fetch("/api/flashcards/review", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ flashcardId: card.id, quality }),
-      });
+      if (navigator.onLine) {
+        await fetch("/api/flashcards/review", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ flashcardId: card.id, quality }),
+        });
+      } else {
+        // Queue for sync when back online
+        const { queueOfflineReview } = await import("@/hooks/useOffline");
+        await queueOfflineReview(card.id, quality);
+      }
     } catch (err) {
+      // If online fetch fails, try queuing offline
+      try {
+        const { queueOfflineReview } = await import("@/hooks/useOffline");
+        await queueOfflineReview(card.id, quality);
+      } catch { /* ignore */ }
       console.error("Failed to save review:", err);
     }
 

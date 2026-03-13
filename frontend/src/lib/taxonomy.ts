@@ -174,16 +174,75 @@ export function buildTaxonomyFromDb(dbSystems: DbSystem[]): {
 
   const systems: SystemInfo[] = dbSystems.map((sys) => {
     systemLabels[sys.key] = sys.label;
+    // Also index by label (lowercased) so "Gastro-intestinal" resolves to "gi"
+    systemLabels[sys.label.toLowerCase()] = sys.label;
     return {
       key: sys.key,
       label: sys.label,
       organs: sys.organs.map((o) => {
         organToSystem[o.key] = sys.key;
         organLabels[o.key] = o.label;
+        // Also index by label (lowercased) so "Œsophage" → "gi"
+        const lowerLabel = o.label.toLowerCase();
+        if (!organToSystem[lowerLabel]) {
+          organToSystem[lowerLabel] = sys.key;
+          organLabels[lowerLabel] = o.label;
+        }
         return { key: o.key, label: o.label };
       }),
     };
   });
 
+  // Also index system labels as organ keys pointing to their own system
+  // This handles cases where ch.organ = "Imagerie de la femme" (a system label used as organ)
+  for (const sys of dbSystems) {
+    const lowerLabel = sys.label.toLowerCase();
+    if (!organToSystem[lowerLabel]) {
+      organToSystem[lowerLabel] = sys.key;
+      organLabels[lowerLabel] = sys.label;
+    }
+    // Also add the key form of the label (e.g., "imagerie_de_la_femme")
+    const keyForm = sys.label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+    if (!organToSystem[keyForm]) {
+      organToSystem[keyForm] = sys.key;
+      organLabels[keyForm] = sys.label;
+    }
+  }
+
   return { systems, organToSystem, organLabels, systemLabels };
+}
+
+/**
+ * Resolve a chapter's organ value to its system key.
+ * Handles direct keys ("esophagus"), raw labels ("Œsophage"),
+ * and system labels used as organs ("Imagerie de la femme").
+ */
+export function resolveOrganSystem(
+  organ: string,
+  organToSystem: Record<string, string>,
+): string | null {
+  // Direct key match
+  if (organToSystem[organ]) return organToSystem[organ];
+  // Lowercase match
+  const lower = organ.toLowerCase();
+  if (organToSystem[lower]) return organToSystem[lower];
+  // Key-form match (label → snake_case)
+  const keyForm = lower.replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+  if (organToSystem[keyForm]) return organToSystem[keyForm];
+  return null;
+}
+
+/**
+ * Resolve a chapter's organ value to its display label.
+ */
+export function resolveOrganLabel(
+  organ: string,
+  organLabels: Record<string, string>,
+): string {
+  if (organLabels[organ]) return organLabels[organ];
+  const lower = organ.toLowerCase();
+  if (organLabels[lower]) return organLabels[lower];
+  const keyForm = lower.replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+  if (organLabels[keyForm]) return organLabels[keyForm];
+  return organ; // Return as-is if not found
 }

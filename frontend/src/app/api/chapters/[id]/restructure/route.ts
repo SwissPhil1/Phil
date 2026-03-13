@@ -5,22 +5,23 @@ import {
   getClaudeClient,
   callClaudeStreamWithRetry,
 } from "@/lib/claude";
-import { buildRestructurePrompt } from "@/lib/restructure-prompts";
+import {
+  buildRestructurePrompt,
+  splitIntoSections,
+  groupSectionsIntoChunks,
+  buildChunkRestructurePrompt,
+} from "@/lib/restructure-prompts";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 800;
 
 /**
- * Restructure a study guide — single-pass pipeline:
+ * Restructure a study guide:
+ *   - Guides ≤25K words: single-pass restructure
+ *   - Guides >25K words: chunk-based restructure (split by ## headings)
  *
- *   1. Send the study guide to Claude with the restructure prompt
- *   2. Save the result as a new chapter
- *
- * The restructure prompt includes thorough content preservation instructions.
- * The user reviews the output against the original, so automated verification
- * is unnecessary and was causing timeouts on large guides.
- *
- * For optional post-hoc verification, use the /reconcile endpoint separately.
+ * Saves the result as a new chapter linked via sourceChapterId.
+ * For post-hoc fact verification, use the /reconcile endpoint separately.
  */
 export async function POST(
   request: Request,
@@ -83,37 +84,101 @@ export async function POST(
         const studyGuide = chapter.studyGuide!;
         const inputWords = studyGuide.split(/\s+/).length;
 
-        // Words-to-tokens ratio for medical text with markdown/tables/callouts ≈ 1.4 tokens/word
-        // Allow headroom for additions (differential tables, STOP & THINK, etc.)
-        const restructureTokens = Math.min(128000, Math.max(16000, Math.round(inputWords * 1.1 * 1.4)));
+        const CHUNK_THRESHOLD = 25000; // words
+        let restructuredGuide: string;
 
-        // ══════════════════════════════════════════════════════
-        // Single pass: Restructure the study guide
-        // ══════════════════════════════════════════════════════
-        send({
-          status: "restructuring",
-          message: `Restructuring study guide (~${inputWords.toLocaleString()} words)...`,
-        });
+        if (inputWords <= CHUNK_THRESHOLD) {
+          // ══════════════════════════════════════════════════════
+          // Small guide: Single pass
+          // ══════════════════════════════════════════════════════
+          const restructureTokens = Math.min(128000, Math.max(16000, Math.round(inputWords * 1.1 * 1.4)));
 
-        const restructuredGuide = await callClaudeStreamWithRetry(
-          client,
-          {
-            model: CLAUDE_MODEL,
-            max_tokens: restructureTokens,
-            messages: [{ role: "user", content: buildRestructurePrompt(studyGuide, language) }],
-          },
-          (charCount) => {
-            const words = Math.round(charCount / 5);
-            const pct = Math.min(99, Math.round((words / inputWords) * 100));
+          send({
+            status: "restructuring",
+            message: `Restructuring study guide (~${inputWords.toLocaleString()} words)...`,
+          });
+
+          restructuredGuide = await callClaudeStreamWithRetry(
+            client,
+            {
+              model: CLAUDE_MODEL,
+              max_tokens: restructureTokens,
+              messages: [{ role: "user", content: buildRestructurePrompt(studyGuide, language) }],
+            },
+            (charCount) => {
+              const words = Math.round(charCount / 5);
+              const pct = Math.min(99, Math.round((words / inputWords) * 100));
+              send({
+                status: "restructuring",
+                message: `Restructuring... ~${words.toLocaleString()} words generated (${pct}%)`,
+              });
+            },
+            1,       // maxRetries
+            90_000,  // stall timeout
+            660_000, // 11 min overall timeout per attempt
+          );
+        } else {
+          // ══════════════════════════════════════════════════════
+          // Large guide: Chunk-based restructure
+          // ══════════════════════════════════════════════════════
+          const sections = splitIntoSections(studyGuide);
+          const chunks = groupSectionsIntoChunks(sections, 15000);
+          const allHeadings = sections.map(s => s.heading).filter(Boolean);
+
+          send({
+            status: "restructuring",
+            message: `Large guide (~${inputWords.toLocaleString()} words) — splitting into ${chunks.length} chunks for processing...`,
+          });
+
+          console.log(`[restructure] Large guide: ${inputWords} words, ${sections.length} sections, ${chunks.length} chunks`);
+
+          const chunkResults: string[] = [];
+          let totalCharsGenerated = 0;
+
+          for (let i = 0; i < chunks.length; i++) {
+            const chunk = chunks[i];
+            const chunkText = chunk.map(s => `${s.heading}\n${s.body}`).join('\n\n');
+            const chunkHeadings = chunk.map(s => s.heading).filter(Boolean);
+            const chunkWords = chunkText.split(/\s+/).length;
+            const chunkTokens = Math.min(64000, Math.max(8000, Math.round(chunkWords * 1.3 * 1.4)));
+
             send({
               status: "restructuring",
-              message: `Restructuring... ~${words.toLocaleString()} words generated (${pct}%)`,
+              message: `Processing chunk ${i + 1}/${chunks.length} (~${chunkWords.toLocaleString()} words)...`,
             });
-          },
-          1,       // maxRetries — conserve time budget
-          90_000,  // stall timeout
-          660_000, // 11 min overall timeout per attempt
-        );
+
+            const result = await callClaudeStreamWithRetry(
+              client,
+              {
+                model: CLAUDE_MODEL,
+                max_tokens: chunkTokens,
+                messages: [{
+                  role: "user",
+                  content: buildChunkRestructurePrompt(
+                    chunkText, i, chunks.length, chunkHeadings, allHeadings, language
+                  ),
+                }],
+              },
+              (charCount) => {
+                const words = Math.round((totalCharsGenerated + charCount) / 5);
+                const pct = Math.min(99, Math.round((words / inputWords) * 100));
+                send({
+                  status: "restructuring",
+                  message: `Chunk ${i + 1}/${chunks.length}: ~${words.toLocaleString()} words total (${pct}%)`,
+                });
+              },
+              1,       // maxRetries
+              90_000,  // stall timeout
+              360_000, // 6 min per chunk
+            );
+
+            totalCharsGenerated += result.length;
+            chunkResults.push(result);
+            console.log(`[restructure] Chunk ${i + 1}/${chunks.length} done: ${result.length} chars`);
+          }
+
+          restructuredGuide = chunkResults.join('\n\n---\n\n');
+        }
 
         // ══════════════════════════════════════════════════════
         // Save as new chapter

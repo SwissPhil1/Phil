@@ -10,6 +10,71 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 /**
+ * Mechanical paragraph-level deduplication.
+ * Removes near-duplicate paragraph blocks (>80% word-overlap via Jaccard similarity)
+ * before sending to Claude, reducing input size and redundancy.
+ */
+function deduplicateParagraphs(text: string): {
+  cleaned: string;
+  removedChars: number;
+  removedCount: number;
+} {
+  const paragraphs = text.split(/\n\n+/).filter((p) => p.trim().length > 0);
+
+  // Word set for Jaccard computation
+  const wordSet = (s: string): Set<string> =>
+    new Set(s.toLowerCase().split(/\s+/).filter((w) => w.length > 0));
+
+  const kept: { text: string; words: Set<string> }[] = [];
+  let removedCount = 0;
+
+  for (const para of paragraphs) {
+    const words = wordSet(para);
+
+    // Skip short paragraphs (headings, labels) — don't dedup them
+    if (words.size < 50) {
+      kept.push({ text: para, words });
+      continue;
+    }
+
+    let isDuplicate = false;
+    for (let i = 0; i < kept.length; i++) {
+      const k = kept[i];
+      if (k.words.size < 50) continue; // Don't compare against short blocks
+
+      // Jaccard similarity: |A ∩ B| / |A ∪ B|
+      let intersection = 0;
+      for (const w of words) {
+        if (k.words.has(w)) intersection++;
+      }
+      const union = k.words.size + words.size - intersection;
+      const jaccard = union > 0 ? intersection / union : 0;
+
+      if (jaccard > 0.8) {
+        // Keep the longer (more complete) version
+        if (para.length > k.text.length) {
+          kept[i] = { text: para, words };
+        }
+        isDuplicate = true;
+        removedCount++;
+        break;
+      }
+    }
+
+    if (!isDuplicate) {
+      kept.push({ text: para, words });
+    }
+  }
+
+  const cleaned = kept.map((k) => k.text).join("\n\n");
+  return {
+    cleaned,
+    removedChars: text.length - cleaned.length,
+    removedCount,
+  };
+}
+
+/**
  * Build the prompt to transform a NotebookLM summary into a retention-optimized Q/A guide.
  */
 function buildTransformPrompt(organ: string, originalText: string, language: string): string {
@@ -45,6 +110,13 @@ ${langInstruction}
 ═══════════════════════════════════════════════════════
 CRITICAL: SMART FUSION — NO FACT LEFT BEHIND
 ═══════════════════════════════════════════════════════
+
+CRITICAL PRE-PROCESSING RULES (apply before any formatting):
+• Scan the entire input for duplicate concepts. A concept is duplicate if it covers the same topic even with different wording.
+• Each concept must appear EXACTLY ONCE in the output, in its most complete and accurate version.
+• If the same concept appears multiple times (e.g. Monro-Kellie hypothesis, Oxygen FLAIR pitfall), merge all versions into one single entry keeping every unique detail.
+• Never concatenate source sections sequentially. The output structure must be thematic, not source-ordered.
+• If the input contains multiple guides on the same organ/topic, treat them as one unified source, not separate chapters.
 
 The input below may contain MULTIPLE overlapping study guides covering the same organ from different angles (e.g., anatomy, benign masses, malignant masses, diffuse disease, vascular, trauma). These overlap heavily but each contains UNIQUE details the others miss.
 
@@ -185,13 +257,20 @@ async function handleTransform(body: { organ: string; title: string; text: strin
       }, 8000);
 
       try {
+        // Step 0: Mechanical deduplication of near-duplicate paragraphs
+        const { cleaned: dedupedText, removedChars, removedCount } = deduplicateParagraphs(text);
+        if (removedCount > 0) {
+          console.log(`[import-notes] Dedup: removed ${removedChars} chars (${removedCount} paragraphs) from ${text.length} total`);
+          send({ status: "dedup", message: `Removed ${removedCount} duplicate paragraphs (${removedChars.toLocaleString()} chars)` });
+        }
+
         // Step 1: Transform via Claude
         send({ status: "transforming", message: "Claude is transforming your summary into Q/A format..." });
 
         const client = getClaudeClient();
-        console.log(`[import-notes] Starting transform: organ=${organ}, title="${title}", inputWords=${text.split(/\s+/).length}`);
+        const inputWords = dedupedText.split(/\s+/).length;
+        console.log(`[import-notes] Starting transform: organ=${organ}, title="${title}", inputWords=${inputWords}${removedCount > 0 ? ` (after dedup from ${text.split(/\s+/).length})` : ""}`);
         // Scale max_tokens based on input size — large combined summaries need more room
-        const inputWords = text.split(/\s+/).length;
         const dynamicMaxTokens = inputWords > 5000 ? 64000 : 32000;
 
         const studyGuide = await callClaudeStreamWithRetry(
@@ -199,7 +278,7 @@ async function handleTransform(body: { organ: string; title: string; text: strin
           {
             model: CLAUDE_MODEL,
             max_tokens: dynamicMaxTokens,
-            messages: [{ role: "user", content: buildTransformPrompt(organ, text, language) }],
+            messages: [{ role: "user", content: buildTransformPrompt(organ, dedupedText, language) }],
           },
           (charCount) => {
             const words = Math.round(charCount / 5);

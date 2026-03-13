@@ -85,10 +85,17 @@ self.addEventListener("fetch", (event) => {
           return response;
         })
         .catch(() => {
-          // Offline: try cache, then fall back to root page
-          return caches.match(event.request).then(
-            (cached) => cached || caches.match("/")
-          );
+          // Offline: try exact cache match first
+          return caches.match(event.request).then((cached) => {
+            if (cached) return cached;
+            // For dynamic routes like /chapters/123, try the parent route
+            const path = url.pathname;
+            if (path.match(/^\/chapters\/\d+/)) {
+              return caches.match("/chapters").then((parent) => parent || caches.match("/"));
+            }
+            // Fall back to root page
+            return caches.match("/");
+          });
         })
     );
     return;

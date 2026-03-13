@@ -127,6 +127,40 @@ export async function offlineFetch(input: RequestInfo | URL, init?: RequestInit)
     return jsonResponse(mapped);
   }
 
+  // GET /api/progress
+  if (url.includes("/api/progress")) {
+    const chapters = await db.chapters.toArray();
+    const allCards = await db.flashcards.toArray();
+    const now = new Date();
+    const dueCount = allCards.filter((c) => !c.nextReview || new Date(c.nextReview) <= now).length;
+    const totalQuestions = chapters.reduce((sum, ch) => sum + ch.questionCount, 0);
+    const totalFlashcards = allCards.length;
+
+    return jsonResponse({
+      overview: {
+        totalChapters: chapters.length,
+        totalQuestions,
+        totalFlashcards,
+        totalAttempts: 0,
+        correctAttempts: 0,
+        accuracy: null,
+        totalReviews: 0,
+        dueFlashcards: dueCount,
+      },
+      chapterProgress: chapters.map((ch) => ({
+        id: ch.id,
+        title: ch.title,
+        bookSource: ch.bookSource,
+        number: ch.number,
+        totalQuestions: ch.questionCount,
+        totalFlashcards: ch.flashcardCount,
+        questionsAttempted: 0,
+        questionsCorrect: 0,
+        accuracy: null,
+      })),
+    });
+  }
+
   // GET /api/taxonomy
   if (url.includes("/api/taxonomy")) {
     // Return empty array — taxonomy cached in state anyway

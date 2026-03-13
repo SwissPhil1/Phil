@@ -12,6 +12,7 @@ import {
   Clock,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { offlineFetch } from "@/lib/offline-fetch";
 
 interface ProgressData {
   overview: {
@@ -43,7 +44,7 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/progress")
+    offlineFetch("/api/progress")
       .then((r) => {
         if (!r.ok) throw new Error(`Failed to load progress (${r.status})`);
         return r.json();

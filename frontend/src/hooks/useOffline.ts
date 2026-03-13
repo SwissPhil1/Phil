@@ -175,6 +175,23 @@ export function useOfflineDownload() {
         });
       }
 
+      // Phase 4: Pre-cache page bundles for offline navigation
+      setProgress({ phase: "flashcards", current: 0, total: 0, message: "Caching pages for offline..." });
+      try {
+        // Fetch a chapter detail page to cache the JS chunks needed for /chapters/[id]
+        if (studyChapters.length > 0) {
+          await fetch(`/chapters/${studyChapters[0].id}`, { credentials: "same-origin" });
+        }
+        // Also cache dashboard and flashcards pages
+        await Promise.allSettled([
+          fetch("/", { credentials: "same-origin" }),
+          fetch("/flashcards", { credentials: "same-origin" }),
+          fetch("/chapters", { credentials: "same-origin" }),
+        ]);
+      } catch {
+        // Non-critical — pages may already be cached
+      }
+
       // Done
       await setLastSyncTime(new Date());
       await loadStats();

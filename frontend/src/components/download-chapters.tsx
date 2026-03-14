@@ -13,6 +13,85 @@ interface Chapter {
   studyGuide: string;
 }
 
+/** CSS embedded in each PDF – mirrors the app's callout styling */
+function getPdfStyles(): string {
+  return `
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      font-size: 11px;
+      line-height: 1.6;
+      color: #1a1a1a;
+      padding: 40px;
+      max-width: 700px;
+    }
+    .header { margin-bottom: 24px; padding-bottom: 16px; border-bottom: 2px solid #e5e7eb; }
+    .header h1 { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
+    .header .subtitle { font-size: 11px; color: #6b7280; }
+    h1 { font-size: 20px; font-weight: 700; margin-top: 28px; margin-bottom: 8px; }
+    h2 { font-size: 17px; font-weight: 700; margin-top: 24px; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 2px solid rgba(59,130,246,0.15); }
+    h3 { font-size: 14px; font-weight: 600; margin-top: 18px; margin-bottom: 6px; }
+    h4 { font-size: 12px; font-weight: 600; margin-top: 14px; margin-bottom: 4px; }
+    p { margin-bottom: 8px; }
+    strong { font-weight: 700; }
+    em { font-style: italic; }
+    ul, ol { margin-left: 20px; margin-bottom: 8px; }
+    li { margin-bottom: 3px; }
+    a { color: #2563eb; text-decoration: underline; }
+    hr { border: none; border-top: 2px dashed #d1d5db; margin: 20px 0; }
+    code { background: #f3f4f6; padding: 1px 4px; border-radius: 3px; font-size: 10px; }
+
+    /* Tables */
+    table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 10px; }
+    thead { background: #f9fafb; }
+    th { padding: 6px 8px; text-align: left; font-weight: 600; border-bottom: 2px solid #e5e7eb; font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; }
+    td { padding: 5px 8px; border-bottom: 1px solid #f3f4f6; }
+    tr:nth-child(even) { background: #fafafa; }
+
+    /* Callout boxes – matching the app's colored blockquotes */
+    blockquote {
+      border-left: 4px solid #9ca3af;
+      border-radius: 0 8px 8px 0;
+      padding: 10px 14px;
+      margin: 12px 0;
+      background: #f9fafb;
+    }
+    blockquote p { margin-bottom: 4px; }
+    blockquote.callout-pearl { border-left-color: #f59e0b; background: #fffbeb; }
+    blockquote.callout-pearl p { color: #78350f; }
+    blockquote.callout-pitfall { border-left-color: #ef4444; background: #fef2f2; }
+    blockquote.callout-pitfall p { color: #7f1d1d; }
+    blockquote.callout-highyield { border-left-color: #f97316; background: #fff7ed; }
+    blockquote.callout-highyield p { color: #7c2d12; }
+    blockquote.callout-mnemonic { border-left-color: #a855f7; background: #faf5ff; }
+    blockquote.callout-mnemonic p { color: #581c87; }
+    blockquote.callout-think { border-left-color: #3b82f6; background: #eff6ff; }
+    blockquote.callout-think p { color: #1e3a8a; }
+    blockquote.callout-keypoint { border-left-color: #10b981; background: #ecfdf5; }
+    blockquote.callout-keypoint p { color: #064e3b; }
+    blockquote.callout-vs { border-left-color: #6366f1; background: #eef2ff; }
+    blockquote.callout-vs p { color: #312e81; }
+  `;
+}
+
+/** Post-process HTML to add callout classes to blockquotes based on content */
+function classifyCallouts(html: string): string {
+  return html.replace(/<blockquote>/g, (match) => {
+    return `<blockquote data-needs-classify="true">`;
+  }).replace(/<blockquote data-needs-classify="true">([\s\S]*?)(?=<\/blockquote>)/g, (_match, content: string) => {
+    const text = content.replace(/<[^>]*>/g, ""); // strip tags to inspect text
+    let cls = "";
+    if (text.includes("💡") || text.includes("PEARL")) cls = "callout-pearl";
+    else if (text.includes("🔴") || text.includes("PITFALL") || text.includes("DANGER") || text.includes("TRAP")) cls = "callout-pitfall";
+    else if (text.includes("⚡") || text.includes("HIGH YIELD")) cls = "callout-highyield";
+    else if (text.includes("🧠") || text.includes("MNEMONIC")) cls = "callout-mnemonic";
+    else if (text.includes("🎯") || text.includes("STOP &amp; THINK") || text.includes("STOP & THINK")) cls = "callout-think";
+    else if (text.includes("✅") || text.includes("KEY POINT")) cls = "callout-keypoint";
+    else if (text.includes("⚖️") || text.includes("VS:")) cls = "callout-vs";
+    return `<blockquote class="${cls}">${content}`;
+  });
+}
+
 export function DownloadChaptersButton() {
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState("");
@@ -35,109 +114,63 @@ export function DownloadChaptersButton() {
       setProgress(`Generating ${chapters.length} PDFs...`);
 
       // Dynamic imports to avoid loading these heavy libs on page load
-      const [{ default: jsPDF }, { default: JSZip }] = await Promise.all([
+      const [{ default: jsPDF }, { default: JSZip }, { marked }] = await Promise.all([
         import("jspdf"),
         import("jszip"),
+        import("marked"),
       ]);
 
       const zip = new JSZip();
+
+      // Create a hidden container for rendering
+      const container = document.createElement("div");
+      container.style.position = "absolute";
+      container.style.left = "-9999px";
+      container.style.top = "0";
+      container.style.width = "700px"; // Fixed width for consistent rendering
+      document.body.appendChild(container);
 
       for (let i = 0; i < chapters.length; i++) {
         const ch = chapters[i];
         setProgress(`PDF ${i + 1}/${chapters.length}: ${ch.title}`);
 
-        const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
-        const pageWidth = doc.internal.pageSize.getWidth();
-        const pageHeight = doc.internal.pageSize.getHeight();
-        const margin = 15;
-        const usableWidth = pageWidth - margin * 2;
-        let y = margin;
+        // Convert markdown to HTML
+        const rawHtml = await marked(ch.studyGuide, { gfm: true, breaks: true });
+        const styledHtml = classifyCallouts(rawHtml);
 
-        // Title
-        doc.setFont("helvetica", "bold");
-        doc.setFontSize(18);
-        const titleLines = doc.splitTextToSize(ch.title, usableWidth);
-        doc.text(titleLines, margin, y);
-        y += titleLines.length * 8 + 4;
-
-        // Subtitle (organ / source)
-        doc.setFont("helvetica", "normal");
-        doc.setFontSize(10);
-        doc.setTextColor(120, 120, 120);
         const subtitle = [ch.organ, ch.bookSource.replace(/_/g, " ")].filter(Boolean).join(" — ");
-        doc.text(subtitle, margin, y);
-        y += 8;
-        doc.setTextColor(0, 0, 0);
 
-        // Separator line
-        doc.setDrawColor(200, 200, 200);
-        doc.line(margin, y, pageWidth - margin, y);
-        y += 8;
+        // Build full HTML document
+        const fullHtml = `
+          <div class="header">
+            <h1>${escapeHtml(ch.title)}</h1>
+            <div class="subtitle">${escapeHtml(subtitle)}</div>
+          </div>
+          ${styledHtml}
+        `;
 
-        // Study guide content
-        const lines = ch.studyGuide.split("\n");
+        // Render into hidden container
+        container.innerHTML = `<style>${getPdfStyles()}</style>${fullHtml}`;
 
-        for (const line of lines) {
-          const trimmed = line.trimStart();
+        // Use jsPDF html() to render the styled HTML to PDF
+        const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
 
-          // Detect heading levels
-          const h1Match = trimmed.match(/^# (.+)/);
-          const h2Match = trimmed.match(/^## (.+)/);
-          const h3Match = trimmed.match(/^### (.+)/);
-
-          if (h1Match) {
-            y += 4;
-            doc.setFont("helvetica", "bold");
-            doc.setFontSize(16);
-            const wrapped = doc.splitTextToSize(h1Match[1], usableWidth);
-            if (y + wrapped.length * 7 > pageHeight - margin) {
-              doc.addPage();
-              y = margin;
-            }
-            doc.text(wrapped, margin, y);
-            y += wrapped.length * 7 + 3;
-          } else if (h2Match) {
-            y += 3;
-            doc.setFont("helvetica", "bold");
-            doc.setFontSize(13);
-            const wrapped = doc.splitTextToSize(h2Match[1], usableWidth);
-            if (y + wrapped.length * 6 > pageHeight - margin) {
-              doc.addPage();
-              y = margin;
-            }
-            doc.text(wrapped, margin, y);
-            y += wrapped.length * 6 + 2;
-          } else if (h3Match) {
-            y += 2;
-            doc.setFont("helvetica", "bold");
-            doc.setFontSize(11);
-            const wrapped = doc.splitTextToSize(h3Match[1], usableWidth);
-            if (y + wrapped.length * 5 > pageHeight - margin) {
-              doc.addPage();
-              y = margin;
-            }
-            doc.text(wrapped, margin, y);
-            y += wrapped.length * 5 + 2;
-          } else if (trimmed === "" || trimmed === "---") {
-            y += 3;
-          } else {
-            // Regular text (including bullet points)
-            doc.setFont("helvetica", "normal");
-            doc.setFontSize(10);
-            const indent = trimmed.startsWith("- ") || trimmed.startsWith("• ") ? 4 : 0;
-            const text = trimmed.startsWith("- ") ? "• " + trimmed.slice(2) : trimmed;
-            const wrapped = doc.splitTextToSize(text, usableWidth - indent);
-
-            for (const wLine of wrapped) {
-              if (y > pageHeight - margin) {
-                doc.addPage();
-                y = margin;
-              }
-              doc.text(wLine, margin + indent, y);
-              y += 4.5;
-            }
-          }
-        }
+        await new Promise<void>((resolve) => {
+          doc.html(container, {
+            callback: () => resolve(),
+            x: 0,
+            y: 0,
+            width: 170, // mm usable width (A4 = 210mm - 2*20mm margins)
+            windowWidth: 700, // matches container width
+            margin: [15, 20, 15, 20], // top, right, bottom, left in mm
+            autoPaging: "text",
+            html2canvas: {
+              scale: 2, // Higher quality rendering
+              useCORS: true,
+              letterRendering: true,
+            },
+          });
+        });
 
         // Sanitize filename
         const safeName = ch.title
@@ -149,9 +182,12 @@ export function DownloadChaptersButton() {
         zip.file(fileName, doc.output("arraybuffer"));
       }
 
+      // Clean up
+      document.body.removeChild(container);
+
       setProgress("Creating ZIP file...");
       const blob = await zip.generateAsync({ type: "blob" });
-      // Use native browser download instead of file-saver
+      // Use native browser download
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -178,4 +214,12 @@ export function DownloadChaptersButton() {
       {progress && <p className="text-xs text-muted-foreground">{progress}</p>}
     </div>
   );
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }

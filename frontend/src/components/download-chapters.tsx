@@ -35,10 +35,9 @@ export function DownloadChaptersButton() {
       setProgress(`Generating ${chapters.length} PDFs...`);
 
       // Dynamic imports to avoid loading these heavy libs on page load
-      const [{ default: jsPDF }, { default: JSZip }, { saveAs }] = await Promise.all([
+      const [{ default: jsPDF }, { default: JSZip }] = await Promise.all([
         import("jspdf"),
         import("jszip"),
-        import("file-saver"),
       ]);
 
       const zip = new JSZip();
@@ -152,7 +151,15 @@ export function DownloadChaptersButton() {
 
       setProgress("Creating ZIP file...");
       const blob = await zip.generateAsync({ type: "blob" });
-      saveAs(blob, "RadioRevise-Chapters.zip");
+      // Use native browser download instead of file-saver
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "RadioRevise-Chapters.zip";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
 
       setProgress(`Done! ${chapters.length} chapters downloaded.`);
     } catch (err) {

@@ -33,6 +33,7 @@ import {
   Wand2,
   CheckCircle,
   Target,
+  BookOpenText,
 } from "lucide-react";
 import React, { useEffect, useState, useCallback, useRef } from "react";
 import { offlineFetch } from "@/lib/offline-fetch";
@@ -68,6 +69,7 @@ interface ChapterDetail {
   highYield: string | null;
   mnemonics: string | null;
   studyGuide: string | null;
+  rawText: string | null;
   pdfChunkCount: number;
   estimatedPages: number;
   sourceChapterId: number | null;
@@ -378,6 +380,7 @@ export default function ChapterDetailPage() {
   const [chapter, setChapter] = useState<ChapterDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("guide");
+  const [topTab, setTopTab] = useState<"memoriser" | "comprendre">("memoriser");
   const [generateStatus, setGenerateStatus] = useState<GenerateStatus>(null);
   const [guideError, setGuideError] = useState<string | null>(null);
   const autoGenerateTriggered = useRef(false);
@@ -1315,6 +1318,52 @@ export default function ChapterDetailPage() {
         </Card>
       )}
 
+      {/* Top-level Comprendre / Mémoriser tabs — only for imported chapters with rawText */}
+      {chapter.rawText && (
+        <div className="flex gap-1 border-b overflow-x-auto">
+          <button
+            onClick={() => setTopTab("memoriser")}
+            className={`flex items-center gap-2 px-5 py-3 text-sm font-semibold border-b-2 transition-colors whitespace-nowrap ${topTab === "memoriser" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+          >
+            <GraduationCap className="h-4 w-4" />
+            Mémoriser
+          </button>
+          <button
+            onClick={() => setTopTab("comprendre")}
+            className={`flex items-center gap-2 px-5 py-3 text-sm font-semibold border-b-2 transition-colors whitespace-nowrap ${topTab === "comprendre" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+          >
+            <BookOpenText className="h-4 w-4" />
+            Comprendre
+          </button>
+        </div>
+      )}
+
+      {/* Comprendre tab content — raw markdown rendered as-is */}
+      {chapter.rawText && topTab === "comprendre" && (
+        <div className="min-h-[300px]">
+          <Card>
+            <CardContent className="p-6 md:p-8">
+              <div className="sticky top-0 z-20 -mx-6 md:-mx-8 px-6 md:px-8 py-3 bg-card/95 backdrop-blur-sm border-b mb-4">
+                <div className="flex justify-between items-center">
+                  <p className="text-xs text-muted-foreground">Contenu original — lecture et compréhension</p>
+                  <Button size="sm" variant="outline" onClick={() => window.print()} className="gap-1.5">
+                    <Printer className="h-3.5 w-3.5" />Print
+                  </Button>
+                </div>
+              </div>
+              <article className="prose prose-sm sm:prose-base max-w-none dark:prose-invert prose-headings:text-foreground prose-p:text-foreground/90 prose-strong:text-foreground prose-li:text-foreground/90 prose-th:text-foreground prose-td:text-foreground/80 prose-table:text-sm prose-blockquote:not-italic prose-blockquote:font-normal [&_ul.contains-task-list]:list-none [&_ul.contains-task-list]:pl-0">
+                <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} components={studyGuideComponents}>
+                  {chapter.rawText}
+                </ReactMarkdown>
+              </article>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Mémoriser tab content — existing study guide with all features */}
+      {(!chapter.rawText || topTab === "memoriser") && (
+      <>
       {/* Tabs */}
       <div className="flex gap-1 border-b overflow-x-auto">
         {tabs.map((tab) => (
@@ -1632,6 +1681,8 @@ export default function ChapterDetailPage() {
         )}
 
       </div>
+      </>
+      )}
     </div>
   );
 }
